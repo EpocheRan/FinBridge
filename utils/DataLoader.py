@@ -6,9 +6,8 @@ import pandas as pd
 import logging
 
 # utils
-from utils.TradingDateManage import TradingDateManage as TDM
-from utils.DataFetcher import DataFetcher
-from utils.DataConnect import questDB
+from utils import TradingDateManage as TDM
+from utils import DataFetcher
 
 # 设置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')

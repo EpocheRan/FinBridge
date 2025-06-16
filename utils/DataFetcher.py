@@ -9,8 +9,7 @@ import logging
 import akshare as ak
 
 # utils
-from utils import *
-from utils.DataConnect import questDB, BS
+from utils import questDB, BS
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger('Data Fetcher')
