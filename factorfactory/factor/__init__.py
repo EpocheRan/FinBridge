@@ -8,6 +8,6 @@ from .Alpha101 import *
 
 try:
     from .Alpha101 import __all__ as alpha_101
-    __all__ = ['Strategy'] + list(alpha_101)
+    __all__ = list(alpha_101)
 except ImportError:
     logger.error("初始化模块错误")
