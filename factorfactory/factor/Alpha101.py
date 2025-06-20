@@ -1,234 +1,140 @@
 import backtrader as bt
-from scipy.stats import rankdata
+import numpy as np
+import pandas as pd
+from collections import deque
 
-# ======================
-# 基础函数库 (Alpha工具集)
-# ======================
-class AlphaTools:
-    @staticmethod
-    def delta(data, period):
-        """计算当前值与period天前值的差值"""
-        return data - data(-period)
+class AlphaFactor(bt.Indicator):
+    """因子基类，提供通用接口"""
+    lines = ('value',)  # 最终因子值
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+        self._setup(*args, **kwargs)
+        
+    def _setup(self, *args, **kwargs):
+        """子类实现因子具体设置"""
+        pass
+        
+    def prenext(self):
+        self.lines.value[0] = np.nan
+        
+    def next(self):
+        """子类实现具体计算逻辑"""
+        pass
+        
+    def cross_sectional_rank(self, values):
+        """横截面排名"""
+        if len(values) < 2:
+            return [0.0] * len(values)
+        return pd.Series(values).rank(pct=True).values
 
-    @staticmethod
-    def ts_argmax(data, period):
-        """返回窗口期内最大值的位置(0=当天,1=前一天)"""
-        return bt.indicators.ArgMax(data, period)
-
-    @staticmethod
-    def signed_power(data, exp):
-        """带符号的幂运算: sign(x) * |x|^exp"""
-        return bt.If(data >= 0, (data)**exp, -((-data)**exp))
-
-    @staticmethod
-    def ts_rank(data, period):
-        """时间序列排名 (当前值在窗口期内的百分位排名)"""
-        class TsRank(bt.Indicator):
-            lines = ('rank',)
-            params = (('period', period),)
+class Alpha1(AlphaFactor):
+    """Alpha1因子完整封装"""
+    def _setup(self, std_period=20, argmax_period=5):
+        self.params.std_period = std_period
+        self.params.argmax_period = argmax_period
+        self.addminperiod(self.params.std_period + 1)
+        self.signed_power_vals = deque(maxlen=self.params.argmax_period)
+        
+    def next(self):
+        if len(self.data.close) < self.params.std_period + 1:
+            self.lines.value[0] = np.nan
+            return
             
-            def __init__(self):
-                self.addminperiod(self.p.period)
+        # 计算当日收益率
+        today_return = (self.data.close[0] / self.data.close[-1]) - 1
+        
+        # 条件值：收益为负取20日收益标准差，否则取收盘价
+        if today_return < 0:
+            closes = self.data.close.get(size=self.params.std_period + 1)
+            returns = (closes[1:] / closes[:-1]) - 1
+            cond_value = np.std(returns)
+        else:
+            cond_value = self.data.close[0]
+        
+        # SignedPower: sign(x) * |x|^2
+        signed_power = np.sign(cond_value) * (cond_value ** 2)
+        
+        # 存储并维护最近5天的值
+        self.signed_power_vals.appendleft(signed_power)
+        
+        if len(self.signed_power_vals) < self.params.argmax_period:
+            self.lines.value[0] = np.nan
+            return
             
-            def next(self):
-                window = self.data.get(size=self.p.period)
-                self.lines.rank[0] = rankdata(window)[-1] / float(self.p.period)
-        return TsRank(data)()
-    
-    @staticmethod
-    def correlation(x, y, period):
-        """两个序列的相关系数"""
-        return bt.indicators.Correlation(x, y, period)
-    
-    @staticmethod
-    def stddev(data, period):
-        """标准差"""
-        return bt.indicators.StdDev(data, period)
-    
-    @staticmethod
-    def ts_min(data, period):
-        """时间窗口最小值"""
-        return bt.indicators.Lowest(data, period)
-    
-    @staticmethod
-    def ts_max(data, period):
-        """时间窗口最大值"""
-        return bt.indicators.Highest(data, period)
+        # 计算Ts_ArgMax（找到最大值出现的最远位置）
+        max_index = np.argmax(list(self.signed_power_vals))
+        
+        # 横截面排名
+        all_values = []
+        for d in self.datas:
+            if hasattr(d.alpha1, 'signed_power_vals') and len(d.alpha1.signed_power_vals) >= self.params.argmax_period:
+                all_values.append(np.argmax(list(d.alpha1.signed_power_vals)))
+        
+        if len(all_values) < 2:
+            self.lines.value[0] = np.nan
+            return
+            
+        # 计算排名并转换为最终因子值
+        ranks = self.cross_sectional_rank(all_values)
+        # 找到当前股票在all_values中的索引
+        current_idx = [i for i, v in enumerate(all_values) if v == max_index][0]
+        self.lines.value[0] = ranks[current_idx] - 0.5
 
-    @staticmethod
-    def rank(data):
-        """横截面排名 (跨股票) - 需要多数据源支持"""
-        # 在单股票策略中简化为标准化
-        return (data - bt.indicators.SMA(data, period=20)) / bt.indicators.StdDev(data, period=20)
-
-# ======================
-# Alpha 指标实现 (1-10)
-# ======================
-class Alpha1(bt.Indicator):
-    """rank(Ts_ArgMax(SignedPower(((returns < 0) ? stddev(returns, 20) : close), 2.), 5)) - 0.5"""
-    lines = ('alpha',)
-    
-    def __init__(self):
-        # 计算中间指标
-        returns = (self.data.close / self.data.close(-1)) - 1
-        condition = returns < 0
-        std_ret = self.stddev(returns, period=20)
-        selected = bt.If(condition, std_ret, self.data.close)
-        sp = self.signed_power(selected, 2.0)
-        argmax = self.ts_argmax(sp, period=5)
+class Alpha2(AlphaFactor):
+    """Alpha2因子完整封装"""
+    def _setup(self, lookback=6):
+        self.params.lookback = lookback
+        self.addminperiod(self.params.lookback + 2)
+        self.delta_log_volume = deque(maxlen=self.params.lookback)
+        self.open_ratio = deque(maxlen=self.params.lookback)
+        self.rank_history = deque(maxlen=self.params.lookback)
         
-        # 最终计算
-        self.lines.alpha = self.rank(argmax) - 0.5
-        super(Alpha1, self).__init__()
-
-class Alpha2(bt.Indicator):
-    """-1 * correlation(rank(delta(log(volume), 2)), rank(((close - open) / open)), 6)"""
-    lines = ('alpha',)
-    
-    def __init__(self):
-        # 计算中间指标
-        log_vol = bt.log(self.data.volume)
-        delta_log_vol = self.delta(log_vol, period=2)
-        price_ratio = (self.data.close - self.data.open) / self.data.open
+    def log(self, x):
+        return np.log(x) if x > 0 else 0
         
-        # 计算排名
-        rank1 = self.rank(delta_log_vol)
-        rank2 = self.rank(price_ratio)
+    def next(self):
+        if len(self.data.volume) < 3:  # 至少需要3天数据计算delta
+            self.lines.value[0] = np.nan
+            return
+            
+        # 计算delta(log(volume), 2)
+        vol_log = self.log(self.data.volume[0]) - self.log(self.data.volume[-2])
+        self.delta_log_volume.append(vol_log)
         
-        # 计算相关性
-        corr = self.correlation(rank1, rank2, period=6)
+        # 计算(close - open)/open
+        oratio = (self.data.close[0] - self.data.open[0]) / (self.data.open[0] + 1e-8)
+        self.open_ratio.append(oratio)
         
-        self.lines.alpha = -1 * corr
-        super(Alpha2, self).__init__()
-
-class Alpha3(bt.Indicator):
-    """-1 * correlation(rank(open), rank(volume), 10)"""
-    lines = ('alpha',)
-    
-    def __init__(self):
-        rank_open = self.rank(self.data.open)
-        rank_vol = self.rank(self.data.volume)
-        corr = self.correlation(rank_open, rank_vol, period=10)
-        self.lines.alpha = -1 * corr
-        super(Alpha3, self).__init__()
-
-class Alpha4(bt.Indicator):
-    """-1 * Ts_Rank(rank(low), 9)"""
-    lines = ('alpha',)
-    
-    def __init__(self):
-        rank_low = self.rank(self.data.low)
-        ts_rank = self.ts_rank(rank_low, period=9)
-        self.lines.alpha = -1 * ts_rank
-        super(Alpha4, self).__init__()
-
-class Alpha5(bt.Indicator):
-    """rank((open - (sum(vwap, 10) / 10)) * (-1 * abs(rank((close - vwap)))"""
-    lines = ('alpha',)
-    
-    def __init__(self):
-        sma_vwap = bt.indicators.SMA(self.data.vwap, period=10)
-        part1 = self.rank(self.data.open - sma_vwap)
+        # 收集所有股票的原始值
+        all_vol = []
+        all_oratio = []
+        for d in self.datas:
+            if hasattr(d.alpha2, 'delta_log_volume') and hasattr(d.alpha2, 'open_ratio'):
+                if d.alpha2.delta_log_volume and d.alpha2.open_ratio:
+                    all_vol.append(d.alpha2.delta_log_volume[-1])
+                    all_oratio.append(d.alpha2.open_ratio[-1])
         
-        diff = self.data.close - self.data.vwap
-        part2 = -1 * bt.Abs(self.rank(diff))
+        if len(all_vol) < 2 or len(all_oratio) < 2:
+            self.lines.value[0] = np.nan
+            return
+            
+        # 横截面排名
+        rank_vol = self.cross_sectional_rank(all_vol)
+        rank_oratio = self.cross_sectional_rank(all_oratio)
         
-        self.lines.alpha = part1 * part2
-        super(Alpha5, self).__init__()
-
-class Alpha6(bt.Indicator):
-    """-1 * correlation(open, volume, 10)"""
-    lines = ('alpha',)
-    
-    def __init__(self):
-        corr = self.correlation(self.data.open, self.data.volume, period=10)
-        self.lines.alpha = -1 * corr
-        super(Alpha6, self).__init__()
-
-class Alpha7(bt.Indicator):
-    """((adv20 < volume) ? ((-1 * ts_rank(abs(delta(close, 7)), 60)) * sign(delta(close, 7))) : -1"""
-    lines = ('alpha',)
-    
-    def __init__(self):
-        # 计算ADV20
-        adv20 = bt.indicators.SMA(self.data.volume * self.data.vwap, period=20)
+        # 找到当前股票在all_vol中的索引
+        current_idx = [i for i, v in enumerate(all_vol) if v == vol_log][0]
         
-        # 条件判断
-        condition = adv20 < self.data.volume
+        # 存储当前排名对
+        self.rank_history.append((rank_vol[current_idx], rank_oratio[current_idx]))
         
-        # True分支计算
-        delta_close = self.delta(self.data.close, period=7)
-        abs_delta = bt.Abs(delta_close)
-        ts_rank_val = self.ts_rank(abs_delta, period=60)
-        sign_val = bt.If(delta_close >= 0, 1, -1)
-        true_val = (-1 * ts_rank_val) * sign_val
-        
-        # False分支
-        false_val = -1
-        
-        self.lines.alpha = bt.If(condition, true_val, false_val)
-        super(Alpha7, self).__init__()
-
-class Alpha8(bt.Indicator):
-    """-1 * rank(((sum(open, 5) * sum(returns, 5)) - delay((sum(open, 5) * sum(returns, 5)), 10)))"""
-    lines = ('alpha',)
-    
-    def __init__(self):
-        # 计算5日开盘价和收益率的和
-        sum_open = bt.indicators.Sum(self.data.open, period=5)
-        returns = (self.data.close / self.data.close(-1)) - 1
-        sum_returns = bt.indicators.Sum(returns, period=5)
-        
-        # 计算当前值和10天前值
-        product = sum_open * sum_returns
-        delayed_product = product(-10)
-        
-        # 计算差异并排名
-        diff = product - delayed_product
-        self.lines.alpha = -1 * self.rank(diff)
-        super(Alpha8, self).__init__()
-
-class Alpha9(bt.Indicator):
-    """((0 < ts_min(delta(close, 1), 5)) ? delta(close, 1) : 
-        ((ts_max(delta(close, 1), 5) < 0) ? delta(close, 1) : (-1 * delta(close, 1)))"""
-    lines = ('alpha',)
-    
-    def __init__(self):
-        delta_close = self.delta(self.data.close, period=1)
-        min_delta = self.ts_min(delta_close, period=5)
-        max_delta = self.ts_max(delta_close, period=5)
-        
-        condition1 = min_delta > 0
-        condition2 = max_delta < 0
-        
-        self.lines.alpha = bt.If(
-            condition1, 
-            delta_close,
-            bt.If(condition2, delta_close, -1 * delta_close)
-        )
-        super(Alpha9, self).__init__()
-
-class Alpha10(bt.Indicator):
-    """rank(((0 < ts_min(delta(close, 1), 4)) ? delta(close, 1) : 
-        ((ts_max(delta(close, 1), 4) < 0) ? delta(close, 1) : (-1 * delta(close, 1)))"""
-    lines = ('alpha',)
-    
-    def __init__(self):
-        delta_close = self.delta(self.data.close, period=1)
-        min_delta = self.ts_min(delta_close, period=4)
-        max_delta = self.ts_max(delta_close, period=4)
-        
-        condition1 = min_delta > 0
-        condition2 = max_delta < 0
-        
-        result = bt.If(
-            condition1, 
-            delta_close,
-            bt.If(condition2, delta_close, -1 * delta_close)
-        )
-        
-        self.lines.alpha = self.rank(result)
-        super(Alpha10, self).__init__()
-
-
-__all__ = ['Alpha1', 'Alpha2', 'Alpha3'] 
+        # 计算相关系数
+        if len(self.rank_history) >= self.params.lookback:
+            vol_ranks = [x[0] for x in self.rank_history]
+            oratio_ranks = [x[1] for x in self.rank_history]
+            
+            correlation = np.corrcoef(vol_ranks, oratio_ranks)[0, 1]
+            self.lines.value[0] = -1 * correlation if not np.isnan(correlation) else np.nan
+        else:
+            self.lines.value[0] = np.nan
