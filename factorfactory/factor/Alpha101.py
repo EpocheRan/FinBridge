@@ -1,4 +1,5 @@
 import backtrader as bt
+import array
 import numpy as np
 import pandas as pd
 from collections import deque
@@ -8,8 +9,9 @@ class AlphaFactor(bt.Indicator):
     lines = ('value',)  # 最终因子值
     
     def __init__(self, *args, **kwargs):
-        super().__init__()
         self._setup(*args, **kwargs)
+        super().__init__()
+        
         
     def _setup(self, *args, **kwargs):
         """子类实现因子具体设置"""
@@ -47,13 +49,13 @@ class Alpha1(AlphaFactor):
         # 条件值：收益为负取20日收益标准差，否则取收盘价
         if today_return < 0:
             closes = self.data.close.get(size=self.params.std_period + 1)
-            returns = (closes[1:] / closes[:-1]) - 1
+            returns = array.array('d', (closes[1:][i] / closes[:-1][i] - 1 for i in range(len(closes[1:]))))
             cond_value = np.std(returns)
         else:
-            cond_value = self.data.close[0]
+            cond_value = float(self.data.close[0])
         
-        # SignedPower: sign(x) * |x|^2
-        signed_power = np.sign(cond_value) * (cond_value ** 2)
+        # SignedPower: x**n
+        signed_power = cond_value ** 2
         
         # 存储并维护最近5天的值
         self.signed_power_vals.appendleft(signed_power)
@@ -67,8 +69,8 @@ class Alpha1(AlphaFactor):
         
         # 横截面排名
         all_values = []
-        for d in self.datas:
-            if hasattr(d.alpha1, 'signed_power_vals') and len(d.alpha1.signed_power_vals) >= self.params.argmax_period:
+        for d in self._owner.datas:
+            if hasattr(d, 'alpha1') and len(d.alpha1.signed_power_vals) >= self.params.argmax_period:
                 all_values.append(np.argmax(list(d.alpha1.signed_power_vals)))
         
         if len(all_values) < 2:
@@ -99,19 +101,21 @@ class Alpha2(AlphaFactor):
             return
             
         # 计算delta(log(volume), 2)
-        vol_log = self.log(self.data.volume[0]) - self.log(self.data.volume[-2])
+        vol_log = self.log(float(self.data.volume[0])) - self.log(float(self.data.volume[-2]))
         self.delta_log_volume.append(vol_log)
         
         # 计算(close - open)/open
-        oratio = (self.data.close[0] - self.data.open[0]) / (self.data.open[0] + 1e-8)
+        close_val = float(self.data.close[0])
+        open_val = float(self.data.open[0])
+        oratio = (close_val - open_val) / (open_val + 1e-8)
         self.open_ratio.append(oratio)
         
         # 收集所有股票的原始值
         all_vol = []
         all_oratio = []
-        for d in self.datas:
-            if hasattr(d.alpha2, 'delta_log_volume') and hasattr(d.alpha2, 'open_ratio'):
-                if d.alpha2.delta_log_volume and d.alpha2.open_ratio:
+        for d in self._owner.datas:
+            if hasattr(d, 'alpha2') and hasattr(d.alpha2, 'open_ratio'):
+                if len(d.alpha2.delta_log_volume) > 0 and len(d.alpha2.open_ratio) > 0:
                     all_vol.append(d.alpha2.delta_log_volume[-1])
                     all_oratio.append(d.alpha2.open_ratio[-1])
         
@@ -138,3 +142,5 @@ class Alpha2(AlphaFactor):
             self.lines.value[0] = -1 * correlation if not np.isnan(correlation) else np.nan
         else:
             self.lines.value[0] = np.nan
+
+__all__ = ["Alpha1", "Alpha2"]

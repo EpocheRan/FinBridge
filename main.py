@@ -1,6 +1,7 @@
 import backtrader as bt
 from utils import DataLoader
 from factorfactory import factor
+from factorfactory import temp
 import numpy as np
 import pandas as pd
 
@@ -30,15 +31,14 @@ if __name__ == "__main__":
         )
         cerebro.adddata(bt_data)
     
-    # 使用因子工厂创建策略
-    strategy = 
-    cerebro.addstrategy(strategy)
+    # 使用正确的策略类
+    cerebro.addstrategy(temp.AlphaStrategy)
     
     cerebro.broker.setcash(100000.0)
     cerebro.broker.setcommission(commission=0.001)  # 0.1%佣金
     
     print('Starting Portfolio Value: %.2f' % cerebro.broker.getvalue())
-    results = cerebro.run()
+    cerebro.run()
     print('Final Portfolio Value: %.2f' % cerebro.broker.getvalue())
     
     # 绘制结果
