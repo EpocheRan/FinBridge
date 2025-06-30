@@ -3,144 +3,132 @@ import array
 import numpy as np
 import pandas as pd
 from collections import deque
+import matplotlib.pyplot as plt
 
-class AlphaFactor(bt.Indicator):
-    """因子基类，提供通用接口"""
-    lines = ('value',)  # 最终因子值
+
+__all__ = ["alpha1"]
+
+class dailyReturn(bt.Indicator):
+    lines = ('return_d',) 
+
+    def __init__(self, *datas):
+        super(dailyReturn, self).__init__()
     
-    def __init__(self, *args, **kwargs):
-        self._setup(*args, **kwargs)
-        super().__init__()
-        
-        
-    def _setup(self, *args, **kwargs):
-        """子类实现因子具体设置"""
-        pass
-        
-    def prenext(self):
-        self.lines.value[0] = np.nan
-        
     def next(self):
-        """子类实现具体计算逻辑"""
-        pass
-        
-    def cross_sectional_rank(self, values):
-        """横截面排名"""
-        if len(values) < 2:
-            return [0.0] * len(values)
-        return pd.Series(values).rank(pct=True).values
+        self.lines.return_d[0] = (self.data.close[0] / self.data.close[-1]) - 1
 
-class Alpha1(AlphaFactor):
-    """Alpha1因子完整封装"""
-    def _setup(self, std_period=20, argmax_period=5):
-        self.params.std_period = std_period
-        self.params.argmax_period = argmax_period
-        self.addminperiod(self.params.std_period + 1)
+class alpha1_Ts_ArgMax(bt.Indicator):
+    """
+    Alpha1 中 Ts_ArgMax 实现：
+    rank(Ts_ArgMax(SignedPower(((returns < 0) ? stddev(returns, 20) : close), 2.), 5)) - 0.5
+    """
+    lines = ('ts_argmax',) 
+    params = (('std_period', 20), ('argmax_period', 5), ) 
+    
+    def __init__(self, *datas):
+        super(alpha1_Ts_ArgMax, self).__init__()
+        self.daily_return = dailyReturn(self.data)
         self.signed_power_vals = deque(maxlen=self.params.argmax_period)
-        
+        self.moving_returns = deque(maxlen=self.params.std_period)
+
     def next(self):
+
         if len(self.data.close) < self.params.std_period + 1:
-            self.lines.value[0] = np.nan
+            self.lines.ts_argmax[0] = np.nan
             return
-            
-        # 计算当日收益率
-        today_return = (self.data.close[0] / self.data.close[-1]) - 1
         
+        # ((returns < 0) ? stddev(returns, 20) : close)
+        self.moving_returns.append(self.daily_return)
+
         # 条件值：收益为负取20日收益标准差，否则取收盘价
-        if today_return < 0:
-            closes = self.data.close.get(size=self.params.std_period + 1)
-            returns = array.array('d', (closes[1:][i] / closes[:-1][i] - 1 for i in range(len(closes[1:]))))
-            cond_value = np.std(returns)
+        if self.daily_return < 0:
+            cond_value = np.std(np.array(self.moving_returns))
         else:
             cond_value = float(self.data.close[0])
-        
-        # SignedPower: x**n
+
+        # SignedPower(x, 2.)
         signed_power = cond_value ** 2
-        
-        # 存储并维护最近5天的值
+
+        # Ts_ArgMax(x, 5)
+        # 存储并维护最近5天的值（因为找最远位置，所以用left）
         self.signed_power_vals.appendleft(signed_power)
         
         if len(self.signed_power_vals) < self.params.argmax_period:
-            self.lines.value[0] = np.nan
+            self.lines.ts_argmax[0] = np.nan
             return
             
         # 计算Ts_ArgMax（找到最大值出现的最远位置）
-        max_index = np.argmax(list(self.signed_power_vals))
-        
-        # 横截面排名
-        all_values = []
-        for d in self._owner.datas:
-            if hasattr(d, 'alpha1') and len(d.alpha1.signed_power_vals) >= self.params.argmax_period:
-                all_values.append(np.argmax(list(d.alpha1.signed_power_vals)))
-        
-        if len(all_values) < 2:
-            self.lines.value[0] = np.nan
-            return
-            
-        # 计算排名并转换为最终因子值
-        ranks = self.cross_sectional_rank(all_values)
-        # 找到当前股票在all_values中的索引
-        current_idx = [i for i, v in enumerate(all_values) if v == max_index][0]
-        self.lines.value[0] = ranks[current_idx] - 0.5
+        self.lines.ts_argmax[0] = np.argmax(list(self.signed_power_vals))
 
-class Alpha2(AlphaFactor):
-    """Alpha2因子完整封装"""
-    def _setup(self, lookback=6):
-        self.params.lookback = lookback
-        self.addminperiod(self.params.lookback + 2)
-        self.delta_log_volume = deque(maxlen=self.params.lookback)
-        self.open_ratio = deque(maxlen=self.params.lookback)
-        self.rank_history = deque(maxlen=self.params.lookback)
+
+class alpha1(bt.Strategy):
+    """处理横截面排名"""
+    
+    def __init__(self):
+        # 为每个股票添加Alpha1指标
+        self.alpha1_indicators =  [alpha1_Ts_ArgMax(d) for d in self.datas]
         
-    def log(self, x):
-        return np.log(x) if x > 0 else 0
-        
+        # 初始化数据结构
+        self.alpha_records = []  # 存储所有记录
+        self.current_date = None  # 当前日期
+
+        # 存储因子值的字典
+        self.alpha1_values = {}
+
     def next(self):
-        if len(self.data.volume) < 3:  # 至少需要3天数据计算delta
-            self.lines.value[0] = np.nan
-            return
-            
-        # 计算delta(log(volume), 2)
-        vol_log = self.log(float(self.data.volume[0])) - self.log(float(self.data.volume[-2]))
-        self.delta_log_volume.append(vol_log)
-        
-        # 计算(close - open)/open
-        close_val = float(self.data.close[0])
-        open_val = float(self.data.open[0])
-        oratio = (close_val - open_val) / (open_val + 1e-8)
-        self.open_ratio.append(oratio)
-        
-        # 收集所有股票的原始值
-        all_vol = []
-        all_oratio = []
-        for d in self._owner.datas:
-            if hasattr(d, 'alpha2') and hasattr(d.alpha2, 'open_ratio'):
-                if len(d.alpha2.delta_log_volume) > 0 and len(d.alpha2.open_ratio) > 0:
-                    all_vol.append(d.alpha2.delta_log_volume[-1])
-                    all_oratio.append(d.alpha2.open_ratio[-1])
-        
-        if len(all_vol) < 2 or len(all_oratio) < 2:
-            self.lines.value[0] = np.nan
-            return
-            
-        # 横截面排名
-        rank_vol = self.cross_sectional_rank(all_vol)
-        rank_oratio = self.cross_sectional_rank(all_oratio)
-        
-        # 找到当前股票在all_vol中的索引
-        current_idx = [i for i, v in enumerate(all_vol) if v == vol_log][0]
-        
-        # 存储当前排名对
-        self.rank_history.append((rank_vol[current_idx], rank_oratio[current_idx]))
-        
-        # 计算相关系数
-        if len(self.rank_history) >= self.params.lookback:
-            vol_ranks = [x[0] for x in self.rank_history]
-            oratio_ranks = [x[1] for x in self.rank_history]
-            
-            correlation = np.corrcoef(vol_ranks, oratio_ranks)[0, 1]
-            self.lines.value[0] = -1 * correlation if not np.isnan(correlation) else np.nan
-        else:
-            self.lines.value[0] = np.nan
+        # 获取当前日期
+        self.current_date = self.data.datetime.date(0)
 
-__all__ = ["Alpha1", "Alpha2"]
+        # 收集所有股票的ts_argmax值
+        ts_values = []
+        valid_data = []
+        
+        for i, d in enumerate(self.datas):
+            ts_val = self.alpha1_indicators[i].ts_argmax[0]
+            # 跳过无效数据
+            if not np.isnan(ts_val):
+                ts_values.append(ts_val)
+                valid_data.append(d._name)
+        
+        # 需要至少2只股票计算排名
+        if len(ts_values) >= 2:
+            ranks = pd.Series(ts_values).rank(pct=True)
+        
+        # 分配最终因子值
+        for i, name in enumerate(valid_data):
+            factor_value = ranks.iloc[i] - 0.5
+            self.alpha_records.append({'date': self.current_date,'stock': name,'alpha1': factor_value})
+
+    def stop(self):
+
+        df = pd.DataFrame(self.alpha_records)
+        """打印最终因子值"""
+        self.plot_histograms(df)
+
+    def plot_histograms(self, df):
+        """为每个股票绘制直方图"""
+        
+        # 按股票分组绘制
+        stocks = df['stock'].unique()
+        for stock in stocks:
+            stock_df = df[df['stock'] == stock]
+            
+            plt.figure(figsize=(10, 6))
+            plt.hist(stock_df['alpha1'], bins=20, alpha=0.7, color='skyblue', edgecolor='black')
+            plt.title(f'Alpha1 Distribution for {stock}')
+            plt.xlabel('Alpha1 Value')
+            plt.ylabel('Frequency')
+            plt.grid(True, linestyle='--', alpha=0.7)
+            
+        
+        # 创建组合图
+        plt.figure(figsize=(12, 8))
+        for i, stock in enumerate(stocks):
+            stock_df = df[df['stock'] == stock]
+            plt.hist(stock_df['alpha1'], bins=20, alpha=0.5, label=stock)
+        
+        plt.title('Alpha1 Distribution Comparison')
+        plt.xlabel('Alpha1 Value')
+        plt.ylabel('Frequency')
+        plt.legend()
+        plt.grid(True, linestyle='--', alpha=0.7)
