@@ -1,21 +1,40 @@
 import backtrader as bt
-import array
 import numpy as np
 import pandas as pd
 from collections import deque
 import matplotlib.pyplot as plt
+import logging
+
+# 设置日志
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger('factor')
 
 
 __all__ = ["alpha1"]
 
 class dailyReturn(bt.Indicator):
-    lines = ('return_d',) 
+    lines = ('return_d',)
+    params = (('period', 0),)  # 新增 period 参数
 
     def __init__(self, *datas):
         super(dailyReturn, self).__init__()
+        self.period = self.params.period
+        if self.period == 0: self.period = -1
     
     def next(self):
-        self.lines.return_d[0] = (self.data.close[0] / self.data.close[-1]) - 1
+        if self.period < 0:  # 过去收益
+            lookback = abs(self.period)
+            if len(self.data.close) > lookback:
+                self.lines.return_d[0] = (self.data.close[0] / self.data.close[self.period]) - 1
+            else:
+                self.lines.return_d[0] = np.nan
+
+        elif self.period > 0:  # 未来收益
+            try:
+                self.lines.return_d[0] = (self.data.close[self.period] / self.data.close[0]) - 1
+            except:
+                self.lines.return_d[0] = np.nan
+
 
 class alpha1_Ts_ArgMax(bt.Indicator):
     """
@@ -61,24 +80,140 @@ class alpha1_Ts_ArgMax(bt.Indicator):
         self.lines.ts_argmax[0] = np.argmax(list(self.signed_power_vals))
 
 
-class alpha1(bt.Strategy):
+class BaseAnalysisStrategy(bt.Strategy):
+    """
+    基础Alpha策略类，提供因子记录和未来收益计算功能
+    """
+    params = (
+        ('return_periods', [10, 30, 90]),  # 计算未来收益的周期
+        ('zscore_window', None),           # Z-score标准化窗口，None表示全历史
+    )
+    
+    def __init__(self):
+        # 初始化记录表头
+        column={'datetime':pd.Series(dtype='object'), 
+                'stock':pd.Series(dtype='str'), 
+                'raw_factor':pd.Series(dtype='float'), 
+                'zscore':pd.Series(dtype='float')
+        }
+
+        # 为每个数据源添加收益指标, return_periods
+        self.return_indicators = {}
+        for d in self.datas:
+            name = d._name
+            self.return_indicators[name] = {}
+            for period in self.params.return_periods:
+                self.return_indicators[name][f'return_{period}d'] = dailyReturn(d, period=period)
+    
+        for period in self.params.return_periods: column[f'return_{period}d'] = pd.Series(dtype='float')
+
+        msg = [f'return_{period}d' for period in self.params.return_periods]
+        msg = ', '.join(msg)
+        logger.info("载入收益指标" + msg)
+
+        # 初始化记录df
+        self.alpha_records = pd.DataFrame(column)
+        self.current_date = None
+        
+    def record_factor(self, stock, raw_factor):
+        """记录因子原始值并计算Z-score,return"""
+        # 获取当前日期
+        current_datetime = self.data.datetime.date(0)
+        
+        # 获取各种收益数据
+        returns = {}
+        for period in self.params.return_periods:
+            key = f'return_{period}d'
+            val = self.return_indicators[stock][key][0]
+            returns[key] = val if not np.isnan(val) else np.nan
+
+        # 计算Z-score
+        zscore = self.calculate_zscore(stock, raw_factor, current_datetime)
+        
+        # 记录因子值
+        new_row =  pd.DataFrame([{
+            'datetime': current_datetime,
+            'stock': stock,
+            'raw_factor': raw_factor,
+            'zscore': zscore,
+            **returns
+        }])
+
+        self.alpha_records = pd.concat([self.alpha_records, new_row], ignore_index=True)
+    
+    def calculate_zscore(self, stock, raw_factor, current_datetime):
+        """计算Z-score标准化值"""
+        # 收集历史因子值
+        r = self.alpha_records 
+        history = r[(r['stock'] == stock) & (r['datetime'] < current_datetime)]['raw_factor']
+        
+        # 如果有窗口限制，只保留最近的记录
+        if self.params.zscore_window is not None:
+            history = history[-self.params.zscore_window:]
+        
+        # 计算Z-score
+        if len(history) > 1:
+            mean_val = np.mean(history)
+            std_val = np.std(history)
+            if std_val > 0:
+                return (raw_factor - mean_val) / std_val
+        
+        # 如果没有足够的历史数据，返回NaN
+        return np.nan   
+    
+    def next(self):
+        pass
+    
+    def plot_results(self):
+        """绘制结果（可被子类覆盖）"""
+        df = self.alpha_records
+        df = df.fillna(0)
+        
+        # 绘制因子分布直方图
+        stocks = df['stock'].unique()
+        for stock in stocks:
+            stock_df = df[df['stock'] == stock]
+            
+            plt.figure(figsize=(10, 6))
+            plt.hist(stock_df['raw_factor'], bins=20, alpha=0.7, color='skyblue', edgecolor='black', label='Raw Factor')
+            plt.hist(stock_df['zscore'], bins=20, alpha=0.7, color='salmon', edgecolor='black', label='Z-score')
+            plt.title(f'Factor Distribution for {stock}')
+            plt.xlabel('Value')
+            plt.ylabel('Frequency')
+            plt.legend()
+            plt.grid(True, linestyle='--', alpha=0.7)
+        
+        # 绘制未来收益分布
+        for period in self.params.return_periods:
+            plt.figure(figsize=(10, 6))
+            for stock in stocks:
+                plt.hist(df[df['stock'] == stock][f'return_{period}d'], bins=20, alpha=0.5, label=stock)
+            
+            plt.title(f'{period}-Day Future Return Distribution')
+            plt.xlabel('Return')
+            plt.ylabel('Frequency')
+            plt.legend()
+            plt.grid(True, linestyle='--', alpha=0.7)
+        
+        plt.show()
+    
+    def stop(self):
+        """回测结束时调用"""
+        self.plot_results()
+
+
+class alpha1(BaseAnalysisStrategy):
     """处理横截面排名"""
     
     def __init__(self):
+        super(alpha1, self).__init__()
         # 为每个股票添加Alpha1指标
-        self.alpha1_indicators =  [alpha1_Ts_ArgMax(d) for d in self.datas]
-        
-        # 初始化数据结构
-        self.alpha_records = []  # 存储所有记录
-        self.current_date = None  # 当前日期
-
-        # 存储因子值的字典
-        self.alpha1_values = {}
+        self.alpha1_indicators = [alpha1_Ts_ArgMax(d) for d in self.datas]
+        logger.info("载入Ts_ArgMax指标")
 
     def next(self):
-        # 获取当前日期
-        self.current_date = self.data.datetime.date(0)
-
+        super(alpha1, self).next()  # 调用基类的next方法
+        
         # 收集所有股票的ts_argmax值
         ts_values = []
         valid_data = []
@@ -94,41 +229,7 @@ class alpha1(bt.Strategy):
         if len(ts_values) >= 2:
             ranks = pd.Series(ts_values).rank(pct=True)
         
-        # 分配最终因子值
+        # 分配最终因子值并记录
         for i, name in enumerate(valid_data):
             factor_value = ranks.iloc[i] - 0.5
-            self.alpha_records.append({'date': self.current_date,'stock': name,'alpha1': factor_value})
-
-    def stop(self):
-
-        df = pd.DataFrame(self.alpha_records)
-        """打印最终因子值"""
-        self.plot_histograms(df)
-
-    def plot_histograms(self, df):
-        """为每个股票绘制直方图"""
-        
-        # 按股票分组绘制
-        stocks = df['stock'].unique()
-        for stock in stocks:
-            stock_df = df[df['stock'] == stock]
-            
-            plt.figure(figsize=(10, 6))
-            plt.hist(stock_df['alpha1'], bins=20, alpha=0.7, color='skyblue', edgecolor='black')
-            plt.title(f'Alpha1 Distribution for {stock}')
-            plt.xlabel('Alpha1 Value')
-            plt.ylabel('Frequency')
-            plt.grid(True, linestyle='--', alpha=0.7)
-            
-        
-        # 创建组合图
-        plt.figure(figsize=(12, 8))
-        for i, stock in enumerate(stocks):
-            stock_df = df[df['stock'] == stock]
-            plt.hist(stock_df['alpha1'], bins=20, alpha=0.5, label=stock)
-        
-        plt.title('Alpha1 Distribution Comparison')
-        plt.xlabel('Alpha1 Value')
-        plt.ylabel('Frequency')
-        plt.legend()
-        plt.grid(True, linestyle='--', alpha=0.7)
+            self.record_factor(name, factor_value)

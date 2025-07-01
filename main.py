@@ -40,5 +40,3 @@ if __name__ == "__main__":
     cerebro.run()
     print('Final Portfolio Value: %.2f' % cerebro.broker.getvalue())
     
-    # 绘制结果
-    cerebro.plot(style='candlestick')
