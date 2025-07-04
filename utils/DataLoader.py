@@ -6,8 +6,11 @@ import pandas as pd
 import logging
 
 # utils
-from .TradingDateManage import TradingDateManage as TDM
-from .DataFetcher import DataFetcher
+# from .TradingDateManage import TradingDateManage as TDM
+# from .DataFetcher import DataFetcher
+
+from TradingDateManage import TradingDateManage as TDM
+from DataFetcher import DataFetcher
 
 # 设置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -238,7 +241,7 @@ class DataLoader:
         # 5. 存储增量数据到数据库
         if not api_df.empty:
             logger.info(f"将增量数据存储到QuestDB ({len(api_df)} 行)")
-            DataFetcher.store_to_questdb(api_df, stock_code, freq)
+            DataFetcher.store_ohlc_to_questdb(api_df, stock_code, freq)
             
             # 合并数据
             if not local_df.empty:

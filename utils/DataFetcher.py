@@ -9,7 +9,8 @@ import logging
 import akshare as ak
 
 # utils
-from .DataConnect import questDB, BS
+# from .DataConnect import questDB, BS
+from DataConnect import questDB, BS
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger('Data Fetcher')
@@ -261,7 +262,7 @@ class DataFetcher:
             raise RuntimeError(f"QuestDB数据获取失败: {e}")
     
     @staticmethod
-    def store_to_questdb(df, stock_code, freq):
+    def store_ohlc_to_questdb(df, stock_code, freq):
         db = questDB()
         """
         将数据存储到QuestDB
@@ -273,7 +274,7 @@ class DataFetcher:
         if df.empty:
             return
             
-        table_name = questDB.get_table_name(freq)
+        table_name = questDB.get_ohlc_table_name(freq)
         conn = None
 
         # 当Table不存在时，创建Table需要标定Parition
@@ -344,3 +345,220 @@ class DataFetcher:
             ]
         db.batch_insert(insert_query, records)
     
+    def get_stock_basic_info(self):
+        """获取全量股票基本信息"""
+        bs_conn = BS()
+        rs = bs_conn().query_stock_basic()
+            # 转换为DataFrame
+        data_list = []
+        while (rs.error_code == '0') & rs.next():
+            data_list.append(rs.get_row_data())
+        
+        if not data_list:
+            return pd.DataFrame()
+        
+        df = pd.DataFrame(data_list, columns=rs.fields)
+        df.rename(columns={'code_name': 'name'}, inplace=True)
+
+        #处理Baostock返回的code前的交易所编码
+        df['code'] = df['code'].str.split('.').str[-1] 
+        df['ts'] = pd.Timestamp.today().date() 
+        df = df[['code', 'ts', 'name', 'ipoDate', 'outDate', 'type','status']]
+        df.set_index('ts', inplace=True)
+        return df
+
+    def get_financial_indicators(self, stock_code, year, quarter):
+        """获取财务指标数据"""
+        
+        # 转换股票代码格式
+        exchange = 'sh' if stock_code.startswith('60') else 'sz'
+        if stock_code.startswith('0000') : exchange = 'sh'
+        full_code = f"{exchange}.{stock_code}"
+        
+        bs_conn = BS()
+        rs = bs_conn().query_profit_data(
+            full_code,
+            year,
+            quarter
+        )
+
+        data_list = []
+        while (rs.error_code == '0') & rs.next():
+            data_list.append(rs.get_row_data())
+        
+        if not data_list:
+            return pd.DataFrame()
+        
+        df = pd.DataFrame(data_list, columns=rs.fields)
+
+        #处理Baostock返回的code前的交易所编码
+        df['code'] = df['code'].str.split('.').str[-1] 
+        df['ts'] = pd.Timestamp.today().date() 
+        df = df[['code', 'ts', 'statDate', 'pubDate', 'roeAvg', 'npMargin','gpMargin',
+                 'netProfit','epsTTM','MBRevenue','totalShare','liqaShare']]
+        df.set_index('ts', inplace=True)
+        return df
+
+    def get_stock_industry(self):
+        """获取全量行业数据"""
+        bs_conn = BS()
+        rs = bs_conn().query_stock_industry()
+        data_list = []
+        while (rs.error_code == '0') & rs.next():
+            data_list.append(rs.get_row_data())
+        
+        if not data_list:
+            return pd.DataFrame()
+        
+        df = pd.DataFrame(data_list, columns=rs.fields)
+        df.rename(columns={'industry': 'industry_name'}, inplace=True)
+        df.rename(columns={'industryClassification': 'industry_classification'}, inplace=True)
+
+        #处理Baostock返回的code前的交易所编码
+        df['code'] = df['code'].str.split('.').str[-1] 
+        df['ts'] = pd.Timestamp.today().date() 
+        df = df[['code', 'ts', 'industry_name', 'industry_classification']]
+        df.set_index('ts', inplace=True)
+        return df
+
+
+
+
+    def create_stock_basic_table(self):
+        db = questDB()
+        """创建股票基本信息表
+        code: 证券代码
+        ts: 更新时间
+        name: 证券名称
+        ipoDate: 上市日期
+        outDate: 退市日期
+        type: 证券类型 - 1.股票, 2.指数, 3.其它, 4.可转债, 5.ETF
+        status: 上市状态 - 1.上市, 0.退市
+        """
+        create_table = """
+        CREATE TABLE IF NOT EXISTS stock_basic_info (
+            code SYMBOL,
+            ts TIMESTAMP,
+            name STRING,
+            ipoDate TIMESTAMP,
+            outDate TIMESTAMP,
+            type int,
+            status int
+        ) TIMESTAMP(ts) PARTITION BY MONTH WAL
+        DEDUP UPSERT KEYS(code, ts);
+        """
+        return db.create_table(create_table)
+
+    def create_financial_indicators_table(self):
+        db = questDB()
+        """创建财务指标表
+        pubDate: 公司发布财报的日期
+        statDate: 财报统计的季度的最后一天, 比如2017-03-31, 2017-06-30
+        roeAvg: 净资产收益率(平均)(%) - 归属母公司股东净利润/[(期初归属母公司股东的权益+期末归属母公司股东的权益)/2]*100%
+        npMargin: 销售净利率(%) - 净利润/营业收入*100%
+        gpMargin: 销售毛利率(%) - 毛利/营业收入*100% = (营业收入-营业成本)/营业收入*100%
+        netProfit: 净利润(元)
+        epsTTM: 每股收益 - 归属母公司股东的净利润TTM/最新总股本
+        MBRevenue: 主营营业收入(元)
+        totalShare: 总股本
+        liqaShare: 流通股本
+        """
+        create_table = """
+        CREATE TABLE IF NOT EXISTS financial_indicators (
+            code SYMBOL,
+            ts TIMESTAMP,
+            statDate STRING,
+            pubDate STRING,
+            roeAvg DOUBLE,
+            npMargin DOUBLE,
+            gpMargin DOUBLE,
+            netProfit DOUBLE,
+            epsTTM DOUBLE,
+            MBRevenue DOUBLE,
+            totalShare DOUBLE,
+            liqaShare DOUBLE
+        ) TIMESTAMP(ts) PARTITION BY MONTH WAL
+        DEDUP UPSERT KEYS(code, ts);
+        """
+        return db.create_table(create_table)
+
+    def create_stock_industry_table(self):
+        """创建行业信息表
+        code: 证券代码
+        industry: 所属行业
+        industryClassification: 所属行业类别
+        """
+        create_table = """
+        CREATE TABLE IF NOT EXISTS stock_industry (
+            code SYMBOL,
+            ts TIMESTAMP,
+            industry_name STRING,
+            industry_classification STRING
+        ) TIMESTAMP(ts) PARTITION BY MONTH WAL
+        DEDUP UPSERT KEYS(code, ts);
+        """
+        return self.create_table(create_table)
+
+    def create_rolling_financial_table(self):
+        """创建行业信息表
+        code: 证券代码
+        peTTM: 滚动市盈率
+        psTTM: 滚动市销率
+        pcfNcfTTM: 滚动市现率
+        pbMRQ: 市净率
+        """
+        create_table = """
+        CREATE TABLE IF NOT EXISTS stock_industry (
+            code SYMBOL,
+            ts TIMESTAMP,
+            peTTM DOUBLE,
+            psTTM DOUBLE,
+            pcfNcfTTM DOUBLE,
+            pbMRQ DOUBLE
+        ) TIMESTAMP(ts) PARTITION BY MONTH WAL
+        DEDUP UPSERT KEYS(code, ts);
+        """
+        return self.create_table(create_table)
+
+    def update_stock_basic(self, data):
+        """批量更新股票基本信息"""
+        query = """
+        INSERT INTO stock_basic_info 
+        (code, ts, name, ipoDate, outDate, type, status)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        """
+        return self.batch_insert(query, data)
+
+    def update_financial_indicators(self, data):
+        """批量更新财务指标"""
+        query = """
+        INSERT INTO financial_indicators 
+        (code, ts, statDate, pubDate, roeAvg, npMargin, gpMargin, netProfit, 
+         epsTTM, MBRevenue, totalShare, liqaShare)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """
+        return self.batch_insert(query, data)
+
+    def update_stock_industry(self, data):
+        """批量更新行业信息"""
+        query = """
+        INSERT INTO stock_industry 
+        (code, ts, industry_name, industry_classification)
+        VALUES (%s, %s, %s, %s)
+        """
+        return self.batch_insert(query, data)
+    
+    def update_rolling_financial_table(self, data):
+        """批量更新财务指标"""
+        query = """
+        INSERT INTO financial_indicators 
+        (code, ts, peTTM, psTTM, pcfNcfTTM, pbMRQ)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        """
+        return self.batch_insert(query, data)
+    
+# 使用示例
+if __name__ == "__main__":
+    x = DataFetcher()
+    data = x.get_stock_industry()
+    print(data.head())

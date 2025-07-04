@@ -86,6 +86,7 @@ class questDB:
         try:
             with self.conn.cursor() as cursor:
                 cursor.execute(query)
+                logger.info(f"创建表成功：{query[26:50]}...")
                 return True
         except Exception as e:
             logger.error(f"建表操作失败: {e}\n查询: {query}\n")
@@ -120,7 +121,7 @@ class questDB:
         return create_engine(f"""postgresql+psycopg2://{config_map["user"]}:{config_map["password"]}@{config_map["host"]}:{config_map["port"]}/{config_map["database"]}""")
 
     @staticmethod
-    def get_table_name(freq):
+    def get_ohlc_table_name(freq):
         """根据股票代码和频率生成表名"""
         
         # 有效的频率后缀
