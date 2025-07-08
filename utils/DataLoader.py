@@ -129,7 +129,7 @@ class DataLoader:
         return merged_ranges
 
 
-    def get_stock_data(self, stock_code, start_date, end_date, freq='d'):
+    def get_ohlc_data(self, stock_code, start_date, end_date, freq='d'):
         """
         获取股票数据（智能增量更新）
 
@@ -241,7 +241,7 @@ class DataLoader:
         # 5. 存储增量数据到数据库
         if not api_df.empty:
             logger.info(f"将增量数据存储到QuestDB ({len(api_df)} 行)")
-            DataFetcher.store_ohlc_to_questdb(api_df, stock_code, freq)
+            fetcher.update_ohlc(api_df, stock_code, freq)
             
             # 合并数据
             if not local_df.empty:
@@ -259,9 +259,79 @@ class DataLoader:
             f"数据获取完成: 本地 {len(local_df)} 条 + 增量 {len(api_df)} 条 = 总计 {len(combined_df)} 条"
         )
         return combined_df
+    
+    def get_rolling_finance_data(self, stock_code, start_date, end_date):
+
+        # 1. 尝试从QuestDB获取完整数据
+        questdb_fetcher = DataFetcher(source='questdb')
+        qurey_end_date = end_date + " 23:59"
+        try:
+            local_df = questdb_fetcher.get_rolling_financial(stock_code, start_date, qurey_end_date)
+            logger.info(f"从QuestDB获取到 {stock_code} 滚动财务指标 ({len(local_df)} 行)")
+        except Exception as e:
+            logger.error(f"QuestDB查询异常: {e}")
+            local_df = pd.DataFrame()
+
+        # 2. 获取预期日期/时间点
+        try:
+            expected_dates = self._get_expected_dates(start_date, end_date, 'd')
+            if not expected_dates:
+                logger.warning("未获取到预期日期数据")
+                return local_df if not local_df.empty else pd.DataFrame()
+        except Exception as e:
+            logger.error(f"生成预期日期失败: {e}")
+            expected_dates = []
+        
+        # 3. 检查本地数据的完整性
+        missing_dates = []
+        missing_date_ranges = []
+        all_trading_days = self._get_trading_days(start_date, end_date)  # 所有交易日
+        # 检查缺失日期
+        if not local_df.empty:
+            local_dates = local_df.index.strftime('%Y-%m-%d').tolist()
+            missing_dates = [date for date in expected_dates if date not in local_dates]
+        else:
+            missing_dates = expected_dates
+            
+        # 将连续缺失交易日合并为范围
+        if missing_dates:
+            missing_date_ranges = self._merge_consecutive_trading_days(missing_dates, all_trading_days)
+        
+        # 4. 从API获取缺失数据
+        api_df = pd.DataFrame()
+        if missing_date_ranges:
+            logger.info(f"发现 {len(missing_dates)} 个缺失时间点，合并为 {len(missing_date_ranges)} 个范围")
+            logger.info(f"从Baostock获取 {stock_code} , 滚动财务指标")
+            baostock_fetcher = DataFetcher(source='baostock')
+
+            # 按范围获取缺失数据
+            for start, end in missing_date_ranges:
+                logger.info(f"获取 {start} 至 {end} 的数据")
+                partial_df = baostock_fetcher.get_rolling_financial(stock_code, start, end)
+                if not partial_df.empty:
+                    api_df = pd.concat([api_df, partial_df])    
+
+        # 5. 存储增量数据到数据库
+        if not api_df.empty:
+            logger.info(f"将增量数据存储到QuestDB ({len(api_df)} 行)")
+            questdb_fetcher.update_rolling_financial_table(api_df)   
+            
+            # 合并数据
+            if not local_df.empty:
+                combined_df = pd.concat([local_df, api_df])
+                combined_df = combined_df[~combined_df.index.duplicated(keep='first')]
+                combined_df = combined_df.sort_index()
+            else:
+                combined_df = api_df
+
+        else:
+            combined_df = local_df if not local_df.empty else pd.DataFrame()
+            logger.warning("无增量数据可存储")    
+        
+        return combined_df 
 
 # 使用示例
 if __name__ == "__main__":
     loader = DataLoader()
-    data = loader.get_stock_data("518880", "2024-01-01", "2025-06-10", "d")
+    data = loader.get_rolling_finance_data("603286", "2024-01-01", "2025-06-10")
     print(data.head())

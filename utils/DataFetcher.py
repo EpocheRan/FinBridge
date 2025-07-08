@@ -22,6 +22,7 @@ class DataFetcher:
         :param source: 数据源 ('akshare', 'baostock', 'questdb')
         '''
         self.source = source
+        if self.source == 'questdb': self.db = questDB()
 
     def get_ohlc(self, stock_code, start_date, end_date, freq='d'):
         """
@@ -230,39 +231,27 @@ class DataFetcher:
     
     def _fetch_from_questdb(self, stock_code, start_date, end_date, freq):
         """从QuestDB获取数据"""
-        try:
-            # 根据频率确定表名
-            table_name = questDB.get_table_name(freq)
-            
 
-            # 构建查询字段 - 所有频率都包含amount，日/周/月额外包含turnover
-            if freq in ['d', 'w', 'm']:
-                fields = "ts, open, high, low, close, volume, amount, turnover"
-            else:
-                fields = "ts, open, high, low, close, volume, amount"
+        # 根据频率确定表名
+        table_name = questDB.get_ohlc_table_name(freq)
+        
 
+        # 构建查询字段 - 所有频率都包含amount，日/周/月额外包含turnover
+        if freq in ['d', 'w', 'm']:
+            fields = "ts, open, high, low, close, volume, amount, turnover"
+        else:
+            fields = "ts, open, high, low, close, volume, amount"
 
-            query = f"""
-                SELECT {fields}
-                FROM "{table_name}"
-                WHERE ts BETWEEN '{start_date}' AND '{end_date}' AND code = '{stock_code}'
-                ORDER BY ts
-            """
-            df = pd.read_sql(query, self.db.pd_conn)
-            
-            # 数据清洗
-            if not df.empty:
-                df['ts'] = pd.to_datetime(df['ts'])
-                df.set_index('ts', inplace=True)
-            return df
-        except Exception as e:
-            # 表不存在错误代码: 42P01
-            if '4xp6' in str(e):
-                logger.error(f"提示: QuestDB表 '{table_name}' 不存在")
-            raise RuntimeError(f"QuestDB数据获取失败: {e}")
-    
-    @staticmethod
-    def store_ohlc_to_questdb(df, stock_code, freq):
+        query = f"""
+            SELECT {fields}
+            FROM "{table_name}"
+            WHERE ts BETWEEN '{start_date}' AND '{end_date}' AND code = '{stock_code}'
+            ORDER BY ts
+        """
+        error_str = f"提示: QuestDB表 '{table_name}' 不存在"
+        return self._read_sql_to_df(query, error_str)
+
+    def update_ohlc(df, stock_code, freq):
         db = questDB()
         """
         将数据存储到QuestDB
@@ -347,88 +336,188 @@ class DataFetcher:
     
     def get_stock_basic_info(self):
         """获取全量股票基本信息"""
-        bs_conn = BS()
-        rs = bs_conn().query_stock_basic()
+        if self.source == 'questdb':
+            query = f"""
+                SELECT *
+                FROM "stock_basic_info"
+                LATEST ON ts PARTITION BY code;
+            """
+            error_str = f"提示: QuestDB表 'stock_basic_info' 不存在"
+            return self._read_sql_to_df(query, error_str)
+        
+        elif self.source == 'baostock':
+            # 请求全量基础数据
+            self.bs = BS()
+            rs = self.bs().query_stock_basic()
+            
             # 转换为DataFrame
-        data_list = []
-        while (rs.error_code == '0') & rs.next():
-            data_list.append(rs.get_row_data())
-        
-        if not data_list:
-            return pd.DataFrame()
-        
-        df = pd.DataFrame(data_list, columns=rs.fields)
-        df.rename(columns={'code_name': 'name'}, inplace=True)
+            data_list = []
+            while (rs.error_code == '0') & rs.next():
+                data_list.append(rs.get_row_data())
+            
+            if not data_list:
+                return pd.DataFrame()
+            
+            df = pd.DataFrame(data_list, columns=rs.fields)
+            df.rename(columns={'code_name': 'name'}, inplace=True)
 
-        #处理Baostock返回的code前的交易所编码
-        df['code'] = df['code'].str.split('.').str[-1] 
-        df['ts'] = pd.Timestamp.today().date() 
-        df = df[['code', 'ts', 'name', 'ipoDate', 'outDate', 'type','status']]
-        df.set_index('ts', inplace=True)
-        return df
+            #处理Baostock返回的code前的交易所编码
+            df['code'] = df['code'].str.split('.').str[-1] 
+            df['ts'] = pd.Timestamp.today().date() 
+            df = df[['ts', 'code', 'name', 'ipoDate', 'outDate', 'type','status']]
+            df.set_index('ts', inplace=True)
+            return df
+        else:
+            logger.error("仅支持从 questdb 或 baostock 获取全量股票基本信息")
 
     def get_financial_indicators(self, stock_code, year, quarter):
         """获取财务指标数据"""
+        if self.source == 'questdb':     
+            query = f"""
+                SELECT * 
+                FROM "financial_table" 
+                WHERE 
+                    ts = ({year} || 
+                        CASE {quarter} 
+                            WHEN 1 THEN '-03-31' 
+                            WHEN 2 THEN '-06-30' 
+                            WHEN 3 THEN '-09-30' 
+                            WHEN 4 THEN '-12-31' 
+                        END)::timestamp
+                    AND code = {stock_code};
+            """
+            error_str = f"提示: QuestDB表 'financial_table' 不存在"
+            return self._read_sql_to_df(query, error_str)
         
-        # 转换股票代码格式
-        exchange = 'sh' if stock_code.startswith('60') else 'sz'
-        if stock_code.startswith('0000') : exchange = 'sh'
-        full_code = f"{exchange}.{stock_code}"
-        
-        bs_conn = BS()
-        rs = bs_conn().query_profit_data(
-            full_code,
-            year,
-            quarter
-        )
+        elif self.source == 'baostock':
+            self.bs = BS()
+            # 转换股票代码格式
+            exchange = 'sh' if stock_code.startswith('60') else 'sz'
+            if stock_code.startswith('0000') : exchange = 'sh'
+            full_code = f"{exchange}.{stock_code}"
 
-        data_list = []
-        while (rs.error_code == '0') & rs.next():
-            data_list.append(rs.get_row_data())
-        
-        if not data_list:
-            return pd.DataFrame()
-        
-        df = pd.DataFrame(data_list, columns=rs.fields)
+            rs = self.bs().query_profit_data(
+                full_code,
+                year,
+                quarter
+            )
 
-        #处理Baostock返回的code前的交易所编码
-        df['code'] = df['code'].str.split('.').str[-1] 
-        df['ts'] = pd.Timestamp.today().date() 
-        df = df[['code', 'ts', 'statDate', 'pubDate', 'roeAvg', 'npMargin','gpMargin',
-                 'netProfit','epsTTM','MBRevenue','totalShare','liqaShare']]
-        df.set_index('ts', inplace=True)
-        return df
+            data_list = []
+            while (rs.error_code == '0') & rs.next():
+                data_list.append(rs.get_row_data())
+            
+            if not data_list:
+                return pd.DataFrame()
+            
+            df = pd.DataFrame(data_list, columns=rs.fields)
 
-    def get_stock_industry(self):
+            #处理Baostock返回的code前的交易所编码
+            if not df.empty:
+                df['code'] = df['code'].str.split('.').str[-1] 
+                df['ts'] = pd.to_datetime(df['statDate'])
+                df = df[['ts', 'code', 'statDate', 'pubDate', 'roeAvg', 'npMargin','gpMargin',
+                        'netProfit','epsTTM','MBRevenue','totalShare','liqaShare']]
+                df.set_index('ts', inplace=True)
+            return df
+        
+        else:
+            logger.error("仅支持从 questdb 或 baostock 获取财务指标")
+
+    def get_stock_industry(self, code = None):
         """获取全量行业数据"""
-        bs_conn = BS()
-        rs = bs_conn().query_stock_industry()
-        data_list = []
-        while (rs.error_code == '0') & rs.next():
-            data_list.append(rs.get_row_data())
+        if self.source == 'questdb':
+            if code == None:
+                query = f"""
+                    SELECT * FROM "stock_industry"
+                    LATEST ON ts PARTITION BY code;
+                """
+            else:
+                query = f"""
+                    SELECT * FROM stock_industry
+                    WHERE code = '{code}'
+                    LATEST ON ts;
+                """
+            error_str = f"提示: QuestDB表 'stock_industry' 不存在"
+            return self._read_sql_to_df(query, error_str)
+
+        elif self.source == 'baostock':
+            if code != None: logger.warning("code参数无效，从baostock获取行业数据默认为全量数据")
+            self.bs = BS()
+            rs = self.bs().query_stock_industry()
+            data_list = []
+            while (rs.error_code == '0') & rs.next():
+                data_list.append(rs.get_row_data())
+            
+            if not data_list:
+                return pd.DataFrame()
+            
+            df = pd.DataFrame(data_list, columns=rs.fields)
+            df.rename(columns={'industry': 'industry_name'}, inplace=True)
+            df.rename(columns={'industryClassification': 'industry_classification'}, inplace=True)
+
+            #处理Baostock返回的code前的交易所编码
+            if not df.empty:
+                df['code'] = df['code'].str.split('.').str[-1] 
+                df['ts'] = pd.Timestamp.today().date() 
+                df = df[['ts', 'code', 'industry_name', 'industry_classification']]
+                df.set_index('ts', inplace=True)
+            return df
         
-        if not data_list:
-            return pd.DataFrame()
+        else:
+            logger.error("仅支持从 questdb 或 baostock 全量行业数据")
+
+    def get_rolling_financial(self, stock_code, start_date, end_date):
+        """获取财务指标数据"""
+        if self.source == 'questdb':
+            query = f"""
+                SELECT *
+                FROM "rolling_financial"
+                WHERE ts BETWEEN '{start_date}' AND '{end_date}' AND code = '{stock_code}'
+                ORDER BY ts
+                """
+            error_str = f"提示: QuestDB表 'stock_industry' 不存在"
+            return self._read_sql_to_df(query, error_str)
         
-        df = pd.DataFrame(data_list, columns=rs.fields)
-        df.rename(columns={'industry': 'industry_name'}, inplace=True)
-        df.rename(columns={'industryClassification': 'industry_classification'}, inplace=True)
+        elif self.source == 'baostock':
+            self.bs = BS()
 
-        #处理Baostock返回的code前的交易所编码
-        df['code'] = df['code'].str.split('.').str[-1] 
-        df['ts'] = pd.Timestamp.today().date() 
-        df = df[['code', 'ts', 'industry_name', 'industry_classification']]
-        df.set_index('ts', inplace=True)
-        return df
+            # 转换股票代码格式
+            exchange = 'sh' if stock_code.startswith('60') else 'sz'
+            if stock_code.startswith('0000') : exchange = 'sh'
+            full_code = f"{exchange}.{stock_code}"
+            
+            rs = self.bs().query_history_k_data_plus(
+                full_code,
+                "date,code,peTTM,psTTM,pcfNcfTTM,pbMRQ",
+                start_date,
+                end_date
+            )
 
+            data_list = []
+            while (rs.error_code == '0') & rs.next():
+                data_list.append(rs.get_row_data())
+            
+            if not data_list:
+                return pd.DataFrame()
+            
+            df = pd.DataFrame(data_list, columns=rs.fields)
 
+            #处理Baostock返回的code前的交易所编码
+            if not df.empty:
+                df['code'] = df['code'].str.split('.').str[-1] 
+                df['ts'] = pd.to_datetime(df['date'])
+                df = df[['ts', 'code', 'peTTM', 'psTTM', 'pcfNcfTTM', 'pbMRQ']]
+                df.set_index('ts', inplace=True)
+            return df
+        
+        else:
+            logger.error("仅支持从 questdb 或 baostock 滚动财务指标数")
 
-
-    def create_stock_basic_table(self):
+    def _create_stock_basic_table(self):
         db = questDB()
         """创建股票基本信息表
-        code: 证券代码
         ts: 更新时间
+        code: 证券代码
         name: 证券名称
         ipoDate: 上市日期
         outDate: 退市日期
@@ -436,9 +525,9 @@ class DataFetcher:
         status: 上市状态 - 1.上市, 0.退市
         """
         create_table = """
-        CREATE TABLE IF NOT EXISTS stock_basic_info (
-            code SYMBOL,
+        CREATE TABLE IF NOT EXISTS "stock_basic_info" (
             ts TIMESTAMP,
+            code SYMBOL,
             name STRING,
             ipoDate TIMESTAMP,
             outDate TIMESTAMP,
@@ -449,7 +538,7 @@ class DataFetcher:
         """
         return db.create_table(create_table)
 
-    def create_financial_indicators_table(self):
+    def _create_financial_indicators_table(self):
         db = questDB()
         """创建财务指标表
         pubDate: 公司发布财报的日期
@@ -464,9 +553,9 @@ class DataFetcher:
         liqaShare: 流通股本
         """
         create_table = """
-        CREATE TABLE IF NOT EXISTS financial_indicators (
-            code SYMBOL,
+        CREATE TABLE IF NOT EXISTS "financial_indicators" (
             ts TIMESTAMP,
+            code SYMBOL,
             statDate STRING,
             pubDate STRING,
             roeAvg DOUBLE,
@@ -482,16 +571,16 @@ class DataFetcher:
         """
         return db.create_table(create_table)
 
-    def create_stock_industry_table(self):
+    def _create_stock_industry_table(self):
         """创建行业信息表
         code: 证券代码
         industry: 所属行业
         industryClassification: 所属行业类别
         """
         create_table = """
-        CREATE TABLE IF NOT EXISTS stock_industry (
-            code SYMBOL,
+        CREATE TABLE IF NOT EXISTS "stock_industry" (
             ts TIMESTAMP,
+            code SYMBOL,
             industry_name STRING,
             industry_classification STRING
         ) TIMESTAMP(ts) PARTITION BY MONTH WAL
@@ -499,7 +588,7 @@ class DataFetcher:
         """
         return self.create_table(create_table)
 
-    def create_rolling_financial_table(self):
+    def _create_rolling_financial_table(self):
         """创建行业信息表
         code: 证券代码
         peTTM: 滚动市盈率
@@ -508,9 +597,9 @@ class DataFetcher:
         pbMRQ: 市净率
         """
         create_table = """
-        CREATE TABLE IF NOT EXISTS stock_industry (
-            code SYMBOL,
+        CREATE TABLE IF NOT EXISTS "rolling_financial" (
             ts TIMESTAMP,
+            code SYMBOL,
             peTTM DOUBLE,
             psTTM DOUBLE,
             pcfNcfTTM DOUBLE,
@@ -518,47 +607,100 @@ class DataFetcher:
         ) TIMESTAMP(ts) PARTITION BY MONTH WAL
         DEDUP UPSERT KEYS(code, ts);
         """
-        return self.create_table(create_table)
+        return self.db.create_table(create_table)
 
-    def update_stock_basic(self, data):
+    def update_stock_basic(self, data:pd.DataFrame):
+        self._create_stock_basic_table()
+
         """批量更新股票基本信息"""
         query = """
         INSERT INTO stock_basic_info 
-        (code, ts, name, ipoDate, outDate, type, status)
+        (ts, code, name, ipoDate, outDate, type, status)
         VALUES (%s, %s, %s, %s, %s, %s, %s)
         """
-        return self.batch_insert(query, data)
+        records = [
+                (ts.strftime('%Y-%m-%d %H:%M:%S'), row['code'],
+                row['ts'], row['name'], row['ipoDate'], row['outDate'], row['type'], row['status'])
+                for ts, row in data.iterrows()
+            ]
+        return self.batch_insert(query, records)
 
-    def update_financial_indicators(self, data):
+    def update_financial_indicators(self, data:pd.DataFrame):
+        self._create_financial_indicators_table()
+
         """批量更新财务指标"""
         query = """
         INSERT INTO financial_indicators 
-        (code, ts, statDate, pubDate, roeAvg, npMargin, gpMargin, netProfit, 
+        (ts, code, statDate, pubDate, roeAvg, npMargin, gpMargin, netProfit, 
          epsTTM, MBRevenue, totalShare, liqaShare)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
-        return self.batch_insert(query, data)
+        records = [
+                (
+                ts.strftime('%Y-%m-%d %H:%M:%S'), row['code'], 
+                row['statDate'], row['pubDate'], row['roeAvg'], row['npMargin'], row['gpMargin'], row['netProfit'],
+                row['epsTTM'], row['MBRevenue'], row['otalShare'], row['liqaShare']
+                )
+                for ts, row in data.iterrows()
+            ]
 
-    def update_stock_industry(self, data):
+        return self.batch_insert(query, records)
+
+    def update_stock_industry(self, data:pd.DataFrame):
+        self._create_stock_industry_table()
+
         """批量更新行业信息"""
         query = """
         INSERT INTO stock_industry 
-        (code, ts, industry_name, industry_classification)
+        (ts, code, industry_name, industry_classification)
         VALUES (%s, %s, %s, %s)
         """
-        return self.batch_insert(query, data)
+        records = [
+                (
+                ts.strftime('%Y-%m-%d %H:%M:%S'), row['code'], 
+                row['industry_name'], row['industry_classification']
+                )
+                for ts, row in data.iterrows()
+            ]
+
+        return self.batch_insert(query, records)
     
-    def update_rolling_financial_table(self, data):
+    def update_rolling_financial_table(self, data:pd.DataFrame):
+        self._create_rolling_financial_table()
+        
         """批量更新财务指标"""
         query = """
-        INSERT INTO financial_indicators 
-        (code, ts, peTTM, psTTM, pcfNcfTTM, pbMRQ)
+        INSERT INTO rolling_financial 
+        (ts, code, peTTM, psTTM, pcfNcfTTM, pbMRQ)
         VALUES (%s, %s, %s, %s, %s, %s)
         """
-        return self.batch_insert(query, data)
-    
+        records = [
+                (
+                ts.strftime('%Y-%m-%d %H:%M:%S'), row['code'], 
+                row['peTTM'], row['psTTM'], row['pcfNcfTTM'], row['pbMRQ']
+                )
+                for ts, row in data.iterrows()
+            ]
+
+        return self.db.batch_insert(query, records)
+
+    def _read_sql_to_df(self, query, error_str = ''):
+        try:
+            df = pd.read_sql(query, self.db.pd_conn)
+            # 数据清洗
+            if not df.empty:
+                df['ts'] = pd.to_datetime(df['ts'])
+                df.set_index('ts', inplace=True)
+                return df
+        except Exception as e:
+            # 表不存在错误代码: 42P01
+            if '4xp6' in str(e):logger.error(error_str)
+        raise RuntimeError(f"QuestDB数据获取失败: {e}")
+
+
+
 # 使用示例
 if __name__ == "__main__":
     x = DataFetcher()
-    data = x.get_stock_industry()
+    data = x.get_rolling_financial('603286',"2024-01-01","2025-01-01")
     print(data.head())
