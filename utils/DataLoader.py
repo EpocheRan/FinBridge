@@ -129,7 +129,7 @@ class DataLoader:
         return merged_ranges
 
 
-    def get_ohlc_data(self, stock_code, start_date, end_date, freq='d'):
+    def ohlc(self, stock_code, start_date, end_date, freq='d'):
         """
         获取股票数据（智能增量更新）
 
@@ -241,7 +241,7 @@ class DataLoader:
         # 5. 存储增量数据到数据库
         if not api_df.empty:
             logger.info(f"将增量数据存储到QuestDB ({len(api_df)} 行)")
-            fetcher.update_ohlc(api_df, stock_code, freq)
+            questdb_fetcher.update_ohlc(api_df, stock_code, freq)
             
             # 合并数据
             if not local_df.empty:
@@ -260,7 +260,7 @@ class DataLoader:
         )
         return combined_df
     
-    def get_rolling_finance_data(self, stock_code, start_date, end_date):
+    def rolling_finance(self, stock_code, start_date, end_date):
 
         # 1. 尝试从QuestDB获取完整数据
         questdb_fetcher = DataFetcher(source='questdb')
