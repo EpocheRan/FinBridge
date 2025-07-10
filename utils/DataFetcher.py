@@ -15,7 +15,7 @@ from DataConnect import questDB, BS
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger('Data Fetcher')
 
-class DataFetcher:
+class DataFetcher():
     def __init__(self, source='questdb'):
         '''
         初始化数据获取器
