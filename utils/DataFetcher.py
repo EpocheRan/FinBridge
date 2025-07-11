@@ -31,7 +31,7 @@ class DataFetcher():
         :param force: 强制检查所有表格并创建缺失表格
         """
         if not force: 
-            self._initialize_table()
+            self._create_tables()
             return
 
         # 检查关键表（ohlc_d表）是否存在
@@ -43,14 +43,14 @@ class DataFetcher():
             df = pd.read_sql(query, self.db.pd_conn)
             if df.empty:
                 logger.info(f"关键表 {table_name} 不存在，执行初始化...")
-                self._initialize_table()
+                self._create_tables()
 
         except Exception as e:
             # 如果查询出错（通常是因为表不存在），执行初始化
             logger.warning(f"表检查失败: {e}，执行初始化...")
-            self._initialize_table()
+            self._create_tables()
 
-    def _initialize_table(self):
+    def _create_tables(self):
         logger.info("Initializing database tables...")
         self._create_ohlc_table()
         self._create_stock_basic_table()
