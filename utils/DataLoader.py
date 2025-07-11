@@ -5,6 +5,7 @@
 import pandas as pd
 import logging
 from abc import ABC, abstractmethod
+from tqdm import tqdm
 
 # utils
 # from .TradingDateManage import TradingDateManage as TDM
@@ -21,22 +22,17 @@ class DataUpdateTool(ABC):
     """增量数据更新策略的抽象基类"""
     
     @abstractmethod
-    def get_expected_dates(self, loader, start_date, end_date):
+    def get_expected_dates(self, loader, start_date:str, end_date:str, freq):
         """获取预期日期范围"""
         pass
     
     @abstractmethod
-    def fetch_missing_data(self, fetcher:DataFetcher, stock_code, date_range, freq=None):
-        """从API获取缺失数据"""
-        pass
-    
-    @abstractmethod
-    def update_database(self, db_fetcher:DataFetcher, data, stock_code, freq=None):
+    def update_database(self, db_fetcher:DataFetcher, data:pd.DataFrame, freq=None):
         """更新数据库"""
         pass
     
     @abstractmethod
-    def get_local_data(self, db_fetcher:DataFetcher, stock_code, start_date, end_date, freq=None):
+    def get_data(self, db_fetcher:DataFetcher, stock_code:str, start_date:str, end_date:str, freq=None):
         """从本地数据库获取数据"""
         pass
 
@@ -47,16 +43,11 @@ class OHLCUpdateTool(DataUpdateTool):
         """获取OHLC数据的预期日期"""
         return loader._get_expected_dates(start_date, end_date, freq)
     
-    def fetch_missing_data(self, fetcher, stock_code, date_range, freq):
-        """获取OHLC缺失数据"""
-        start, end = date_range
-        return fetcher.get_ohlc(stock_code, start, end, freq)
-    
-    def update_database(self, db_fetcher, data, stock_code, freq):
+    def update_database(self, db_fetcher, data, freq):
         """更新OHLC数据库"""
-        db_fetcher.update_ohlc(data, stock_code, freq)
+        db_fetcher.update_ohlc(data, freq)
     
-    def get_local_data(self, db_fetcher, stock_code, start_date, end_date, freq):
+    def get_data(self, db_fetcher, stock_code, start_date, end_date, freq):
         """获取本地OHLC数据"""
         return db_fetcher.get_ohlc(stock_code, start_date, end_date, freq)
 
@@ -68,16 +59,11 @@ class FinanceUpdateTool(DataUpdateTool):
         # 财务数据使用日线频率
         return loader._get_expected_dates(start_date, end_date, 'd')
     
-    def fetch_missing_data(self, fetcher, stock_code, date_range, freq=None):
-        """获取财务缺失数据"""
-        start, end = date_range
-        return fetcher.get_rolling_financial(stock_code, start, end)
-    
-    def update_database(self, db_fetcher, data, stock_code, freq=None):
+    def update_database(self, db_fetcher, data, freq=None):
         """更新财务数据库"""
         db_fetcher.update_rolling_financial_table(data)
     
-    def get_local_data(self, db_fetcher, stock_code, start_date, end_date, freq=None):
+    def get_data(self, db_fetcher, stock_code, start_date, end_date, freq=None):
         """获取本地财务数据"""
         return db_fetcher.get_rolling_financial(stock_code, start_date, end_date)
 
@@ -85,7 +71,7 @@ class DataLoader():
     def __init__(self):
         # 初始化策略
         self.ohlc_tool = OHLCUpdateTool()
-        self.finance_tool = FinanceUpdateTool()
+        self.rolling_finance_tool = FinanceUpdateTool()
 
     def _get_trading_days(self, start_date, end_date):
         """
@@ -126,11 +112,11 @@ class DataLoader():
         trading_days = self._get_trading_days(start_date, end_date)
         
         if freq == 'd':  # 日线
-            return trading_days
+            return trading_days, trading_days
             
         elif freq.endswith('min'):  # 分钟线
             # 返回日期范围，不计算具体分钟点
-            return trading_days
+            return trading_days, trading_days
             
         elif freq == 'w':  # 周线
             # 获取每周最后一个交易日
@@ -139,7 +125,7 @@ class DataLoader():
             for year, week in set([(d.year, d.week) for d in trading_days_dt]):
                 week_days = [d for d in trading_days_dt if d.year == year and d.week == week]
                 weekly_days.append(max(week_days).strftime('%Y-%m-%d'))
-            return weekly_days
+            return weekly_days, trading_days
             
         elif freq == 'm':  # 月线
             # 获取每月最后一个交易日
@@ -148,7 +134,7 @@ class DataLoader():
             for year, month in set([(d.year, d.month) for d in trading_days_dt]):
                 month_days = [d for d in trading_days_dt if d.year == year and d.month == month]
                 monthly_days.append(max(month_days).strftime('%Y-%m-%d'))
-            return monthly_days
+            return monthly_days, trading_days
         
         else:
             raise ValueError(f"不支持的频率类型: {freq}")
@@ -194,7 +180,7 @@ class DataLoader():
         merged_ranges.append((current_start, current_end))
         return merged_ranges
     
-    def _check_missing_data(self, local_df, expected_dates, freq, start_date, end_date):
+    def _check_missing_data(self, local_df, expected_dates, trading_days, freq):
         """
         检查本地数据的完整性并识别缺失日期范围
         
@@ -209,7 +195,6 @@ class DataLoader():
 
         missing_dates = []
         missing_date_ranges = []
-        all_trading_days = self._get_trading_days(start_date, end_date)
         
         if freq.endswith('min'):  # 分钟级数据策略
             expected_bars_per_day = self._calculate_expected_bars_per_day(freq)
@@ -230,7 +215,7 @@ class DataLoader():
                 
             # 合并连续缺失日期
             if missing_dates:
-                missing_date_ranges = self._merge_consecutive_trading_days(missing_dates, all_trading_days)
+                missing_date_ranges = self._merge_consecutive_trading_days(missing_dates, trading_days)
                 
         elif freq == 'd':  # 日线数据
             if not local_df.empty:
@@ -240,7 +225,7 @@ class DataLoader():
                 missing_dates = expected_dates
                 
             if missing_dates:
-                missing_date_ranges = self._merge_consecutive_trading_days(missing_dates, all_trading_days)
+                missing_date_ranges = self._merge_consecutive_trading_days(missing_dates, trading_days)
                 
         else:  # 周线/月线
             if not local_df.empty:
@@ -272,7 +257,7 @@ class DataLoader():
         query_end_date = end_date + " 23:59"
         
         try:
-            local_df = tool.get_local_data(
+            local_df = tool.get_data(
                 questdb_fetcher, stock_code, start_date, query_end_date, freq
             )
             logger.info(f"从QuestDB获取到 {stock_code} 数据 ({len(local_df)} 行)")
@@ -282,7 +267,7 @@ class DataLoader():
 
         # 2. 获取预期日期
         try:
-            expected_dates = tool.get_expected_dates(self, start_date, end_date, freq)
+            expected_dates, trading_dates = tool.get_expected_dates(self, start_date, end_date, freq)
             if not expected_dates:
                 logger.warning("未获取到预期日期数据")
                 return local_df if not local_df.empty else pd.DataFrame()
@@ -291,9 +276,7 @@ class DataLoader():
             expected_dates = []
         
         # 3. 检查缺失数据
-        missing_date_ranges = self._check_missing_data(
-            local_df, expected_dates, freq, start_date, end_date
-        )
+        missing_date_ranges = self._check_missing_data(local_df, expected_dates, trading_dates, freq)
         
         # 4. 从API获取缺失数据
         api_df = pd.DataFrame()
@@ -303,23 +286,23 @@ class DataLoader():
             # 确定数据源
             if stock_code.startswith(("51", "15")) or (freq and freq.endswith('1min')):
                 logger.info(f"从akshare获取 {stock_code} 数据")
-                fetcher = DataFetcher(source='akshare')
+                api_fetcher = DataFetcher(source='akshare')
             else:
                 logger.info(f"从Baostock获取 {stock_code} 数据")
-                fetcher = DataFetcher(source='baostock')
+                api_fetcher = DataFetcher(source='baostock')
             
             # 按范围获取缺失数据
             for date_range in missing_date_ranges:
                 start, end = date_range
                 logger.info(f"获取 {start} 至 {end} 的数据")
-                partial_df = tool.fetch_missing_data(fetcher, stock_code, date_range, freq)
+                partial_df = tool.get_data(api_fetcher, stock_code, start, end, freq)
                 if not partial_df.empty:
                     api_df = pd.concat([api_df, partial_df])
         
         # 5. 存储增量数据到数据库
         if not api_df.empty:
             logger.info(f"将增量数据存储到QuestDB ({len(api_df)} 行)")
-            tool.update_database(questdb_fetcher, api_df, stock_code, freq)
+            tool.update_database(questdb_fetcher, api_df, freq)
             
             # 合并数据
             if not local_df.empty:
@@ -338,22 +321,47 @@ class DataLoader():
         )
         return combined_df
 
-    def ohlc(self, stock_code, start_date, end_date, freq='d'):
+    def _lastest_tradingday_update():
+        ...
+
+
+
+    def ohlc(self, stock_codes: str | list[str], start_date, end_date, freq='d'):
         """获取OHLC数据"""
-        return self._incremental_update(
-            stock_code, start_date, end_date, self.ohlc_tool, freq
-        )
-    
-    def rolling_finance(self, stock_code, start_date, end_date):
+        # 支持单个股票代码输入
+        if isinstance(stock_codes, str):
+            stock_codes = [stock_codes]
+
+        stock_data = {}
+        for stock_code in stock_codes:
+            stock_data[stock_code] = self._incremental_update(
+                                    stock_code, start_date, end_date, self.ohlc_tool, freq)
+        return stock_data
+
+    def rolling_finance(self, stock_codes: str | list[str], start_date, end_date):
         """获取滚动财务数据"""
-        return self._incremental_update(
-            stock_code, start_date, end_date, self.finance_tool
-        )
+        # 支持单个股票代码输入
+        if isinstance(stock_codes, str):
+            stock_codes = [stock_codes]
 
+        stock_data = {}
+        for stock_code in stock_codes:
+            stock_data[stock_code] =  self._incremental_update(
+                                    stock_code, start_date, end_date, self.rolling_finance_tool)
+        return stock_data
+    
+    def stock_basic_info(self, stock_codes: str | list[str]):
+        """获取滚动财务数据"""
+        if isinstance(stock_codes, str):
+            stock_codes = [stock_codes]
 
+        stock_data = {}
+        for stock_code in stock_codes:
+            stock_data[stock_code] =  self._lastest_tradingday_update()
+        return stock_data
 
 # 使用示例
 if __name__ == "__main__":
     loader = DataLoader()
-    data = loader.rolling_finance("603285", "2024-01-01", "2025-06-10")
-    print(data.head())
+    data = loader.rolling_finance("603282", "2024-01-01", "2025-06-10")
+    print(data["603282"].head())

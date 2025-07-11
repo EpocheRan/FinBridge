@@ -23,6 +23,44 @@ class DataFetcher():
         '''
         self.source = source
         self.db = questDB() #默认建立数据库链接，用于支持多源交互
+        self.initialize_tables(self)
+
+    def initialize_tables(self, force=False):
+        """
+        确保数据库表存在，如果关键表不存在则执行初始化
+        :param force: 强制检查所有表格并创建缺失表格
+        """
+        if not force: 
+            self._initialize_table()
+            return
+
+        # 检查关键表（ohlc_d表）是否存在
+        table_name = self.db.get_ohlc_table_name('d')
+        query = f"SELECT name FROM tables() WHERE name = '{table_name}';"
+        
+        try:
+            # 尝试查询表是否存在
+            df = pd.read_sql(query, self.db.pd_conn)
+            if df.empty:
+                logger.info(f"关键表 {table_name} 不存在，执行初始化...")
+                self._initialize_table()
+
+        except Exception as e:
+            # 如果查询出错（通常是因为表不存在），执行初始化
+            logger.warning(f"表检查失败: {e}，执行初始化...")
+            self._initialize_table()
+
+    def _initialize_table(self):
+        logger.info("Initializing database tables...")
+        self._create_ohlc_table()
+        self._create_stock_basic_table()
+        self._create_financial_indicators_table()
+        self._create_stock_industry_table()
+        self._create_rolling_financial_table()
+        self._create_concept_boards_table()
+        self._create_concept_ohlc_table()
+        self._create_concept_constituents_table()
+        logger.info("Database tables initialized")
 
     def get_ohlc(self, stock_code, start_date, end_date, freq='d'):
         """
@@ -103,6 +141,8 @@ class DataFetcher():
                 df = df[['时间', '开盘', '最高', '最低', '收盘', '成交量', '成交额']]
                 df.columns = ['ts', 'open', 'high', 'low', 'close', 'volume', 'amount']
                 df['ts'] = pd.to_datetime(df['ts'])
+                df['code'] = stock_code
+                df = df[['ts', 'code', 'open', 'high', 'low', 'close', 'volume', 'amount']]
                 df.set_index('ts', inplace=True)
                 return df
             
@@ -146,6 +186,8 @@ class DataFetcher():
                         df = df[['日期', '开盘', '最高', '最低', '收盘', '成交量', '成交额', '换手率']]
                         df.columns = ['ts', 'open', 'high', 'low', 'close', 'volume', 'amount', 'turnover']
                         df['ts'] = pd.to_datetime(df['ts'])
+                        df['code'] = stock_code
+                        df = df[['ts', 'code', 'open', 'high', 'low', 'close', 'volume', 'amount', 'turnover']]
                         df.set_index('ts', inplace=True)
                         return df
                     except Exception as e:
@@ -212,14 +254,16 @@ class DataFetcher():
             if freq.endswith('min'):
                 # 分钟数据包含日期和时间
                 df['ts'] = pd.to_datetime(df['time'].str[:12])
-                df = df[['ts', 'open', 'high', 'low', 'close', 'volume','amount']]
+                df['code'] = stock_code
+                df = df[['ts', 'code', 'open', 'high', 'low', 'close', 'volume','amount']]
                 df.set_index('ts', inplace=True)
             else:
                 # 日线及以上只有日期
                 df = df[['date', 'open', 'high', 'low', 'close', 'volume','amount','turn']]
                 df.rename(columns={'turn': 'turnover'}, inplace=True)
                 df['ts'] = pd.to_datetime(df['date'])
-                df = df[['ts', 'open', 'high', 'low', 'close', 'volume','amount', 'turnover']]
+                df['code'] = stock_code
+                df = df[['ts', 'code', 'open', 'high', 'low', 'close', 'volume','amount', 'turnover']]
                 df.set_index('ts', inplace=True)
             
             # 转换数据类型
@@ -234,13 +278,12 @@ class DataFetcher():
 
         # 根据频率确定表名
         table_name = questDB.get_ohlc_table_name(freq)
-        
 
         # 构建查询字段 - 所有频率都包含amount，日/周/月额外包含turnover
         if freq in ['d', 'w', 'm']:
-            fields = "ts, open, high, low, close, volume, amount, turnover"
+            fields = "ts, code, open, high, low, close, volume, amount, turnover"
         else:
-            fields = "ts, open, high, low, close, volume, amount"
+            fields = "ts, code, open, high, low, close, volume, amount"
 
         query = f"""
             SELECT {fields}
@@ -251,7 +294,7 @@ class DataFetcher():
         error_str = f"提示: QuestDB表 '{table_name}' 不存在"
         return self._read_sql_to_df(query, error_str)
 
-    def update_ohlc(self, data:pd.DataFrame, stock_code, freq):
+    def update_ohlc(self, data:pd.DataFrame, freq):
         """
         将数据存储到QuestDB
         
@@ -263,76 +306,79 @@ class DataFetcher():
             return
             
         table_name = questDB.get_ohlc_table_name(freq)
-        conn = None
-
-        # 当Table不存在时，创建Table需要标定Parition
-        partition_map = {
-            '1min': 'HOUR',
-            '5min': 'HOUR',
-            '15min': 'DAY',
-            '60min': 'DAY',
-            'd': 'MONTH',
-            'w': 'MONTH',
-            'm': 'YEAR'
-        }
-
-        # 创建表（如果不存在), 分钟数据无换手率，日，周，月有换手率
-        if freq.endswith('min'):
-            create_table = f"""
-            CREATE TABLE IF NOT EXISTS "{table_name}" (
-                ts TIMESTAMP,
-                open DOUBLE,
-                high DOUBLE,
-                low DOUBLE,
-                close DOUBLE,
-                volume LONG,
-                amount LONG,
-                code SYMBOL,
-                market SYMBOL
-            ) TIMESTAMP(ts) PARTITION BY {partition_map[freq]} WAL
-            DEDUP UPSERT KEYS(ts, code, market);
-            """
-        else:
-            create_table = f"""
-            CREATE TABLE IF NOT EXISTS "{table_name}" (
-                ts TIMESTAMP,
-                open DOUBLE,
-                high DOUBLE,
-                low DOUBLE,
-                close DOUBLE,
-                volume LONG,
-                amount LONG,
-                turnover DOUBLE,
-                code SYMBOL,
-                market SYMBOL
-            ) TIMESTAMP(ts) PARTITION BY {partition_map[freq]} WAL
-            DEDUP UPSERT KEYS(ts, code, market);
-            """
-        self.db.create_table(create_table)
                    
         # 插入新数据
         if freq.endswith('min'):
             insert_query = f"""
             INSERT INTO "{table_name}" (ts, open, high, low, close, volume, amount, code, market)
-            VALUES (%s, %s, %s, %s, %s, %s, %s,'{stock_code}', 'MLCN')
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'MLCN')
             """
             records = [
                 (ts.strftime('%Y-%m-%d %H:%M:%S'), 
-                row['open'], row['high'], row['low'], row['close'], row['volume'], row['amount'])
+                row['open'], row['high'], row['low'], row['close'], row['volume'], row['amount'], row['code'])
                 for ts, row in data.iterrows()
             ]
         else:
             insert_query = f"""
             INSERT INTO "{table_name}" (ts, open, high, low, close, volume, amount, turnover, code, market)
-            VALUES (%s, %s, %s, %s, %s, %s, %s ,%s, '{stock_code}', 'MLCN')
+            VALUES (%s, %s, %s, %s, %s, %s, %s ,%s, %s, 'MLCN')
             """
             records = [
                 (ts.strftime('%Y-%m-%d %H:%M:%S'), 
-                row['open'], row['high'], row['low'], row['close'], row['volume'], row['amount'], row['turnover'])
+                row['open'], row['high'], row['low'], row['close'], row['volume'], row['amount'], row['turnover'], row['code'])
                 for ts, row in data.iterrows()
             ]
         self.db.batch_insert(insert_query, records)
     
+    def _create_ohlc_table(self):
+        # 创建OHLC表
+        freqs = ['1min', '5min', '15min', '30min', '60min', 'd', 'w', 'm']
+        partition_map = {
+            '1min': 'HOUR',
+            '5min': 'HOUR',
+            '15min': 'DAY',
+            '30min': 'DAY',
+            '60min': 'DAY',
+            'd': 'MONTH',
+            'w': 'MONTH',
+            'm': 'YEAR'
+        }
+        
+        for freq in freqs:
+            table_name = questDB.get_ohlc_table_name(freq)
+            if freq.endswith('min'):
+                create_table = f"""
+                CREATE TABLE IF NOT EXISTS "{table_name}" (
+                    ts TIMESTAMP,
+                    open DOUBLE,
+                    high DOUBLE,
+                    low DOUBLE,
+                    close DOUBLE,
+                    volume LONG,
+                    amount LONG,
+                    code SYMBOL,
+                    market SYMBOL
+                ) TIMESTAMP(ts) PARTITION BY {partition_map[freq]} WAL
+                DEDUP UPSERT KEYS(ts, code, market);
+                """
+            else:
+                create_table = f"""
+                CREATE TABLE IF NOT EXISTS "{table_name}" (
+                    ts TIMESTAMP,
+                    open DOUBLE,
+                    high DOUBLE,
+                    low DOUBLE,
+                    close DOUBLE,
+                    volume LONG,
+                    amount LONG,
+                    turnover DOUBLE,
+                    code SYMBOL,
+                    market SYMBOL
+                ) TIMESTAMP(ts) PARTITION BY {partition_map[freq]} WAL
+                DEDUP UPSERT KEYS(ts, code, market);
+                """
+            self.db.create_table(create_table)
+        
     def get_stock_basic_info(self):
         """获取全量股票基本信息"""
         if self.source == 'questdb':
@@ -513,7 +559,6 @@ class DataFetcher():
             logger.error("仅支持从 questdb 或 baostock 滚动财务指标数")
 
     def _create_stock_basic_table(self):
-        db = questDB()
         """创建股票基本信息表
         ts: 更新时间
         code: 证券代码
@@ -535,10 +580,9 @@ class DataFetcher():
         ) TIMESTAMP(ts) PARTITION BY MONTH WAL
         DEDUP UPSERT KEYS(code, ts);
         """
-        return db.create_table(create_table)
+        return self.db.create_table(create_table)
 
     def _create_financial_indicators_table(self):
-        db = questDB()
         """创建财务指标表
         pubDate: 公司发布财报的日期
         statDate: 财报统计的季度的最后一天, 比如2017-03-31, 2017-06-30
@@ -568,7 +612,7 @@ class DataFetcher():
         ) TIMESTAMP(ts) PARTITION BY MONTH WAL
         DEDUP UPSERT KEYS(code, ts);
         """
-        return db.create_table(create_table)
+        return self.db.create_table(create_table)
 
     def _create_stock_industry_table(self):
         """创建行业信息表
@@ -585,7 +629,7 @@ class DataFetcher():
         ) TIMESTAMP(ts) PARTITION BY MONTH WAL
         DEDUP UPSERT KEYS(code, ts);
         """
-        return self.create_table(create_table)
+        return self.db.create_table(create_table)
 
     def _create_rolling_financial_table(self):
         """创建行业信息表
@@ -609,8 +653,6 @@ class DataFetcher():
         return self.db.create_table(create_table)
 
     def update_stock_basic(self, data:pd.DataFrame):
-        self._create_stock_basic_table()
-
         """批量更新股票基本信息"""
         query = """
         INSERT INTO stock_basic_info 
@@ -625,8 +667,6 @@ class DataFetcher():
         return self.db.batch_insert(query, records)
 
     def update_financial_indicators(self, data:pd.DataFrame):
-        self._create_financial_indicators_table()
-
         """批量更新财务指标"""
         query = """
         INSERT INTO financial_indicators 
@@ -646,8 +686,6 @@ class DataFetcher():
         return self.db.batch_insert(query, records)
 
     def update_stock_industry(self, data:pd.DataFrame):
-        self._create_stock_industry_table()
-
         """批量更新行业信息"""
         query = """
         INSERT INTO stock_industry 
@@ -665,8 +703,6 @@ class DataFetcher():
         return self.db.batch_insert(query, records)
     
     def update_rolling_financial_table(self, data:pd.DataFrame):
-        self._create_rolling_financial_table()
-        
         """批量更新财务指标"""
         query = """
         INSERT INTO rolling_financial 
@@ -797,7 +833,7 @@ class DataFetcher():
             return pd.DataFrame()
 
     def _create_concept_boards_table(self):
-        # 创建概念板块表
+        """创建概念板块表"""
         create_table = """
         CREATE TABLE IF NOT EXISTS "concept_boards" (
             ts TIMESTAMP,
@@ -809,8 +845,6 @@ class DataFetcher():
         self.db.create_table(create_table)
    
     def update_concept_boards(self, data:pd.DataFrame):
-        self._create_concept_boards_table()
-
         # 插入数据
         insert_query = """
         INSERT INTO "concept_boards" 
@@ -829,7 +863,7 @@ class DataFetcher():
         logger.info(f"更新概念板块信息成功，共更新{len(records)}条记录")
 
     def _create_concept_ohlc_table(self):
-        # 创建概念板块日线数据表
+        """创建概念板块日线数据表"""
         create_table = """
         CREATE TABLE IF NOT EXISTS "concept_boards" (
             ts TIMESTAMP,
@@ -847,8 +881,6 @@ class DataFetcher():
         self.db.create_table(create_table)
 
     def update_concept_ohlc(self, data:pd.DataFrame):
-        self._create_concept_boards_table()
-
         # 插入数据
         insert_query = """
         INSERT INTO "concept_boards_ohlc" 
@@ -867,7 +899,7 @@ class DataFetcher():
         logger.info(f"更新概念板块ohlc数据成功，共更新{len(records)}条记录") 
 
     def _create_concept_constituents_table(self):
-        # 创建成份股表
+        """创建成份股表"""
         create_table = """
         CREATE TABLE IF NOT EXISTS "concept_constituents" (
             ts TIMESTAMP,
@@ -879,7 +911,7 @@ class DataFetcher():
         DEDUP UPSERT KEYS(ts, board_code, stock_code);
         """
         self.db.create_table(create_table)
-    
+     
     def update_concept_constituents(self, board_name, data:pd.DataFrame):
         """
         更新概念板块成份股到数据库

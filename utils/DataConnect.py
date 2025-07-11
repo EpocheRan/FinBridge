@@ -86,10 +86,10 @@ class questDB:
         try:
             with self.conn.cursor() as cursor:
                 cursor.execute(query)
-                logger.info(f"检查表是否存在：{query[35:55]}...")
+                # logger.info(f"检查表是否存在：{query[35:55]}...")
                 return True
         except Exception as e:
-            logger.error(f"检查表存在失败: {e}\n查询: {query}\n")
+            logger.error(f"创建表失败: {e}\n查询: {query}\n")
             return False
         
     def batch_insert(self, query, data):

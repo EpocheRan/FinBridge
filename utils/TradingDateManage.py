@@ -17,18 +17,19 @@ logger = logging.getLogger('Trading Date')
 class TradingDateManage:
     def __init__(self):
         self.db = None
-        self._init_db()
+        self.initialize_table()
 
-    def _init_db(self):
-        """初始化数据库表结构"""
-        self.db = questDB()
-        create_table =f"""
+    def initialize_table(self):
+        """初始化交易日表"""
+        logger.info("Initializing trading_days table...")
+        create_table = """
             CREATE TABLE IF NOT EXISTS trading_days (
                 ts TIMESTAMP,
                 is_trading BOOLEAN NOT NULL
             ) TIMESTAMP(ts) PARTITION BY YEAR WAL;
-            """
+        """
         self.db.create_table(create_table)
+        logger.info("trading_days table initialized")
     
     def _get_last_db_date(self):
         """获取数据库中最后的日期"""
