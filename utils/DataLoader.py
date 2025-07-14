@@ -5,7 +5,9 @@
 import pandas as pd
 import logging
 from abc import ABC, abstractmethod
-from tqdm import tqdm
+import calendar
+from datetime import datetime
+from tqdm import tqdm # 还没想好怎么用
 
 # utils
 # from .TradingDateManage import TradingDateManage as TDM
@@ -19,7 +21,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger('Data Loader')
 
 class DataUpdateTool(ABC):
-    """增量数据更新策略的抽象基类"""
+    """数据读取与更新策略的抽象基类"""
     
     @abstractmethod
     def get_expected_dates(self, loader, start_date:str, end_date:str, freq):
@@ -32,12 +34,12 @@ class DataUpdateTool(ABC):
         pass
     
     @abstractmethod
-    def get_data(self, db_fetcher:DataFetcher, stock_code:str, start_date:str, end_date:str, freq=None):
+    def get_data(self, fetcher:DataFetcher, stock_code:str, start_date:str, end_date:str, freq=None):
         """从本地数据库获取数据"""
         pass
 
 class OHLCUpdateTool(DataUpdateTool):
-    """OHLC数据更新策略"""
+    """OHLC数据读取与更新策略"""
     
     def get_expected_dates(self, loader, start_date, end_date, freq):
         """获取OHLC数据的预期日期"""
@@ -47,12 +49,12 @@ class OHLCUpdateTool(DataUpdateTool):
         """更新OHLC数据库"""
         db_fetcher.update_ohlc(data, freq)
     
-    def get_data(self, db_fetcher, stock_code, start_date, end_date, freq):
+    def get_data(self, fetcher, stock_code, start_date, end_date, freq):
         """获取本地OHLC数据"""
-        return db_fetcher.get_ohlc(stock_code, start_date, end_date, freq)
+        return fetcher.get_ohlc(stock_code, start_date, end_date, freq)
 
-class FinanceUpdateTool(DataUpdateTool):
-    """财务数据更新策略"""
+class RollingFinanceTool(DataUpdateTool):
+    """财务数据读取与更新策略"""
     
     def get_expected_dates(self, loader, start_date, end_date, freq=None):
         """获取财务数据的预期日期"""
@@ -61,17 +63,121 @@ class FinanceUpdateTool(DataUpdateTool):
     
     def update_database(self, db_fetcher, data, freq=None):
         """更新财务数据库"""
-        db_fetcher.update_rolling_financial_table(data)
+        db_fetcher.update_rolling_financial(data)
     
-    def get_data(self, db_fetcher, stock_code, start_date, end_date, freq=None):
+    def get_data(self, fetcher, stock_code, start_date, end_date, freq=None):
         """获取本地财务数据"""
-        return db_fetcher.get_rolling_financial(stock_code, start_date, end_date)
+        return fetcher.get_rolling_financial(stock_code, start_date, end_date)
+
+class BasicInfoTool(DataUpdateTool):
+    """基本信息读取与更新"""
+
+    def get_expected_dates(self, loader, start_date, end_date, freq=None):
+        logger.warning("基础信息无日期范围，该方法仅返回日线数据")
+        return loader._get_expected_dates(start_date, end_date, 'd') 
+    
+    def update_database(self, db_fetcher, data, freq=None):
+        """更新数据库"""
+        db_fetcher.update_stock_basic(data)
+    
+    def get_data(self, fetcher, stock_code=None, start_date=None, end_date=None, freq=None):
+        """获取数据"""
+        return fetcher.get_stock_basic_info()
+    
+class FinancialIndicatorsTool(DataUpdateTool):
+    """基础财务指标读取与更新"""
+
+    def get_expected_dates(self, loader, start_date, end_date=None, freq=None):
+        logger.warning("基础财务指标返回年与季度信息year：str, quarter:str")
+        return loader._get_quarter_info(start_date)
+    
+    def update_database(self, db_fetcher, data, freq=None):
+        """更新数据库"""
+        db_fetcher.update_stock_basic(data)
+    
+    def get_data(self, fetcher, stock_code, start_date, end_date, freq=None):
+        """获取数据"""
+        # start_date: year
+        # end_date: quarter
+        return fetcher.get_financial_indicators(stock_code, start_date, end_date)
+    
+class StockIndustryTool(DataUpdateTool):
+    """行业数据"""
+
+    def get_expected_dates(self, loader, start_date, end_date, freq=None):
+        logger.warning("基础信息无日期范围，该方法仅返回日线数据")
+        return loader._get_expected_dates(start_date, end_date, 'd') 
+    
+    def update_database(self, db_fetcher, data, freq=None):
+        """更新数据库"""
+        db_fetcher.update_stock_industry(data)
+    
+    def get_data(self, fetcher, stock_code=None, start_date=None, end_date=None, freq=None):
+        """获取数据"""
+        return fetcher.get_stock_industry()
+    
+class ConceptBoardsTool(DataUpdateTool):
+    """基本信息"""
+
+    def get_expected_dates(self, loader, start_date, end_date, freq=None):
+        logger.warning("基础信息无日期范围，该方法仅返回日线数据")
+        return loader._get_expected_dates(start_date, end_date, 'd') 
+    
+    def update_database(self, db_fetcher, data, freq=None):
+        """更新数据库"""
+        db_fetcher.update_concept_boards(data)
+    
+    def get_data(self, fetcher, stock_code=None, start_date=None, end_date=None, freq=None):
+        """获取数据"""
+        return fetcher.get_concept_boards()
+
+class ConceptBoardsohlcTool(DataUpdateTool):
+    """概念指数数据读取与更新工具"""    
+    def get_expected_dates(self, loader, start_date, end_date, freq=None):
+        """获取财务数据的预期日期"""
+        # 财务数据使用日线频率
+        return loader._get_expected_dates(start_date, end_date, 'd')
+    
+    def update_database(self, db_fetcher, data, freq=None):
+        """更新财务数据库"""
+        db_fetcher.update_rolling_financial(data)
+    
+    def get_data(self, fetcher, stock_code, start_date, end_date, freq=None):
+        """获取本地财务数据"""
+        return fetcher.get_concept_boards_ohlc(stock_code, start_date, end_date)
+    
+class ConceptConstituents(DataUpdateTool):
+    """概念指数成分股读取与更新工具"""  
+    def get_expected_dates(self, loader, start_date, end_date, freq=None):
+        logger.warning("基础信息无日期范围，该方法仅返回日线数据")
+        return loader._get_expected_dates(start_date, end_date, 'd') 
+    
+    def update_database(self, db_fetcher, data, freq=None):
+        """更新数据库"""
+        db_fetcher.update_concept_constituents(data)
+    
+    def get_data(self, fetcher, stock_code=None, start_date=None, end_date=None, freq=None):
+        """获取数据"""
+        return fetcher.get_concept_constituents()
 
 class DataLoader():
     def __init__(self):
-        # 初始化策略
+        # 初始化工具
         self.ohlc_tool = OHLCUpdateTool()
-        self.rolling_finance_tool = FinanceUpdateTool()
+        self.rolling_finance_tool = RollingFinanceTool()
+        self.basic_info_tool = BasicInfoTool()
+        self.financial_indicators_tool = FinancialIndicatorsTool()
+        self.stock_industry_tool = StockIndustryTool()
+        self.concept_boards_tool = ConceptBoardsTool()
+        self.concept_boards_ohlc_tool = ConceptBoardsohlcTool()
+        self.concept_constituents_tool = ConceptConstituents()
+
+    def _get_quarter_info(self, date) -> tuple:
+        """将日期转换为(年份, 季度)元组"""
+        dt = pd.to_datetime(date)
+        year = dt.year
+        quarter = (dt.month - 1) // 3 + 1
+        return year, quarter
 
     def _get_trading_days(self, start_date, end_date):
         """
@@ -245,7 +351,7 @@ class DataLoader():
         """
         通用增量更新框架
         
-        :param stock_code: 股票代码
+        :param stock_code: 股票代码（在请求concept_boards_ohlc时，stock_code为board_name）
         :param start_date: 开始日期
         :param end_date: 结束日期
         :param tool: 更新工具实例
@@ -321,14 +427,194 @@ class DataLoader():
         )
         return combined_df
 
-    def _lastest_tradingday_update():
-        ...
+    def _lastest_tradingday_update(self, tool:DataUpdateTool):
+        """更新并返回最新的股票基本信息"""
+        from datetime import datetime, timedelta
+        
+        # 1. 尝试从数据库获取数据
+        questdb_fetcher = DataFetcher(source='questdb')
+        try:
+            db_data = tool.get_data(questdb_fetcher)
+            logger.info(f"从数据库获取到股票基本信息 ({len(db_data)} 行)")
+        except Exception as e:
+            logger.error(f"数据库查询异常: {e}")
+            db_data = pd.DataFrame()
 
+        # 2. 获取最新交易日
+        try:
+            # 获取最近30天的交易日，确保覆盖到最新的交易日
+            end_date = datetime.today().strftime('%Y-%m-%d')
+            start_date = (datetime.today() - timedelta(days=30)).strftime('%Y-%m-%d')
+            
+            tdm = TDM()
+            trading_days_df = tdm.get_trading_days(start_date, end_date)
+            
+            if trading_days_df.empty:
+                logger.error("无法获取交易日数据")
+                # 使用今天作为备选，但通常不是交易日
+                latest_trading_day = end_date
+            else:
+                # 取最后一个交易日
+                latest_trading_day = trading_days_df.iloc[-1]['ts']
+                
+            logger.info(f"最新交易日: {latest_trading_day}")
+        except Exception as e:
+            logger.error(f"获取交易日失败: {e}")
+            latest_trading_day = datetime.today().strftime('%Y-%m-%d')
 
+        # 3. 检查数据库数据是否最新
+        if not db_data.empty:
+            # 假设数据中有'ts'字段记录最后更新日期
+            # 如果没有这个字段，则总是更新
+            if 'ts' in db_data.columns:
+                last_update = db_data['ts'].max()
+                if pd.to_datetime(last_update) >= pd.to_datetime(latest_trading_day):
+                    logger.info("数据库数据已是最新")
+                    return db_data
+            else:
+                logger.warning("数据库数据中缺少'ts'字段，将尝试更新")
 
-    def ohlc(self, stock_codes: str | list[str], start_date, end_date, freq='d'):
-        """获取OHLC数据"""
-        # 支持单个股票代码输入
+        # 4. 从API获取最新数据
+        logger.info("从API获取最新股票基本信息")
+        try:
+            api_fetcher = DataFetcher(source='baostock')
+            api_data = tool.get_data(api_fetcher)
+            
+            if not api_data.empty:
+                # 添加当前日期作为更新时间戳
+                api_data['ts'] = pd.Timestamp.now()
+                logger.info(f"从API获取到 {len(api_data)} 行数据")
+                
+                # 5. 更新数据库
+                tool.update_database(questdb_fetcher, api_data)
+                logger.info("数据已更新到数据库")
+                return api_data
+            else:
+                logger.warning("API返回空数据")
+        except Exception as e:
+            logger.error(f"API请求失败: {e}")
+
+        # 6. 返回数据库数据或空DataFrame
+        return db_data if not db_data.empty else pd.DataFrame()
+    
+    def _quarter_update(self, stock_code, start_date, end_date, tool:DataUpdateTool, forecast:bool=True) -> pd.DataFrame:
+
+        """
+        返回[start_date, end_date] 区间**每个交易日**对应的财务指标。
+
+        参数
+        ----
+        stock_code : str
+            6 位证券代码（不含交易所前缀）
+        start_date : str
+            'YYYY-MM-DD'
+        end_date   : str
+            'YYYY-MM-DD'
+        tool       : FinancialIndicatorsTool
+            外层已在 DataLoader.__init__ 中构造好： self.financial_indicators_tool
+        forecast    : bool
+            True  → 取“当季”报；False → 取“上一季”报
+        """
+        # 获取当前“今天”日期（去掉时分秒）
+        today = datetime.now().date()
+
+        # 1. 生成交易日序列 
+        trading_days = self._get_trading_days(start_date, end_date)
+
+        # 2. 计算每个交易日 → 需要的 (year, quarter) 以及 quarter_end 
+        #    同时搜集所有【唯一】(year, quarter)
+        day_quarter_map = {} # Dict[pd.Timestamp, Tuple[int, int, str]], 交易日 → (年, 季度, 季末日期)
+        quarters_needed = {} # Dict[Tuple[int, int], str], (年, 季度) → 季末日期（避免重复计算）
+
+        for day in trading_days:  # 遍历所有交易日
+            # 获取该交易日所在的年份(y)和季度(q, 1-4)
+            y, q = self._get_quarter_info(day)                  
+
+            # 先算该 (y,q) 的季度末日期
+            month_end = {1: 3, 2: 6, 3: 9, 4: 12}[q]
+            last_day = calendar.monthrange(y, month_end)[1]
+            qe_date = datetime(y, month_end, last_day)
+
+            if forecast:
+                # 当季报：如果当季季度末在未来（qe_date > today），则回退到上一季
+                if qe_date.date() > today:
+                    if q > 1:
+                        q -= 1
+                    else:
+                        q, y = 4, y - 1
+                    month_end = {1: 3, 2: 6, 3: 9, 4: 12}[q]
+                    last_day = calendar.monthrange(y, month_end)[1]
+                    qe_date = datetime(y, month_end, last_day)
+                # 否则保留当季 (y,q,qe_date)
+            else:
+                # 历史报：始终取上一季
+                if q > 1:
+                    q -= 1
+                else:
+                    q, y = 4, y - 1
+                month_end = {1: 3, 2: 6, 3: 9, 4: 12}[q]
+                last_day = calendar.monthrange(y, month_end)[1]
+                qe_date = datetime(y, month_end, last_day)
+
+            qe_str = qe_date.strftime("%Y-%m-%d")
+            day_quarter_map[day] = (y, q, qe_str)
+            quarters_needed[(y, q)] = qe_str
+            
+
+        # 3. 先尝试从 QuestDB 拉取所有需要的季度 
+        db_fetcher = DataFetcher(source="questdb")
+        local_parts   = []           # 收集成功读取的数据块
+        have_quarters = set()        # 已成功获取 (y,q)
+
+        for (y, q), qe in quarters_needed.items():
+            # tool.get_data: (fetcher, code, year, quarter)
+            part = tool.get_data(db_fetcher, stock_code, y, q)
+            if part is not None and not part.empty:
+                local_parts.append(part)
+                have_quarters.add((y, q))
+
+        # 4. 对缺失季度调用 Baostock，再写回 QuestDB 
+        missing_quarters = [k for k in quarters_needed if k not in have_quarters]
+        if missing_quarters:
+            api_fetcher = DataFetcher(source="baostock")
+            api_parts   = []
+
+            for y, q in missing_quarters:
+                part = tool.get_data(api_fetcher, stock_code, y, q)
+                if part is not None and not part.empty:
+                    api_parts.append(part)
+
+            # 有拉回数据
+            if api_parts:                                   
+                api_df = pd.concat(api_parts)
+                # 写入本地数据库
+                tool.update_database(db_fetcher, api_df)
+                local_parts.append(api_df)
+
+        # 5️. 合并全部季度财报 & 过滤仅保留需要的季度
+        if not local_parts:
+            raise RuntimeError("未能获得任何财务数据，请检查数据库 或 API。")
+
+        qdf = pd.concat(local_parts)
+        # index 已经是财报发布日期 ts (yyyy‑mm‑dd)
+        qdf.index = qdf.index.map(lambda x: pd.to_datetime(x).strftime("%Y-%m-%d"))
+
+        needed_qe_set = set(quarters_needed.values())
+        qdf = qdf.loc[qdf.index.intersection(needed_qe_set)].sort_index()
+
+        # 6️. “展开”到每日粒度
+        data = pd.DataFrame(index=trading_days)
+        for col in qdf.columns:
+            data[col] = [
+                qdf.at[day_quarter_map[d][2], col]     # day_quarter_map[d][2] 是 qe_str
+                for d in trading_days
+            ]
+
+        return data
+
+# 下方为数据获取方法
+
+    def ohlc(self, stock_codes: str | list[str], start_date, end_date, freq='d') -> pd.DataFrame:
         if isinstance(stock_codes, str):
             stock_codes = [stock_codes]
 
@@ -338,9 +624,7 @@ class DataLoader():
                                     stock_code, start_date, end_date, self.ohlc_tool, freq)
         return stock_data
 
-    def rolling_finance(self, stock_codes: str | list[str], start_date, end_date):
-        """获取滚动财务数据"""
-        # 支持单个股票代码输入
+    def rolling_finance(self, stock_codes: str | list[str], start_date, end_date) -> pd.DataFrame:
         if isinstance(stock_codes, str):
             stock_codes = [stock_codes]
 
@@ -350,15 +634,41 @@ class DataLoader():
                                     stock_code, start_date, end_date, self.rolling_finance_tool)
         return stock_data
     
-    def stock_basic_info(self, stock_codes: str | list[str]):
-        """获取滚动财务数据"""
+    def stock_basic_info(self) -> pd.DataFrame:
+        stock_data =  self._lastest_tradingday_update(self.basic_info_tool)
+        return stock_data
+    
+    def financial_indicators(self, stock_codes: str | list[str], start_date, end_date, forecast=False) -> pd.DataFrame:
         if isinstance(stock_codes, str):
             stock_codes = [stock_codes]
 
         stock_data = {}
         for stock_code in stock_codes:
-            stock_data[stock_code] =  self._lastest_tradingday_update()
+            stock_data[stock_code] =  self._quarter_update(
+                                    stock_code, start_date, end_date, self.financial_indicators_tool, forecast)
         return stock_data
+
+    def stock_industry(self) -> pd.DataFrame:
+        stock_data =  self._lastest_tradingday_update(self.stock_industry_tool)
+        return stock_data
+
+    def concept_boards(self) -> pd.DataFrame:
+        boards_data =  self._lastest_tradingday_update(self.concept_boards_tool)
+        return boards_data
+
+    def concept_boards_ohlc(self, board_name: str | list[str], start_date, end_date) -> pd.DataFrame:
+        if isinstance(board_name, str):
+            board_name = [board_name]
+
+        stock_data = {}
+        for name in board_name:
+            stock_data[name] =  self._incremental_update(
+                                    name, start_date, end_date, self.concept_boards_ohlc_tool)
+        return stock_data
+
+    def concept_constituents(self) -> pd.DataFrame:
+        boards_data =  self._lastest_tradingday_update(self.concept_constituents_tool)
+        return boards_data
 
 # 使用示例
 if __name__ == "__main__":

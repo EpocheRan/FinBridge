@@ -5,6 +5,7 @@
 from datetime import datetime, timedelta
 import time
 import logging
+import pandas as pd
 
 # utils
 # from .DataConnect import questDB, BS
@@ -108,7 +109,7 @@ class TradingDateManage:
             for i in range((end - start).days + 1)
         ]
     
-    def get_trading_days(self, start_date, end_date):
+    def get_trading_days(self, start_date, end_date) -> list:
         """获取两个日期之间的交易日（优先使用数据库）"""
         # 确保数据库包含最新数据
         current_date = datetime.now().strftime('%Y-%m-%d')
