@@ -20,6 +20,7 @@ from DataFetcher import DataFetcher
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger('Data Loader')
 
+# 工具类，用于数据获取方式中 -------------
 class DataUpdateTool(ABC):
     """数据读取与更新策略的抽象基类"""
     
@@ -160,9 +161,10 @@ class ConceptConstituents(DataUpdateTool):
         """获取数据"""
         return fetcher.get_concept_constituents()
 
+# 主类 -----------------------------------
 class DataLoader():
     def __init__(self):
-        # 初始化工具
+        # 初始化数据获取工具
         self.ohlc_tool = OHLCUpdateTool()
         self.rolling_finance_tool = RollingFinanceTool()
         self.basic_info_tool = BasicInfoTool()
@@ -171,6 +173,8 @@ class DataLoader():
         self.concept_boards_tool = ConceptBoardsTool()
         self.concept_boards_ohlc_tool = ConceptBoardsohlcTool()
         self.concept_constituents_tool = ConceptConstituents()
+
+# 一些有的没的工具方法 ---------------------
 
     def _get_quarter_info(self, date) -> tuple:
         """将日期转换为(年份, 季度)元组"""
@@ -346,6 +350,11 @@ class DataLoader():
                 missing_date_ranges = [(start, end)]
         
         return missing_date_ranges
+
+# 核心数据获取方式：-------------------------
+# incremental_update - 分钟线，日线，月线自动增量获取
+# lastest_tradingday_update - 最近交易日的全量数据获取
+# quarter_update - 季度报告自动增量获取
 
     def _incremental_update(self, stock_code, start_date, end_date, tool:DataUpdateTool, freq=None):
         """
@@ -612,7 +621,7 @@ class DataLoader():
 
         return data
 
-# 下方为数据获取方法
+# 下方为数据获取方法 -------------------------
 
     def ohlc(self, stock_codes: str | list[str], start_date, end_date, freq='d') -> pd.DataFrame:
         if isinstance(stock_codes, str):
