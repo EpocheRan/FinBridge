@@ -5,7 +5,7 @@ from collections import deque
 import logging
 
 # 本地引用
-from ..FactorAnalyzer import BaseAnalysisStrategy as BS
+from ..FactorAnalyzer import BaseAnalysisStrategy as BAS
 from .common import dailyReturn
 
 # 设置日志
@@ -57,15 +57,15 @@ class alpha1_Ts_ArgMax(bt.Indicator):
         # 计算Ts_ArgMax（找到最大值出现的最远位置）
         self.lines.ts_argmax[0] = np.argmax(list(self.signed_power_vals))
 
-class alpha1(BS):
+class alpha1(BAS):
     """处理横截面排名"""
     
     def __init__(self):
         self.add_factor(alpha1_Ts_ArgMax)
-        super(alpha1, self).__init__()
+        super(alpha1, self).__init__()  # 后调用基类的next方法
 
     def next(self):
-        super(alpha1, self).next()  # 调用基类的next方法
+        super(alpha1, self).next()      # 先调用基类的next方法
         
         # 收集所有股票的ts_argmax值
         ts_values = []

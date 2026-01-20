@@ -1,5 +1,5 @@
 """
-集成各个源获取的数据，并补全数据库数据
+集成各个源获取的数据，包含数据拼装，更新逻辑
 """
 
 import pandas as pd
@@ -8,19 +8,21 @@ from abc import ABC, abstractmethod
 import calendar
 from datetime import datetime
 from tqdm import tqdm # 还没想好怎么用
+import sys
+import os
 
 # utils
-# from .TradingDateManage import TradingDateManage as TDM
-# from .DataFetcher import DataFetcher
-
-from TradingDateManage import TradingDateManage as TDM
-from DataFetcher import DataFetcher
+from .TradingDateManage import TradingDateManage as TDM
+from .DataFetcher import DataFetcher
 
 # 设置日志
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+if 'MCPserver' in sys.modules or os.getenv('MCP_MODE'):
+    logging.basicConfig(level=logging.CRITICAL)
+else:
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger('Data Loader')
 
-# 工具类，用于数据获取方式中 -------------
+# 工具类，用于数据获取方式中
 class DataUpdateTool(ABC):
     """数据读取与更新策略的抽象基类"""
     
@@ -161,7 +163,7 @@ class ConceptConstituents(DataUpdateTool):
         """获取数据"""
         return fetcher.get_concept_constituents()
 
-# 主类 -----------------------------------
+# 主类
 class DataLoader():
     def __init__(self):
         # 初始化数据获取工具
@@ -174,7 +176,7 @@ class DataLoader():
         self.concept_boards_ohlc_tool = ConceptBoardsohlcTool()
         self.concept_constituents_tool = ConceptConstituents()
 
-# 一些有的没的工具方法 ---------------------
+# 一些有的没的工具方法
 
     def _get_quarter_info(self, date) -> tuple:
         """将日期转换为(年份, 季度)元组"""
@@ -351,7 +353,7 @@ class DataLoader():
         
         return missing_date_ranges
 
-# 核心数据获取方式：-------------------------
+# 核心数据获取/更新方法：
 # incremental_update - 分钟线，日线，月线自动增量获取
 # lastest_tradingday_update - 最近交易日的全量数据获取
 # quarter_update - 季度报告自动增量获取
@@ -381,6 +383,7 @@ class DataLoader():
             local_df = pd.DataFrame()
 
         # 2. 获取预期日期
+        trading_dates = []
         try:
             expected_dates, trading_dates = tool.get_expected_dates(self, start_date, end_date, freq)
             if not expected_dates:
@@ -621,7 +624,7 @@ class DataLoader():
 
         return data
 
-# 下方为数据获取方法 -------------------------
+# 数据获取接口
 
     def ohlc(self, stock_codes: str | list[str], start_date, end_date, freq='d') -> pd.DataFrame:
         if isinstance(stock_codes, str):

@@ -1,3 +1,7 @@
+"""
+管理和数据库与第三方接口的链接
+"""
+
 import psycopg2
 import baostock
 import os
@@ -9,14 +13,15 @@ from sqlalchemy import create_engine
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger('Data Connection')
 
-"""
-管理和数据库与第三方接口的链接
-"""
-
 class questDB:
     """数据库管理类，封装数据库连接和操作"""
     def __init__(self):
-        self.config = self._load_config(".\config.json")
+        # 获取项目根目录（假设config.json在项目根目录）
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(current_dir)
+        config_path = os.path.join(project_root, "config.json")
+        
+        self.config = self._load_config(config_path)
         self.conn = None
         self._connect()
     
@@ -125,7 +130,7 @@ class questDB:
         """根据股票代码和频率生成表名"""
         
         # 有效的频率后缀
-        valid_freq = ['1min', '5min', '15min', '30min', '60min', 'd', 'w', 'm']
+        valid_freq = ['1min', '5min', '30min', '15min', '60min', 'd', 'w', 'm']
         
         # 检查频率是否有效
         if freq not in valid_freq:
@@ -137,6 +142,7 @@ class questDB:
             '1min':'ohlcv_1m',
             '5min':'ohlcv_5m',
             '15min':'ohlcv_15m',
+            '30min':'ohlcv_30m',
             '60min':'ohlcv_60m',
             'd':'ohlcv_1d',
             'w':'ohlcv_1w',

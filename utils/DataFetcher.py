@@ -9,8 +9,7 @@ import logging
 import akshare as ak
 
 # utils
-# from .DataConnect import questDB, BS
-from DataConnect import questDB, BS
+from .DataConnect import questDB, BS
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger('Data Fetcher')
@@ -665,7 +664,7 @@ class DataFetcher():
         """
         records = [
                 (ts.strftime('%Y-%m-%d %H:%M:%S'), row['code'],
-                row['ts'], row['name'], row['ipoDate'], row['outDate'], row['type'], row['status'])
+                row['name'], row['ipoDate'], row['outDate'], row['type'], row['status'])
                 for ts, row in data.iterrows()
             ]
         return self.db.batch_insert(query, records)
@@ -682,7 +681,7 @@ class DataFetcher():
                 (
                 ts.strftime('%Y-%m-%d %H:%M:%S'), row['code'], 
                 row['statDate'], row['pubDate'], row['roeAvg'], row['npMargin'], row['gpMargin'], row['netProfit'],
-                row['epsTTM'], row['MBRevenue'], row['otalShare'], row['liqaShare']
+                row['epsTTM'], row['MBRevenue'], row['totalShare'], row['liqaShare']
                 )
                 for ts, row in data.iterrows()
             ]

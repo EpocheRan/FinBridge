@@ -6,18 +6,22 @@ from datetime import datetime, timedelta
 import time
 import logging
 import pandas as pd
+import sys
+import os
 
 # utils
-# from .DataConnect import questDB, BS
+from .DataConnect import questDB, BS
 
-from DataConnect import questDB, BS
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# 在MCP模式下静默日志
+if 'MCPserver' in sys.modules or os.getenv('MCP_MODE'):
+    logging.basicConfig(level=logging.CRITICAL)
+else:
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger('Trading Date')
 
 class TradingDateManage:
     def __init__(self):
-        self.db = None
+        self.db = questDB()
         self.initialize_table()
 
     def initialize_table(self):
