@@ -85,7 +85,7 @@ class BasicInfoTool(DataUpdateTool):
     
     def get_data(self, fetcher, stock_code=None, start_date=None, end_date=None, freq=None):
         """获取数据"""
-        return fetcher.get_stock_basic_info()
+        return fetcher.get_stock_basic_info(code=stock_code)
     
 class FinancialIndicatorsTool(DataUpdateTool):
     """基础财务指标读取与更新"""
@@ -401,21 +401,46 @@ class DataLoader():
         if missing_date_ranges:
             logger.info(f"发现 {len(missing_date_ranges)} 个缺失日期范围")
             
-            # 确定数据源
+            # 确定尝试的数据源列表
+            target_sources = []
             if stock_code.startswith(("51", "15")) or (freq and freq.endswith('1min')):
-                logger.info(f"从akshare获取 {stock_code} 数据")
-                api_fetcher = DataFetcher(source='akshare')
+                target_sources = ['akshare']
             else:
-                logger.info(f"从Baostock获取 {stock_code} 数据")
-                api_fetcher = DataFetcher(source='baostock')
+                target_sources = ['baostock', 'akshare']
             
             # 按范围获取缺失数据
             for date_range in missing_date_ranges:
                 start, end = date_range
                 logger.info(f"获取 {start} 至 {end} 的数据")
-                partial_df = tool.get_data(api_fetcher, stock_code, start, end, freq)
+                
+                partial_df = pd.DataFrame()
+                for source in target_sources:
+                    try:
+                        # 每次实例化Fetcher以确保状态隔离，虽然稍微增加开销但更安全
+                        current_fetcher = DataFetcher(source=source)
+                        
+                        # 特殊日志：如果是重试
+                        if source != target_sources[0]:
+                            logger.info(f"尝试备用数据源: {source}")
+                        elif len(target_sources) > 1:
+                            logger.info(f"尝试首选数据源: {source}")
+                        else:
+                            logger.info(f"从 {source} 获取数据")
+
+                        partial_df = tool.get_data(current_fetcher, stock_code, start, end, freq)
+                        
+                        if not partial_df.empty:
+                            break # 成功获取
+                        else:
+                            logger.warning(f"数据源 {source} 返回空数据")
+                            
+                    except Exception as e:
+                        logger.warning(f"数据源 {source} 获取失败: {e}")
+                
                 if not partial_df.empty:
                     api_df = pd.concat([api_df, partial_df])
+                else:
+                    logger.error(f"所有数据源均无法获取 {start} 至 {end} 的数据")
         
         # 5. 存储增量数据到数据库
         if not api_df.empty:
@@ -439,14 +464,14 @@ class DataLoader():
         )
         return combined_df
 
-    def _lastest_tradingday_update(self, tool:DataUpdateTool):
+    def _lastest_tradingday_update(self, tool:DataUpdateTool, stock_code: str = None):
         """更新并返回最新的股票基本信息"""
         from datetime import datetime, timedelta
         
         # 1. 尝试从数据库获取数据
         questdb_fetcher = DataFetcher(source='questdb')
         try:
-            db_data = tool.get_data(questdb_fetcher)
+            db_data = tool.get_data(questdb_fetcher, stock_code=stock_code)
             logger.info(f"从数据库获取到股票基本信息 ({len(db_data)} 行)")
         except Exception as e:
             logger.error(f"数据库查询异常: {e}")
@@ -459,15 +484,15 @@ class DataLoader():
             start_date = (datetime.today() - timedelta(days=30)).strftime('%Y-%m-%d')
             
             tdm = TDM()
-            trading_days_df = tdm.get_trading_days(start_date, end_date)
+            trading_days = tdm.get_trading_days(start_date, end_date)
             
-            if trading_days_df.empty:
+            if not trading_days:
                 logger.error("无法获取交易日数据")
                 # 使用今天作为备选，但通常不是交易日
                 latest_trading_day = end_date
             else:
                 # 取最后一个交易日
-                latest_trading_day = trading_days_df.iloc[-1]['ts']
+                latest_trading_day = trading_days[-1]
                 
             logger.info(f"最新交易日: {latest_trading_day}")
         except Exception as e:
@@ -490,7 +515,7 @@ class DataLoader():
         logger.info("从API获取最新股票基本信息")
         try:
             api_fetcher = DataFetcher(source='baostock')
-            api_data = tool.get_data(api_fetcher)
+            api_data = tool.get_data(api_fetcher, stock_code=stock_code)
             
             if not api_data.empty:
                 # 添加当前日期作为更新时间戳
@@ -646,8 +671,8 @@ class DataLoader():
                                     stock_code, start_date, end_date, self.rolling_finance_tool)
         return stock_data
     
-    def stock_basic_info(self) -> pd.DataFrame:
-        stock_data =  self._lastest_tradingday_update(self.basic_info_tool)
+    def stock_basic_info(self, stock_code: str = None) -> pd.DataFrame:
+        stock_data =  self._lastest_tradingday_update(self.basic_info_tool, stock_code)
         return stock_data
     
     def financial_indicators(self, stock_codes: str | list[str], start_date, end_date, forecast=False) -> pd.DataFrame:
@@ -685,5 +710,5 @@ class DataLoader():
 # 使用示例
 if __name__ == "__main__":
     loader = DataLoader()
-    data = loader.rolling_finance("603282", "2024-01-01", "2025-06-10")
-    print(data["603282"].head())
+    data = loader.ohlc("688372", "2024-01-01", "2025-06-10")
+    print(data["688372"].head())

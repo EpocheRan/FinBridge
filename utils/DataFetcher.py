@@ -35,13 +35,26 @@ class DataFetcher():
 
         # 检查关键表（ohlc_d表）是否存在
         table_name = self.db.get_ohlc_table_name('d')
-        query = f"SELECT name FROM tables() WHERE name = '{table_name}';"
         
         try:
-            # 尝试查询表是否存在
+            # 尝试查询所有表
+            query = "SELECT * FROM tables();"
             df = pd.read_sql(query, self.db.pd_conn)
-            if df.empty:
-                logger.info(f"关键表 {table_name} 不存在，执行初始化...")
+            
+            # 检查列名，兼容 name 和 table_name
+            target_col = None
+            if 'name' in df.columns:
+                target_col = 'name'
+            elif 'table_name' in df.columns:
+                target_col = 'table_name'
+                
+            if target_col:
+                if table_name not in df[target_col].values:
+                    logger.info(f"关键表 {table_name} 不存在，执行初始化...")
+                    self._create_tables()
+            else:
+                 # 无法确定列名，打印一下并尝试初始化
+                logger.warning(f"无法从 tables() 获取表名列，列名为: {df.columns}。尝试初始化...")
                 self._create_tables()
 
         except Exception as e:
@@ -293,14 +306,22 @@ class DataFetcher():
         error_str = f"提示: QuestDB表 '{table_name}' 不存在"
         return self._read_sql_to_df(query, error_str)
     
-    def get_stock_basic_info(self) -> pd.DataFrame:
-        """获取全量股票基本信息"""
+    def get_stock_basic_info(self, code=None) -> pd.DataFrame:
+        """获取股票基本信息"""
         if self.source == 'questdb':
-            query = f"""
-                SELECT *
-                FROM "stock_basic_info"
-                LATEST ON ts PARTITION BY code;
-            """
+            if code:
+                query = f"""
+                    SELECT *
+                    FROM "stock_basic_info"
+                    WHERE code = '{code}'
+                    LATEST ON ts PARTITION BY code;
+                """
+            else:
+                query = f"""
+                    SELECT *
+                    FROM "stock_basic_info"
+                    LATEST ON ts PARTITION BY code;
+                """
             error_str = f"提示: QuestDB表 'stock_basic_info' 不存在"
             return self._read_sql_to_df(query, error_str)
         
@@ -325,6 +346,10 @@ class DataFetcher():
             df['ts'] = pd.Timestamp.today().date() 
             df = df[['ts', 'code', 'name', 'ipoDate', 'outDate', 'type','status']]
             df.set_index('ts', inplace=True)
+            
+            if code:
+                df = df[df['code'] == code]
+                
             return df
         else:
             logger.error("仅支持从 questdb 或 baostock 获取全量股票基本信息")
@@ -640,7 +665,7 @@ class DataFetcher():
             """
             records = [
                 (ts.strftime('%Y-%m-%d %H:%M:%S'), 
-                row['open'], row['high'], row['low'], row['close'], row['volume'], row['amount'], row['code'])
+                row['open'], row['high'], row['low'], row['close'], row['volume'], row['amount'], str(row['code']))
                 for ts, row in data.iterrows()
             ]
         else:
@@ -650,7 +675,7 @@ class DataFetcher():
             """
             records = [
                 (ts.strftime('%Y-%m-%d %H:%M:%S'), 
-                row['open'], row['high'], row['low'], row['close'], row['volume'], row['amount'], row['turnover'], row['code'])
+                row['open'], row['high'], row['low'], row['close'], row['volume'], row['amount'], row['turnover'], str(row['code']))
                 for ts, row in data.iterrows()
             ]
         self.db.batch_insert(insert_query, records)
@@ -664,7 +689,10 @@ class DataFetcher():
         """
         records = [
                 (ts.strftime('%Y-%m-%d %H:%M:%S'), row['code'],
-                row['name'], row['ipoDate'], row['outDate'], row['type'], row['status'])
+                row['name'], 
+                row['ipoDate'] if row['ipoDate'] else None, 
+                row['outDate'] if row['outDate'] else None, 
+                row['type'], row['status'])
                 for ts, row in data.iterrows()
             ]
         return self.db.batch_insert(query, records)
@@ -679,7 +707,7 @@ class DataFetcher():
         """
         records = [
                 (
-                ts.strftime('%Y-%m-%d %H:%M:%S'), row['code'], 
+                ts.strftime('%Y-%m-%d %H:%M:%S'), str(row['code']), 
                 row['statDate'], row['pubDate'], row['roeAvg'], row['npMargin'], row['gpMargin'], row['netProfit'],
                 row['epsTTM'], row['MBRevenue'], row['totalShare'], row['liqaShare']
                 )
@@ -944,7 +972,7 @@ class DataFetcher():
         CREATE TABLE IF NOT EXISTS "concept_boards" (
             ts TIMESTAMP,
             code SYMBOL,
-            name STRING,
+            name STRING
         ) TIMESTAMP(ts) PARTITION BY YEAR WAL
         DEDUP UPSERT KEYS(ts, code);
         """
@@ -975,11 +1003,11 @@ class DataFetcher():
             if not df.empty:
                 df['ts'] = pd.to_datetime(df['ts'])
                 df.set_index('ts', inplace=True)
-                return df
+            return df
         except Exception as e:
             # 表不存在错误代码: 42P01
             if '4xp6' in str(e):logger.error(error_str)
-        raise RuntimeError(f"QuestDB数据获取失败: {e}")
+            raise RuntimeError(f"QuestDB数据获取失败: {e}")
 
 
 # 使用示例

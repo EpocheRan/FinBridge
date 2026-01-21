@@ -3,8 +3,6 @@ MCP Server for Quantitative Trading Data
 使用FastMCP暴露DataLoader的数据获取接口
 """
 
-import asyncio
-import json
 import os
 from typing import List, Dict, Any, Optional
 from datetime import datetime
@@ -212,15 +210,18 @@ async def get_rolling_finance(
 
 
 @mcp.tool()
-async def get_stock_basic_info() -> Dict[str, Any]:
+async def get_stock_basic_info(stock_code: Optional[str] = None) -> Dict[str, Any]:
     """
-    获取全量股票基本信息
+    获取股票基本信息
     
+    Args:
+        stock_code: 可选，股票代码。如果不提供，则返回全量信息。
+        
     Returns:
         包含股票基本信息的字典
     """
     try:
-        df = data_loader.stock_basic_info()
+        df = data_loader.stock_basic_info(stock_code)
         
         if df.empty:
             return {
@@ -506,6 +507,25 @@ async def get_trading_days(
             "error": str(e),
             "message": "Failed to retrieve trading days"
         }
+
+
+@mcp.tool()
+async def get_today_date() -> Dict[str, Any]:
+    """
+    获取今天的日期
+    
+    Returns:
+        包含今天日期的字典，格式为 'YYYY-MM-DD'
+    """
+    today = datetime.now().strftime('%Y-%m-%d')
+    return {
+        "success": True,
+        "message": "Successfully retrieved today's date",
+        "result": {
+            "date": today,
+            "weekday": datetime.now().weekday() + 1  # 1-7
+        }
+    }
 
 
 @mcp.tool()

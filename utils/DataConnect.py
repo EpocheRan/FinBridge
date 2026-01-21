@@ -45,7 +45,7 @@ class questDB:
         try:
             self.conn = psycopg2.connect(**self.config['questdb'])
             self.conn.autocommit = True
-            # logger.info("数据库连接成功")
+            logger.info("数据库连接成功")
         except Exception as e:
             logger.error(f"数据库连接失败: {e}")
     
@@ -91,7 +91,7 @@ class questDB:
         try:
             with self.conn.cursor() as cursor:
                 cursor.execute(query)
-                # logger.info(f"检查表是否存在：{query[35:55]}...")
+                logger.info(f"检查表是否存在：{query[35:55]}...")
                 return True
         except Exception as e:
             logger.error(f"创建表失败: {e}\n查询: {query}\n")
@@ -115,7 +115,7 @@ class questDB:
         """关闭数据库连接"""
         if self.conn:
             self.conn.close()
-            # logger.info("数据库连接已关闭")
+            logger.info("数据库连接已关闭")
         
     def __del__(self):
         self.close()
@@ -164,7 +164,7 @@ class BS():
             self.connection = baostock
             lg = self.connection.login()
             if lg.error_code == '0':
-                # logger.info("Baostock登录成功")
+                logger.info("Baostock登录成功")
                 pass
             else:
                 logger.error(f"Baostock登录失败: {lg.error_msg}")
@@ -186,7 +186,7 @@ class BS():
         """登出Baostock"""
         if self.connection:
             self.connection.logout()
-            # logger.info("Baostock已登出")
+            logger.info("Baostock已登出")
     
     def __del__(self):
         self.logout()
