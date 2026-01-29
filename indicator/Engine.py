@@ -63,12 +63,16 @@ class IndicatorEngine:
         ind = strat.ind
 
         output_data = {}
+        aliases = ind.lines.getaliases()
 
         # Iterate over lines defined in the indicator
         for line_i in range(ind.lines.size()):
-            line_name = ind.lines.getlinealias(line_i)
-            line_data = ind.lines[line_i].array
-            output_data[line_name] = line_data
+            line_name = aliases[line_i] if line_i < len(aliases) else f"line_{line_i}"
+
+            # Extract the full line data as a list then convert to numpy
+            # BT lines are 0-indexed and contain all points after run
+            line_data = ind.lines[line_i].get(size=len(data))
+            output_data[line_name] = np.array(line_data)
 
         # 6. Construct DataFrame
         # Backtrader arrays might be slightly different length or padded.

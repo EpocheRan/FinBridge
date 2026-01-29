@@ -8,7 +8,7 @@ class ATR(bt.Indicator):
     lines = ("atr",)
     params = (
         ("N", 14),
-        ("method", "SMA"),
+        ("method", "EMA"),
     )
 
     def __init__(self):

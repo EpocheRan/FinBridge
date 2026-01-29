@@ -28,7 +28,7 @@ class PositionManager:
             time_stop_days (int): Max days to verify trend (default 5).
             risk_per_trade (float): Risk per trade as a fraction of equity (default 0.02).
         """
-        self.data_file = data_file
+        self.data_file = os.path.abspath(data_file)
         self.n_factor = n_factor
         self.time_stop_days = time_stop_days
         self.risk_per_trade = risk_per_trade
@@ -43,12 +43,12 @@ class PositionManager:
                 with open(self.data_file, "r") as f:
                     self.state = json.load(f)
                     self.positions = self.state.get("positions", {})
-                logger.info(f"Loaded position data from {self.data_file}")
+                logger.info(f"已从 {self.data_file} 加载持仓数据")
             except Exception as e:
-                logger.error(f"Failed to load data: {e}")
+                logger.error(f"加载数据失败: {e}")
                 self.positions = {}
         else:
-            logger.info("No existing position file found. Starting fresh.")
+            logger.info("未找到现有的持仓文件。开始新会话。")
             self.positions = {}
 
     def save_data(self):
@@ -57,9 +57,9 @@ class PositionManager:
         try:
             with open(self.data_file, "w") as f:
                 json.dump(self.state, f, indent=4)
-            logger.info("Position data saved.")
+            logger.info("持仓数据已保存。")
         except Exception as e:
-            logger.error(f"Failed to save data: {e}")
+            logger.error(f"保存数据失败: {e}")
 
     def update_capital(self, total_capital, cash):
         """Update capital and cash info."""
@@ -89,7 +89,7 @@ class PositionManager:
             }
         """
         if self.state["total_capital"] <= 0:
-            logger.error("Total capital is 0 or not set. Call update_capital first.")
+            logger.error("总资产为0或未设置。请先调用 update_capital。")
             return None
 
         # a. Calculate Potential Stops
@@ -103,18 +103,16 @@ class PositionManager:
         # Since stops are below price, the higher value is closer.
         p_stop = max(p_atr, p_struct)
 
-        stop_type = "ATR" if p_stop == p_atr else "Structure"
+        stop_type = "ATR止损" if p_stop == p_atr else "结构化止损"
         logger.info(
-            f"Stop Selection for {ticker}: ATR Stop={p_atr:.2f}, Struct Stop={p_struct:.2f}. Chosen: {stop_type} ({p_stop:.2f})"
+            f"{ticker} 止损选择: ATR止损={p_atr:.2f}, 结构化止损={p_struct:.2f}。选中: {stop_type} ({p_stop:.2f})"
         )
 
         # Risk Distance (D)
         risk_distance = current_price - p_stop
 
         if risk_distance <= 0:
-            logger.error(
-                f"Invalid stop price {p_stop} >= current price {current_price}"
-            )
+            logger.error(f"无效的止损价 {p_stop} >= 当前价格 {current_price}")
             return None
 
         # c. Calculate Base Qty
@@ -131,9 +129,7 @@ class PositionManager:
         qty = math.floor(min(q_risk, q_cash))
 
         if qty <= 0:
-            logger.warning(
-                f"Calculated quantity is 0 for {ticker}. Check capital/cash."
-            )
+            logger.warning(f"{ticker} 计算的持仓数量为 0。请检查总资产或可用现金。")
             return None
 
         return {
@@ -196,7 +192,7 @@ class PositionManager:
         is_profitable = current_profit > threshold_profit
 
         logger.info(
-            f"Dead Check {ticker}: Days={days_held}, Added={has_added}, Profit={current_profit:.2f} vs {threshold_profit:.2f}"
+            f"僵尸仓位检查 {ticker}: 持仓天数={days_held}, 已加仓={has_added}, 当前利润={current_profit:.2f} vs 阈值={threshold_profit:.2f}"
         )
 
         # Execution Action
@@ -315,7 +311,7 @@ class PositionManager:
         self.state["cash"] -= cost
 
         self.save_data()
-        logger.info(f"Recorded Base Entry for {ticker}")
+        logger.info(f"已记录 {ticker} 的初始建仓")
 
     def record_addon(self, trade_data, date_str):
         """
@@ -347,7 +343,7 @@ class PositionManager:
         self.state["cash"] -= new_cost
 
         self.save_data()
-        logger.info(f"Recorded Add-on for {ticker} to Level {pos['pyramid_level']}")
+        logger.info(f"已记录 {ticker} 的加仓交易，当前层级: {pos['pyramid_level']}")
 
     def close_position(self, ticker, price, date_str, reason="Signal"):
         """Close position."""
@@ -359,6 +355,6 @@ class PositionManager:
             proceeds = qty * price
             self.state["cash"] += proceeds
 
-            logger.info(f"Closed {ticker} at {price}. Reason: {reason}")
+            logger.info(f"已平仓 {ticker}，平仓价: {price}。原因: {reason}")
             del self.positions[ticker]
             self.save_data()
