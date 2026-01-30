@@ -220,24 +220,24 @@ async def get_rolling_finance(
 
 
 @mcp.tool()
-async def get_stock_basic_info(stock_code: Optional[str] = None) -> Dict[str, Any]:
+async def get_ticker_basic_info(stock_code: str) -> Dict[str, Any]:
     """
-    获取股票基本信息
+    获取股票/基金基本信息
 
     Args:
-        stock_code: 可选，股票代码。如果不提供，则返回全量信息。
+        stock_code: 股票/基金代码（必填）。
 
     Returns:
-        包含股票基本信息的字典
+        包含基本信息的字典
     """
     try:
-        df = data_loader.stock_basic_info(stock_code)
+        df = data_loader.ticker_basic_info(stock_code)
 
         if df.empty:
             return {
                 "success": False,
-                "error": "No stock basic info found",
-                "message": "Failed to retrieve stock basic info",
+                "error": "No basic info found",
+                "message": "Failed to retrieve basic info",
             }
 
         df_reset = df.reset_index()
@@ -245,14 +245,14 @@ async def get_stock_basic_info(stock_code: Optional[str] = None) -> Dict[str, An
 
         # 格式化日期字段
         for record in data_list:
-            for field in ["ts", "ipoDate", "outDate"]:
+            for field in ["ts", "ipoDate", "outDate", "list_date", "found_date"]:
                 if field in record and pd.notna(record[field]):
                     if isinstance(record[field], datetime):
                         record[field] = record[field].strftime("%Y-%m-%d")
 
         return {
             "success": True,
-            "message": f"Successfully retrieved basic info for {len(data_list)} stocks",
+            "message": f"Successfully retrieved basic info for {stock_code}",
             "result": {"data": data_list, "count": len(data_list)},
         }
 
@@ -260,222 +260,7 @@ async def get_stock_basic_info(stock_code: Optional[str] = None) -> Dict[str, An
         return {
             "success": False,
             "error": str(e),
-            "message": "Failed to retrieve stock basic info",
-        }
-
-
-@mcp.tool()
-async def get_financial_indicators(
-    stock_codes: str | List[str], start_date: str, end_date: str, forecast: bool = False
-) -> Dict[str, Any]:
-    """
-    获取财务指标数据
-
-    Args:
-        stock_codes: 股票代码，单个字符串或字符串列表
-        start_date: 开始日期，格式 'YYYY-MM-DD'
-        end_date: 结束日期，格式 'YYYY-MM-DD'
-        forecast: True-当季报，False-上一季报
-
-    Returns:
-        包含财务指标数据的字典
-    """
-    try:
-        # 标准化股票代码
-        if isinstance(stock_codes, str):
-            stock_codes = normalize_code(stock_codes)
-        elif isinstance(stock_codes, list):
-            stock_codes = [normalize_code(c) for c in stock_codes]
-
-        stock_data = data_loader.financial_indicators(
-            stock_codes, start_date, end_date, forecast
-        )
-
-        result = {}
-        for stock_code, df in stock_data.items():
-            if df.empty:
-                result[stock_code] = {"error": "No data found", "data": []}
-            else:
-                df_reset = df.reset_index()
-                data_list = df_reset.to_dict("records")
-                for record in data_list:
-                    if "ts" in record:
-                        record["ts"] = record["ts"].strftime("%Y-%m-%d")
-                result[stock_code] = {"data": data_list, "count": len(data_list)}
-
-        return {
-            "success": True,
-            "message": f"Successfully retrieved financial indicators for {len(stock_codes) if isinstance(stock_codes, list) else 1} stocks",
-            "result": result,
-        }
-
-    except Exception as e:
-        logger.error(f"Error in get_financial_indicators: {e}")
-        return {
-            "success": False,
-            "error": str(e),
-            "message": "Failed to retrieve financial indicators",
-        }
-
-
-@mcp.tool()
-async def get_stock_industry() -> Dict[str, Any]:
-    """
-    获取股票行业信息
-
-    Returns:
-        包含行业信息的字典
-    """
-    try:
-        df = data_loader.stock_industry()
-
-        if df.empty:
-            return {
-                "success": False,
-                "error": "No stock industry info found",
-                "message": "Failed to retrieve stock industry info",
-            }
-
-        df_reset = df.reset_index()
-        data_list = df_reset.to_dict("records")
-
-        for record in data_list:
-            if "ts" in record and pd.notna(record["ts"]):
-                record["ts"] = record["ts"].strftime("%Y-%m-%d")
-
-        return {
-            "success": True,
-            "message": f"Successfully retrieved industry info for {len(data_list)} stocks",
-            "result": {"data": data_list, "count": len(data_list)},
-        }
-
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e),
-            "message": "Failed to retrieve stock industry info",
-        }
-
-
-@mcp.tool()
-async def get_concept_boards() -> Dict[str, Any]:
-    """
-    获取概念板块信息
-
-    Returns:
-        包含概念板块信息的字典
-    """
-    try:
-        df = data_loader.concept_boards()
-
-        if df.empty:
-            return {
-                "success": False,
-                "error": "No concept boards found",
-                "message": "Failed to retrieve concept boards",
-            }
-
-        df_reset = df.reset_index()
-        data_list = df_reset.to_dict("records")
-
-        for record in data_list:
-            if "ts" in record and pd.notna(record["ts"]):
-                record["ts"] = record["ts"].strftime("%Y-%m-%d")
-
-        return {
-            "success": True,
-            "message": f"Successfully retrieved {len(data_list)} concept boards",
-            "result": {"data": data_list, "count": len(data_list)},
-        }
-
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e),
-            "message": "Failed to retrieve concept boards",
-        }
-
-
-@mcp.tool()
-async def get_concept_boards_ohlc(
-    board_names: str | List[str], start_date: str, end_date: str
-) -> Dict[str, Any]:
-    """
-    获取概念板块OHLC数据
-
-    Args:
-        board_names: 板块名称，单个字符串或字符串列表
-        start_date: 开始日期，格式 'YYYY-MM-DD'
-        end_date: 结束日期，格式 'YYYY-MM-DD'
-
-    Returns:
-        包含概念板块OHLC数据的字典
-    """
-    try:
-        board_data = data_loader.concept_boards_ohlc(board_names, start_date, end_date)
-
-        result = {}
-        for board_name, df in board_data.items():
-            if df.empty:
-                result[board_name] = {"error": "No data found", "data": []}
-            else:
-                df_reset = df.reset_index()
-                data_list = df_reset.to_dict("records")
-                for record in data_list:
-                    if "ts" in record:
-                        record["ts"] = record["ts"].strftime("%Y-%m-%d")
-                result[board_name] = {"data": data_list, "count": len(data_list)}
-
-        return {
-            "success": True,
-            "message": f"Successfully retrieved concept board OHLC data for {len(board_names)} boards",
-            "result": result,
-        }
-
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e),
-            "message": "Failed to retrieve concept board OHLC data",
-        }
-
-
-@mcp.tool()
-async def get_concept_constituents() -> Dict[str, Any]:
-    """
-    获取概念板块成份股信息
-
-    Returns:
-        包含概念板块成份股的字典
-    """
-    try:
-        df = data_loader.concept_constituents()
-
-        if df.empty:
-            return {
-                "success": False,
-                "error": "No concept constituents found",
-                "message": "Failed to retrieve concept constituents",
-            }
-
-        df_reset = df.reset_index()
-        data_list = df_reset.to_dict("records")
-
-        for record in data_list:
-            if "ts" in record and pd.notna(record["ts"]):
-                record["ts"] = record["ts"].strftime("%Y-%m-%d")
-
-        return {
-            "success": True,
-            "message": f"Successfully retrieved concept constituents for {len(data_list)} records",
-            "result": {"data": data_list, "count": len(data_list)},
-        }
-
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e),
-            "message": "Failed to retrieve concept constituents",
+            "message": "Failed to retrieve basic info",
         }
 
 

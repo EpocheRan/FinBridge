@@ -58,6 +58,7 @@ class DataFetcher:
     def _create_tables(self):
         self._create_ohlc_table()
         self._create_stock_basic_table()
+        self._create_fund_basic_table()
         self._create_financial_indicators_table()
         self._create_stock_industry_table()
         self._create_rolling_financial_table()
@@ -145,6 +146,8 @@ class DataFetcher:
         self, stock_code, start_date, end_date, freq
     ) -> pd.DataFrame:
         max_retry, retry_delay = 3, 2
+        ticker_type = self.get_ticker_type(stock_code)
+
         if freq.endswith("min"):
             period = int(freq.replace("min", ""))
             all_data = []
@@ -152,15 +155,18 @@ class DataFetcher:
                 datetime.strptime(start_date, "%Y-%m-%d"),
                 datetime.strptime(end_date, "%Y-%m-%d"),
             )
+
+            if ticker_type == "etf":
+                func = ak.fund_etf_hist_min_em
+            elif ticker_type == "lof":
+                func = ak.fund_lof_hist_min_em
+            else:
+                func = ak.stock_zh_a_hist_min_em
+
             while curr <= end_dt:
                 ce = min(curr + timedelta(days=7), end_dt)
                 for _ in range(max_retry):
                     try:
-                        func = (
-                            ak.fund_etf_hist_min_em
-                            if stock_code.startswith(("51", "15"))
-                            else ak.stock_zh_a_hist_min_em
-                        )
                         df = func(
                             symbol=stock_code,
                             period=f"{period}",
@@ -199,13 +205,16 @@ class DataFetcher:
         else:
             pm = {"d": "daily", "w": "weekly", "m": "monthly"}
             start_c, end_c = start_date.replace("-", ""), end_date.replace("-", "")
+
+            if ticker_type == "etf":
+                func = ak.fund_etf_hist_em
+            elif ticker_type == "lof":
+                func = ak.fund_lof_hist_em
+            else:
+                func = ak.stock_zh_a_hist
+
             for _ in range(max_retry):
                 try:
-                    func = (
-                        ak.fund_etf_hist_em
-                        if stock_code.startswith(("51", "15"))
-                        else ak.stock_zh_a_hist
-                    )
                     df = func(
                         symbol=stock_code,
                         period=pm[freq],
@@ -343,6 +352,101 @@ class DataFetcher:
                 else 'SELECT * FROM "stock_basic_info" LATEST ON ts PARTITION BY code'
             )
             return self._read_sql_to_df(q)
+        elif self.source == "akshare":
+            if not code:
+                return pd.DataFrame()
+            try:
+                # Get data from EM
+                df_em = ak.stock_individual_info_em(symbol=code)
+                em_map = dict(zip(df_em["item"], df_em["value"]))
+
+                # Get data from XQ
+                df_xq = ak.stock_individual_basic_info_xq(symbol=code)
+
+                main_biz = None
+                affiliate_ind = None
+                short_name = None
+                fullname = None
+
+                if not df_xq.empty:
+                    if "main_operation_biz" in df_xq.columns:
+                        main_biz = df_xq["main_operation_biz"].iloc[0]
+                    if "affiliate_industry" in df_xq.columns:
+                        affiliate_ind = df_xq["affiliate_industry"].iloc[0]
+                    if "name" in df_xq.columns:
+                        short_name = df_xq["name"].iloc[0]
+                    if "org_name" in df_xq.columns:
+                        fullname = df_xq["org_name"].iloc[0]
+
+                data = {
+                    "ts": pd.Timestamp.now(),
+                    "code": code,
+                    "name": short_name,
+                    "fullname": fullname,
+                    "main_operation_biz": main_biz,
+                    "affiliate_industry": affiliate_ind,
+                    "total_share": pd.to_numeric(em_map.get("总股本"), errors="coerce"),
+                    "float_share": pd.to_numeric(em_map.get("流通股"), errors="coerce"),
+                    "total_mv": pd.to_numeric(em_map.get("总市值"), errors="coerce"),
+                    "float_mv": pd.to_numeric(em_map.get("流通市值"), errors="coerce"),
+                    "list_date": pd.to_datetime(
+                        em_map.get("上市时间"), errors="coerce"
+                    ),
+                }
+                return pd.DataFrame([data])
+            except Exception as e:
+                logger.error(f"Error fetching basic info from akshare for {code}: {e}")
+                return pd.DataFrame()
+        return pd.DataFrame()
+
+    def get_fund_basic_info(self, code=None) -> pd.DataFrame:
+        if self.source == "questdb":
+            q = (
+                f"SELECT * FROM \"fund_basic_info\" WHERE code = '{code}' LATEST ON ts PARTITION BY code"
+                if code
+                else 'SELECT * FROM "fund_basic_info" LATEST ON ts PARTITION BY code'
+            )
+            return self._read_sql_to_df(q)
+        elif self.source == "akshare":
+            if not code:
+                return pd.DataFrame()
+            try:
+                df = ak.fund_individual_basic_info_xq(symbol=code)
+                val = {}
+                if not df.empty:
+                    # Map based on expected columns or common XQ keys
+                    row = df.iloc[0]
+                    val["name"] = row.get("name")
+                    val["fullname"] = row.get("full_name") or row.get("org_name")
+                    val["found_date"] = row.get("found_date")
+                    val["total_asset"] = row.get("total_asset")
+                    val["management"] = row.get("management") or row.get("manager")
+                    val["fund_type"] = row.get("type")
+                    val["rating_agency"] = row.get("rating_agency")
+                    val["rating"] = row.get("rating")
+
+                data = {
+                    "ts": pd.Timestamp.now(),
+                    "code": code,
+                    "name": val.get("name"),
+                    "fullname": val.get("fullname"),
+                    "found_date": pd.to_datetime(
+                        val.get("found_date"), errors="coerce"
+                    ),
+                    "total_asset": str(val.get("total_asset"))
+                    if val.get("total_asset")
+                    else None,
+                    "management": val.get("management"),
+                    "fund_type": val.get("fund_type"),
+                    "rating_agency": val.get("rating_agency"),
+                    "rating": str(val.get("rating")) if val.get("rating") else None,
+                }
+                return pd.DataFrame([data])
+            except Exception as e:
+                logger.error(
+                    f"Error fetching fund basic info from akshare for {code}: {e}"
+                )
+                return pd.DataFrame()
         return pd.DataFrame()
 
     def get_financial_indicators(self, stock_code, year, quarter) -> pd.DataFrame:
@@ -478,16 +582,51 @@ class DataFetcher:
         self.db.batch_insert(q, r)
 
     def update_stock_basic(self, data: pd.DataFrame):
-        q = "INSERT INTO stock_basic_info (ts, code, name, ipoDate, outDate, type, status) VALUES (%s, %s, %s, %s, %s, %s, %s)"
+        q = "INSERT INTO stock_basic_info (ts, code, name, fullname, main_operation_biz, affiliate_industry, total_share, float_share, total_mv, float_mv, list_date) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
         r = [
             (
                 ts.strftime("%Y-%m-%d %H:%M:%S"),
                 str(row["code"]),
-                str(row["name"]),
-                row["ipoDate"] if pd.notna(row["ipoDate"]) else None,
-                row["outDate"] if pd.notna(row["outDate"]) else None,
-                int(row["type"]) if pd.notna(row["type"]) else None,
-                int(row["status"]) if pd.notna(row["status"]) else None,
+                str(row.get("name")) if pd.notna(row.get("name")) else None,
+                str(row.get("fullname")) if pd.notna(row.get("fullname")) else None,
+                str(row.get("main_operation_biz"))
+                if pd.notna(row.get("main_operation_biz"))
+                else None,
+                str(row.get("affiliate_industry"))
+                if pd.notna(row.get("affiliate_industry"))
+                else None,
+                float(row.get("total_share"))
+                if pd.notna(row.get("total_share"))
+                else None,
+                float(row.get("float_share"))
+                if pd.notna(row.get("float_share"))
+                else None,
+                float(row.get("total_mv")) if pd.notna(row.get("total_mv")) else None,
+                float(row.get("float_mv")) if pd.notna(row.get("float_mv")) else None,
+                row.get("list_date") if pd.notna(row.get("list_date")) else None,
+            )
+            for ts, row in data.iterrows()
+        ]
+        self.db.batch_insert(q, r)
+
+    def update_fund_basic(self, data: pd.DataFrame):
+        q = "INSERT INTO fund_basic_info (ts, code, name, fullname, found_date, total_asset, management, fund_type, rating_agency, rating) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+        r = [
+            (
+                ts.strftime("%Y-%m-%d %H:%M:%S"),
+                str(row["code"]),
+                str(row.get("name")) if pd.notna(row.get("name")) else None,
+                str(row.get("fullname")) if pd.notna(row.get("fullname")) else None,
+                row.get("found_date") if pd.notna(row.get("found_date")) else None,
+                str(row.get("total_asset"))
+                if pd.notna(row.get("total_asset"))
+                else None,
+                str(row.get("management")) if pd.notna(row.get("management")) else None,
+                str(row.get("fund_type")) if pd.notna(row.get("fund_type")) else None,
+                str(row.get("rating_agency"))
+                if pd.notna(row.get("rating_agency"))
+                else None,
+                str(row.get("rating")) if pd.notna(row.get("rating")) else None,
             )
             for ts, row in data.iterrows()
         ]
@@ -607,7 +746,12 @@ class DataFetcher:
 
     def _create_stock_basic_table(self):
         self.db.create_table(
-            'CREATE TABLE IF NOT EXISTS "stock_basic_info" (ts TIMESTAMP, code SYMBOL, name STRING, ipoDate TIMESTAMP, outDate TIMESTAMP, type int, status int) TIMESTAMP(ts) PARTITION BY MONTH WAL DEDUP UPSERT KEYS(code, ts)'
+            'CREATE TABLE IF NOT EXISTS "stock_basic_info" (ts TIMESTAMP, code SYMBOL, name STRING, fullname STRING, main_operation_biz STRING, affiliate_industry STRING, total_share DOUBLE, float_share DOUBLE, total_mv DOUBLE, float_mv DOUBLE, list_date TIMESTAMP) TIMESTAMP(ts) PARTITION BY MONTH WAL DEDUP UPSERT KEYS(code, ts)'
+        )
+
+    def _create_fund_basic_table(self):
+        self.db.create_table(
+            'CREATE TABLE IF NOT EXISTS "fund_basic_info" (ts TIMESTAMP, code SYMBOL, name STRING, fullname STRING, found_date TIMESTAMP, total_asset STRING, management STRING, fund_type SYMBOL, rating_agency STRING, rating STRING) TIMESTAMP(ts) PARTITION BY MONTH WAL DEDUP UPSERT KEYS(code, ts)'
         )
 
     def _create_financial_indicators_table(self):

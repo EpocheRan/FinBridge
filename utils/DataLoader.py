@@ -95,13 +95,36 @@ class BasicInfoTool(DataUpdateTool):
 
     def update_database(self, db_fetcher, data, freq=None):
         """更新数据库"""
-        db_fetcher.update_stock_basic(data)
+        if data.empty or "code" not in data.columns:
+            return
+
+        # 判断类型
+        ticker = str(data["code"].iloc[0])
+        ticker_type = db_fetcher.get_ticker_type(ticker)
+
+        if ticker_type == "stock":
+            db_fetcher.update_stock_basic(data)
+        elif ticker_type in ["etf", "lof"]:
+            db_fetcher.update_fund_basic(data)
+        else:
+            logger.warning(f"未知类型 {ticker_type}，无法更新基础信息")
 
     def get_data(
         self, fetcher, stock_code=None, start_date=None, end_date=None, freq=None
     ):
         """获取数据"""
-        return fetcher.get_stock_basic_info(code=stock_code)
+        if not stock_code:
+            return pd.DataFrame()
+
+        ticker_type = fetcher.get_ticker_type(stock_code)
+
+        if ticker_type == "stock":
+            return fetcher.get_stock_basic_info(code=stock_code)
+        elif ticker_type in ["etf", "lof"]:
+            return fetcher.get_fund_basic_info(code=stock_code)
+        else:
+            logger.warning(f"未知类型 {ticker_type}，无法获取基础信息")
+            return pd.DataFrame()
 
 
 class FinancialIndicatorsTool(DataUpdateTool):
@@ -787,7 +810,10 @@ class DataLoader:
             )
         return stock_data
 
-    def stock_basic_info(self, stock_code: str | None = None) -> pd.DataFrame:
+    def ticker_basic_info(self, stock_code: str) -> pd.DataFrame:
+        if not stock_code:
+            logger.error("ticker_basic_info 需要传入 stock_code 参数")
+            return pd.DataFrame()
         stock_data = self._lastest_tradingday_update(self.basic_info_tool, stock_code)
         return stock_data
 
