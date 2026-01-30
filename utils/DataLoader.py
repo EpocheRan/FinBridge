@@ -588,7 +588,7 @@ class DataLoader:
         # 4. 从API获取最新数据
         logger.info("从API获取最新股票基本信息")
         try:
-            api_fetcher = DataFetcher(source="baostock")
+            api_fetcher = DataFetcher(source="akshare")
             api_data = tool.get_data(api_fetcher, stock_code=stock_code)
 
             if not api_data.empty:
@@ -754,10 +754,7 @@ class DataLoader:
             time_val = curr_time.time()
             if (
                 time_val >= datetime.strptime("09:30", "%H:%M").time()
-                and time_val <= datetime.strptime("11:30", "%H:%M").time()
-            ) or (
-                time_val >= datetime.strptime("13:00", "%H:%M").time()
-                and time_val <= datetime.strptime("15:00", "%H:%M").time()
+                and time_val <= datetime.strptime("24:00", "%H:%M").time()
             ):
                 is_trading_hour = True
 
@@ -863,5 +860,5 @@ class DataLoader:
 # 使用示例
 if __name__ == "__main__":
     loader = DataLoader()
-    data = loader.ohlc("688372", "2024-01-01", "2025-06-10")
+    data = loader.ticker_basic_info("688372")
     print(data["688372"].head())

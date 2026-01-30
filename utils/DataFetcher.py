@@ -361,22 +361,32 @@ class DataFetcher:
                 em_map = dict(zip(df_em["item"], df_em["value"]))
 
                 # Get data from XQ
-                df_xq = ak.stock_individual_basic_info_xq(symbol=code)
+                xq_code = code
+                if code.startswith("6"):
+                    xq_code = f"SH{code}"
+                elif code.startswith(("0", "3")):
+                    xq_code = f"SZ{code}"
+                elif code.startswith(("4", "8")):
+                    xq_code = f"BJ{code}"
+
+                df_xq = ak.stock_individual_basic_info_xq(symbol=xq_code)
 
                 main_biz = None
                 affiliate_ind = None
                 short_name = None
                 fullname = None
 
-                if not df_xq.empty:
-                    if "main_operation_biz" in df_xq.columns:
-                        main_biz = df_xq["main_operation_biz"].iloc[0]
-                    if "affiliate_industry" in df_xq.columns:
-                        affiliate_ind = df_xq["affiliate_industry"].iloc[0]
-                    if "name" in df_xq.columns:
-                        short_name = df_xq["name"].iloc[0]
-                    if "org_name" in df_xq.columns:
-                        fullname = df_xq["org_name"].iloc[0]
+                if (
+                    not df_xq.empty
+                    and "item" in df_xq.columns
+                    and "value" in df_xq.columns
+                ):
+                    xq_map = dict(zip(df_xq["item"], df_xq["value"]))
+
+                    main_biz = xq_map.get("main_operation_business")
+                    affiliate_ind = xq_map.get("affiliate_industry")
+                    short_name = xq_map.get("org_short_name_cn")
+                    fullname = xq_map.get("org_name_cn")
 
                 data = {
                     "ts": pd.Timestamp.now(),
@@ -413,17 +423,16 @@ class DataFetcher:
             try:
                 df = ak.fund_individual_basic_info_xq(symbol=code)
                 val = {}
-                if not df.empty:
-                    # Map based on expected columns or common XQ keys
-                    row = df.iloc[0]
-                    val["name"] = row.get("name")
-                    val["fullname"] = row.get("full_name") or row.get("org_name")
-                    val["found_date"] = row.get("found_date")
-                    val["total_asset"] = row.get("total_asset")
-                    val["management"] = row.get("management") or row.get("manager")
-                    val["fund_type"] = row.get("type")
-                    val["rating_agency"] = row.get("rating_agency")
-                    val["rating"] = row.get("rating")
+                if not df.empty and "item" in df.columns and "value" in df.columns:
+                    xq_map = dict(zip(df["item"], df["value"]))
+                    val["name"] = xq_map.get("基金名称")
+                    val["fullname"] = xq_map.get("基金全称")
+                    val["found_date"] = xq_map.get("成立时间")
+                    val["total_asset"] = xq_map.get("最新规模")
+                    val["management"] = xq_map.get("基金公司")
+                    val["fund_type"] = xq_map.get("基金类型")
+                    val["rating_agency"] = xq_map.get("评级机构")
+                    val["rating"] = xq_map.get("基金评级")
 
                 data = {
                     "ts": pd.Timestamp.now(),
@@ -585,7 +594,7 @@ class DataFetcher:
         q = "INSERT INTO stock_basic_info (ts, code, name, fullname, main_operation_biz, affiliate_industry, total_share, float_share, total_mv, float_mv, list_date) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
         r = [
             (
-                ts.strftime("%Y-%m-%d %H:%M:%S"),
+                row["ts"].strftime("%Y-%m-%d %H:%M:%S"),
                 str(row["code"]),
                 str(row.get("name")) if pd.notna(row.get("name")) else None,
                 str(row.get("fullname")) if pd.notna(row.get("fullname")) else None,
@@ -613,7 +622,7 @@ class DataFetcher:
         q = "INSERT INTO fund_basic_info (ts, code, name, fullname, found_date, total_asset, management, fund_type, rating_agency, rating) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
         r = [
             (
-                ts.strftime("%Y-%m-%d %H:%M:%S"),
+                row["ts"].strftime("%Y-%m-%d %H:%M:%S"),
                 str(row["code"]),
                 str(row.get("name")) if pd.notna(row.get("name")) else None,
                 str(row.get("fullname")) if pd.notna(row.get("fullname")) else None,
