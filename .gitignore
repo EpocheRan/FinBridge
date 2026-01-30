@@ -1,9 +1,6 @@
-/factorfactory/__pycache__
-/utils/__pycache__
-/factorfactory/factor/__pycache__
 utils/__pycache__/*
 *.log
 *.pyc
-utils/__pycache__/DataFetcher.cpython-310.pyc
-*.pyc
-utils/__pycache__/DataFetcher.cpython-310.pyc
+
+
+
