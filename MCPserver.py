@@ -17,6 +17,47 @@ from position import PositionManager
 from indicator import ATR, IndicatorEngine
 
 
+# -----------------------------------------------------------------------------
+# Helper Functions for Humanized Responses
+# -----------------------------------------------------------------------------
+
+
+def create_response(
+    success: bool,
+    message: str,
+    result: Any = None,
+    error_type: str = None,
+    suggestion: str = None,
+) -> Dict[str, Any]:
+    """
+    构建标准化的 Agent 响应格式
+
+    Args:
+        success: 是否成功
+        message: 给 Agent 看的自然语言描述
+        result: 实际数据 payload
+        error_type: 错误类型标识 (如 'InsufficientFunds', 'DataNotFound')
+        suggestion: 给 Agent 的下一步行动建议 (关键!)
+    """
+    response = {
+        "success": success,
+        "message": message,
+    }
+
+    if result is not None:
+        response["result"] = result
+
+    if not success:
+        # 当失败时，提供详细的指导
+        response["error_details"] = {
+            "type": error_type or "UnknownError",
+            "suggestion": suggestion
+            or "请检查输入参数格式是否正确，或尝试简化查询条件。",
+        }
+
+    return response
+
+
 # 直接定义服务器配置（stdio方式不需要配置文件）
 SERVER_NAME = "QuantDataServer"
 SERVER_DESCRIPTION = "量化交易数据获取服务"
@@ -127,6 +168,25 @@ async def get_ohlc_data(
     Returns:
         包含OHLCV数据的字典，格式为 {stock_code: data_dict}
     """
+    # 1. 基础参数校验
+    try:
+        start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+        end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+        if start_dt > end_dt:
+            return create_response(
+                success=False,
+                message=f"开始日期 ({start_date}) 不能晚于结束日期 ({end_date})",
+                error_type="InvalidDateRange",
+                suggestion="请交换开始日期和结束日期的顺序。",
+            )
+    except ValueError:
+        return create_response(
+            success=False,
+            message=f"日期格式错误",
+            error_type="DateFormatError",
+            suggestion="请确保日期格式严格为 'YYYY-MM-DD' (例如 '2023-01-01')。",
+        )
+
     try:
         # 标准化股票代码
         if isinstance(stock_codes, str):
@@ -134,15 +194,27 @@ async def get_ohlc_data(
         elif isinstance(stock_codes, list):
             stock_codes = [normalize_code(c) for c in stock_codes]
 
+        # 检查是否为空
+        if not stock_codes:
+            return create_response(
+                success=False,
+                message="股票代码列表为空",
+                error_type="EmptyInput",
+                suggestion="请提供至少一个有效的股票代码。",
+            )
+
         # 获取数据
         stock_data = data_loader.ohlc(stock_codes, start_date, end_date, freq, now=now)
 
         # 转换DataFrame为字典格式
         result = {}
+        valid_count = 0
+
         for stock_code, df in stock_data.items():
             if df.empty:
-                result[stock_code] = {"error": "No data found", "data": []}
+                result[stock_code] = {"status": "no_data", "data": []}
             else:
+                valid_count += 1
                 # 重置索引，将时间戳转为列
                 df_reset = df.reset_index()
                 # 转换为字典列表
@@ -153,19 +225,28 @@ async def get_ohlc_data(
                         record["ts"] = record["ts"].strftime("%Y-%m-%d %H:%M:%S")
                 result[stock_code] = {"data": data_list, "count": len(data_list)}
 
-        return {
-            "success": True,
-            "message": f"Successfully retrieved OHLC data for {len(stock_codes) if isinstance(stock_codes, list) else 1} stocks",
-            "result": result,
-        }
+        if valid_count == 0:
+            return create_response(
+                success=False,
+                message=f"未找到所查询股票 ({stock_codes}) 在该时间段的数据。",
+                error_type="NoMarketData",
+                suggestion=f"1. 请确认当前是否为非交易日。\n2. 请确认股票代码是否存在 (当前尝试: {stock_codes})。\n3. 请尝试扩大日期范围。",
+            )
+
+        return create_response(
+            success=True,
+            message=f"成功获取了 {valid_count} 只股票的行情数据。",
+            result=result,
+        )
 
     except Exception as e:
         logger.error(f"Error in get_ohlc_data: {e}")
-        return {
-            "success": False,
-            "error": str(e),
-            "message": "Failed to retrieve OHLC data",
-        }
+        return create_response(
+            success=False,
+            message="获取行情数据时发生系统异常",
+            error_type="SystemError",
+            suggestion=f"这是一个底层数据接口错误。错误信息: {str(e)}。请稍后重试或联系管理员。",
+        )
 
 
 @mcp.tool()
@@ -226,19 +307,20 @@ async def get_ticker_basic_info(stock_code: str) -> Dict[str, Any]:
 
     Args:
         stock_code: 股票/基金代码（必填）。
-
-    Returns:
-        包含基本信息的字典
     """
     try:
-        df = data_loader.ticker_basic_info(stock_code)
+        # 标准化代码
+        norm_code = normalize_code(stock_code)
+
+        df = data_loader.ticker_basic_info(norm_code)
 
         if df.empty:
-            return {
-                "success": False,
-                "error": "No basic info found",
-                "message": "Failed to retrieve basic info",
-            }
+            return create_response(
+                success=False,
+                message=f"未找到代码 {stock_code} 的基本信息",
+                error_type="NotFound",
+                suggestion="请检查股票代码是否正确 (如: 600519)。暂不支持期货或指数代码。",
+            )
 
         df_reset = df.reset_index()
         data_list = df_reset.to_dict("records")
@@ -250,18 +332,19 @@ async def get_ticker_basic_info(stock_code: str) -> Dict[str, Any]:
                     if isinstance(record[field], datetime):
                         record[field] = record[field].strftime("%Y-%m-%d")
 
-        return {
-            "success": True,
-            "message": f"Successfully retrieved basic info for {stock_code}",
-            "result": {"data": data_list, "count": len(data_list)},
-        }
+        return create_response(
+            success=True,
+            message=f"成功获取 {stock_code} 基本信息",
+            result={"data": data_list, "count": len(data_list)},
+        )
 
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e),
-            "message": "Failed to retrieve basic info",
-        }
+        return create_response(
+            success=False,
+            message=f"获取基本信息失败",
+            error_type="SystemError",
+            suggestion=str(e),
+        )
 
 
 @mcp.tool()
@@ -377,23 +460,48 @@ async def pm_update_position(ticker: str, updates: str) -> Dict[str, Any]:
     import json
 
     try:
+        updates_dict = {}
         if isinstance(updates, str):
             try:
                 updates_dict = json.loads(updates)
             except json.JSONDecodeError:
-                return {"success": False, "error": "Invalid JSON format for updates"}
+                return create_response(
+                    success=False,
+                    message="Updates 参数必须是有效的 JSON 字符串",
+                    error_type="JsonParseError",
+                    suggestion="请检查 JSON 格式，例如: '{\"stop_price\": 10.5}'，注意使用双引号。",
+                )
         elif isinstance(updates, dict):
             updates_dict = updates
         else:
-            return {"success": False, "error": "updates must be JSON string or dict"}
+            return create_response(
+                success=False,
+                message="Updates 参数类型错误",
+                error_type="TypeError",
+                suggestion="Updates 必须是 JSON 字符串或字典。",
+            )
 
         success = position_manager.update_position(ticker, updates_dict)
         if success:
-            return {"success": True, "message": f"Updated position for {ticker}"}
+            return create_response(
+                success=True,
+                message=f"成功更新 {ticker} 的持仓信息",
+                result=updates_dict,
+            )
         else:
-            return {"success": False, "error": f"Position for {ticker} not found"}
+            return create_response(
+                success=False,
+                message=f"未找到股票 {ticker} 的持仓记录",
+                error_type="PositionNotFound",
+                suggestion="请先确认该股票是否在持仓列表中 (调用 pm_get_all_positions)，或检查代码是否正确。",
+            )
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return create_response(
+            success=False,
+            message=f"更新持仓时发生未知错误",
+            error_type="SystemError",
+            suggestion=str(e),
+        )
 
 
 @mcp.tool()
@@ -461,18 +569,67 @@ async def pm_calculate_base_position(
         n_factor: N系数 (可选)
     """
     try:
+        # 0. 基础逻辑校验
+        if current_price <= 0:
+            return create_response(
+                success=False,
+                message="当前价格必须大于 0",
+                error_type="InvalidPrice",
+                suggestion="请检查 current_price 参数。",
+            )
+
+        if structure_stop >= current_price:
+            return create_response(
+                success=False,
+                message=f"结构性止损价 ({structure_stop}) 必须低于当前价格 ({current_price})",
+                error_type="InvalidStopPrice",
+                suggestion="对于做多策略，止损价必须位于现价下方。请重新分析支撑位。",
+            )
+
+        # 1. 检查资金状态 (前置拦截)
+        if position_manager.state["total_capital"] <= 0:
+            return create_response(
+                success=False,
+                message="账户总资产未设置或为 0",
+                error_type="InsufficientCapital",
+                suggestion="请先调用 'pm_update_capital' 工具设置您的账户总资金和可用现金。",
+            )
+
+        # 2. 执行计算
         res = position_manager.calculate_base_position(
             ticker, current_price, atr, structure_stop, n_factor
         )
+
         if res:
-            return {"success": True, "result": res}
+            return create_response(
+                success=True, message=f"成功计算 {ticker} 的风控仓位", result=res
+            )
         else:
-            return {
-                "success": False,
-                "message": "Failed to calculate position. Check capital settings.",
-            }
+            # PositionManager 返回 None 通常是因为资金不足以购买 1 手，或止损距离为负
+            # 尝试推断原因
+            cash = position_manager.state["cash"]
+            if cash < current_price * 100:
+                return create_response(
+                    success=False,
+                    message="可用现金不足以购买 1 手 (100股)",
+                    error_type="InsufficientCash",
+                    suggestion=f"当前现金: {cash}, 最小买入成本约: {current_price * 100}。建议增加资金或放弃交易。",
+                )
+
+            return create_response(
+                success=False,
+                message="仓位计算失败 (返回为空)",
+                error_type="CalculationFailed",
+                suggestion="请检查 ATR 或止损价参数是否合理，导致风险距离为负或计算出的股数为 0。",
+            )
+
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return create_response(
+            success=False,
+            message="计算仓位时发生异常",
+            error_type="SystemError",
+            suggestion=str(e),
+        )
 
 
 @mcp.tool()
