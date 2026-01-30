@@ -88,7 +88,7 @@ try:
     logger.info("初始化数据加载器...")
     data_loader = DataLoader()
     trading_date_manager = TradingDateManage()
-    position_manager = PositionManager()
+    position_manager = PositionManager(data_loader=data_loader)
     indicator_engine = IndicatorEngine()
     logger.info("数据加载器初始化完成")
 
@@ -366,6 +366,37 @@ async def get_data_status() -> Dict[str, Any]:
 
 
 @mcp.tool()
+async def pm_update_position(ticker: str, updates: str) -> Dict[str, Any]:
+    """
+    修改持仓信息中的指定字段
+
+    Args:
+        ticker: 股票代码
+        updates: JSON字符串，包含要修改的字段和值 (例如 '{"stop_price": 10.5, "n_factor": 2.0}')
+    """
+    import json
+
+    try:
+        if isinstance(updates, str):
+            try:
+                updates_dict = json.loads(updates)
+            except json.JSONDecodeError:
+                return {"success": False, "error": "Invalid JSON format for updates"}
+        elif isinstance(updates, dict):
+            updates_dict = updates
+        else:
+            return {"success": False, "error": "updates must be JSON string or dict"}
+
+        success = position_manager.update_position(ticker, updates_dict)
+        if success:
+            return {"success": True, "message": f"Updated position for {ticker}"}
+        else:
+            return {"success": False, "error": f"Position for {ticker} not found"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool()
 async def pm_update_capital(total_capital: float, cash: float) -> Dict[str, Any]:
     """
     更新账户总资产和可用现金
@@ -385,8 +416,39 @@ async def pm_update_capital(total_capital: float, cash: float) -> Dict[str, Any]
 
 
 @mcp.tool()
+async def pm_update_config(
+    n_factor: float = None, time_stop_days: int = None, risk_per_trade: float = None
+) -> Dict[str, Any]:
+    """
+    更新持仓管理的全局配置参数
+
+    Args:
+        n_factor: ATR倍数 (如 1.5, 2.0)
+        time_stop_days: 时间止损天数
+        risk_per_trade: 单笔交易风险比例 (如 0.02)
+    """
+    try:
+        position_manager.update_config(n_factor, time_stop_days, risk_per_trade)
+        return {
+            "success": True,
+            "message": f"Config updated successfully",
+            "config": {
+                "n_factor": position_manager.n_factor,
+                "time_stop_days": position_manager.time_stop_days,
+                "risk_per_trade": position_manager.risk_per_trade,
+            },
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool()
 async def pm_calculate_base_position(
-    ticker: str, current_price: float, atr: float, structure_stop: float
+    ticker: str,
+    current_price: float,
+    atr: float,
+    structure_stop: float,
+    n_factor: float = None,
 ) -> Dict[str, Any]:
     """
     计算初始建仓仓位
@@ -396,10 +458,11 @@ async def pm_calculate_base_position(
         current_price: 当前价格
         atr: ATR值
         structure_stop: 结构性止损价
+        n_factor: N系数 (可选)
     """
     try:
         res = position_manager.calculate_base_position(
-            ticker, current_price, atr, structure_stop
+            ticker, current_price, atr, structure_stop, n_factor
         )
         if res:
             return {"success": True, "result": res}
@@ -408,6 +471,68 @@ async def pm_calculate_base_position(
                 "success": False,
                 "message": "Failed to calculate position. Check capital settings.",
             }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool()
+async def pm_calculate_stop_price(
+    current_price: float, atr: float, structure_stop: float, n_factor: float = None
+) -> Dict[str, Any]:
+    """
+    计算止损价格
+
+    Args:
+        current_price: 当前价格
+        atr: ATR值
+        structure_stop: 结构性止损价
+        n_factor: N系数 (可选)
+    """
+    try:
+        res = position_manager.calculate_stop_price(
+            current_price, atr, structure_stop, n_factor
+        )
+        return {"success": True, "result": res}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool()
+async def pm_create_position(
+    ticker: str,
+    entry_time: str,
+    cost_price: float,
+    quantity: float,
+    recent_prices: List[Dict[str, Any]],
+    n_factor: float = None,
+    structure_stop: float = None,
+) -> Dict[str, Any]:
+    """
+    手动创建持仓
+
+    Args:
+        ticker: 股票代码
+        entry_time: 建仓时间 'YYYY-MM-DD'
+        cost_price: 成本价
+        quantity: 数量
+        recent_prices: 最近一个月的价格数据 (列表，包含 open, high, low, close)
+        n_factor: N系数 (可选)
+        structure_stop: 结构化止损 (可选)
+    """
+    try:
+        res = position_manager.create_position(
+            ticker,
+            entry_time,
+            cost_price,
+            quantity,
+            recent_prices,
+            n_factor,
+            structure_stop,
+        )
+        if res:
+            return {"success": True, "result": res}
+        else:
+            return {"success": False, "error": "Failed to create position"}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -452,7 +577,7 @@ async def pm_check_pyramid_signal(ticker: str, current_price: float) -> Dict[str
 @mcp.tool()
 async def pm_record_entry(trade_data: Dict[str, Any], date_str: str) -> Dict[str, Any]:
     """
-    记录建仓交易或者仓位信息
+    记录建仓交易
 
     Args:
         trade_data: 交易数据（通常来自 pm_calculate_base_position）

@@ -3,6 +3,8 @@ import os
 import math
 from datetime import datetime
 import logging
+import pandas as pd
+from indicator import ATR, IndicatorEngine
 
 # Setup logging
 logging.basicConfig(
@@ -14,6 +16,7 @@ logger = logging.getLogger("PositionManager")
 class PositionManager:
     def __init__(
         self,
+        data_loader=None,
         data_file="positions.json",
         n_factor=1.5,
         time_stop_days=5,
@@ -23,26 +26,46 @@ class PositionManager:
         Initialize the Position Manager.
 
         Args:
+            data_loader (DataLoader): Instance of DataLoader to fetch stock info.
             data_file (str): Path to the JSON file storing position data.
             n_factor (float): Base volatility coefficient (default 1.5).
             time_stop_days (int): Max days to verify trend (default 5).
             risk_per_trade (float): Risk per trade as a fraction of equity (default 0.02).
         """
+        self.data_loader = data_loader
         self.data_file = os.path.abspath(data_file)
         self.n_factor = n_factor
         self.time_stop_days = time_stop_days
         self.risk_per_trade = risk_per_trade
         self.positions = {}
-        self.state = {"total_capital": 0.0, "cash": 0.0, "positions": {}}
+        self.state = {
+            "total_capital": 0.0,
+            "cash": 0.0,
+            "positions": {},
+            "n_factor": n_factor,
+            "time_stop_days": time_stop_days,
+            "risk_per_trade": risk_per_trade,
+        }
         self.load_data()
+
+        # Update state with current config to ensure consistency
+        self.state["n_factor"] = self.n_factor
+        self.state["time_stop_days"] = self.time_stop_days
+        self.state["risk_per_trade"] = self.risk_per_trade
 
     def load_data(self):
         """Load position data from JSON file."""
         if os.path.exists(self.data_file):
             try:
                 with open(self.data_file, "r") as f:
-                    self.state = json.load(f)
+                    loaded_state = json.load(f)
+                    # Update self.state with loaded data but preserve defaults if keys missing in file
+                    self.state.update(loaded_state)
                     self.positions = self.state.get("positions", {})
+
+                    # Backfill missing fields for legacy positions
+                    self._backfill_positions()
+
                 logger.info(f"已从 {self.data_file} 加载持仓数据")
             except Exception as e:
                 logger.error(f"加载数据失败: {e}")
@@ -50,6 +73,39 @@ class PositionManager:
         else:
             logger.info("未找到现有的持仓文件。开始新会话。")
             self.positions = {}
+
+    def _backfill_positions(self):
+        """Ensure all positions have necessary fields and backfill with defaults if missing."""
+        dirty = False
+        for ticker, pos in self.positions.items():
+            # Backfill parameters
+            if "n_factor" not in pos:
+                pos["n_factor"] = self.state.get("n_factor", self.n_factor)
+                dirty = True
+            if "time_stop_days" not in pos:
+                pos["time_stop_days"] = self.state.get(
+                    "time_stop_days", self.time_stop_days
+                )
+                dirty = True
+            if "risk_per_trade" not in pos:
+                pos["risk_per_trade"] = self.state.get(
+                    "risk_per_trade", self.risk_per_trade
+                )
+                dirty = True
+
+            # Backfill name if missing and loader is available
+            if ("name" not in pos or not pos["name"]) and self.data_loader:
+                try:
+                    basic_info = self.data_loader.ticker_basic_info(ticker)
+                    if not basic_info.empty and "code_name" in basic_info.columns:
+                        pos["name"] = basic_info["code_name"].iloc[0]
+                        dirty = True
+                except Exception as e:
+                    logger.warning(f"Backfill name failed for {ticker}: {e}")
+
+        # If we modified any data, save it back to disk
+        if dirty:
+            self.save_data()
 
     def save_data(self):
         """Save position data to JSON file."""
@@ -61,13 +117,81 @@ class PositionManager:
         except Exception as e:
             logger.error(f"保存数据失败: {e}")
 
+    def update_position(self, ticker, updates):
+        """
+        Update specific fields of a position.
+
+        Args:
+            ticker (str): Stock ticker.
+            updates (dict): Dictionary of fields to update.
+        """
+        if ticker not in self.positions:
+            logger.warning(f"Update failed: Position for {ticker} not found.")
+            return False
+
+        pos = self.positions[ticker]
+
+        for key, value in updates.items():
+            pos[key] = value
+
+        self.save_data()
+        logger.info(f"Updated position for {ticker}: {updates}")
+        return True
+
     def update_capital(self, total_capital, cash):
         """Update capital and cash info."""
         self.state["total_capital"] = total_capital
         self.state["cash"] = cash
         self.save_data()
 
-    def calculate_base_position(self, ticker, current_price, atr, structure_stop):
+    def update_config(self, n_factor=None, time_stop_days=None, risk_per_trade=None):
+        """Update global configuration."""
+        if n_factor is not None:
+            self.n_factor = float(n_factor)
+            self.state["n_factor"] = self.n_factor
+
+        if time_stop_days is not None:
+            self.time_stop_days = int(time_stop_days)
+            self.state["time_stop_days"] = self.time_stop_days
+
+        if risk_per_trade is not None:
+            self.risk_per_trade = float(risk_per_trade)
+            self.state["risk_per_trade"] = self.risk_per_trade
+
+        self.save_data()
+        logger.info(
+            f"Updated config: n_factor={self.n_factor}, time_stop_days={self.time_stop_days}, risk={self.risk_per_trade}"
+        )
+
+    def calculate_stop_price(self, current_price, atr, structure_stop, n_factor=None):
+        """
+        Calculate stop price based on ATR and structural stop.
+        """
+        if n_factor is None:
+            n_factor = self.n_factor
+
+        # Hard Logic: Price - N * ATR
+        p_atr = current_price - (n_factor * atr)
+
+        # Soft Logic: Structure Stop
+        p_struct = structure_stop
+
+        # b. Decision Rule: Select the ONE closer to current price (Narrower Stop)
+        # Since stops are below price, the higher value is closer.
+        p_stop = max(p_atr, p_struct)
+
+        stop_type = "ATR止损" if p_stop == p_atr else "结构化止损"
+
+        return {
+            "stop_price": p_stop,
+            "stop_type": stop_type,
+            "p_atr": p_atr,
+            "p_struct": p_struct,
+        }
+
+    def calculate_base_position(
+        self, ticker, current_price, atr, structure_stop, n_factor=None
+    ):
         """
         2) Calculate Base Position Size.
 
@@ -76,6 +200,7 @@ class PositionManager:
             current_price (float): Current market price.
             atr (float): Current ATR value.
             structure_stop (float): Structural stop loss price (e.g., recent low).
+            n_factor (float, optional): Override n_factor. Defaults to None.
 
         Returns:
             dict: {
@@ -92,18 +217,17 @@ class PositionManager:
             logger.error("总资产为0或未设置。请先调用 update_capital。")
             return None
 
-        # a. Calculate Potential Stops
-        # Hard Logic: Price - 1.5 * ATR
-        p_atr = current_price - (self.n_factor * atr)
+        if n_factor is None:
+            n_factor = self.n_factor
 
-        # Soft Logic: Structure Stop (Provided by user/logic)
-        p_struct = structure_stop
+        stop_res = self.calculate_stop_price(
+            current_price, atr, structure_stop, n_factor
+        )
+        p_stop = stop_res["stop_price"]
+        stop_type = stop_res["stop_type"]
+        p_atr = stop_res["p_atr"]
+        p_struct = stop_res["p_struct"]
 
-        # b. Decision Rule: Select the ONE closer to current price (Narrower Stop)
-        # Since stops are below price, the higher value is closer.
-        p_stop = max(p_atr, p_struct)
-
-        stop_type = "ATR止损" if p_stop == p_atr else "结构化止损"
         logger.info(
             f"{ticker} 止损选择: ATR止损={p_atr:.2f}, 结构化止损={p_struct:.2f}。选中: {stop_type} ({p_stop:.2f})"
         )
@@ -142,6 +266,121 @@ class PositionManager:
             "stop_type": stop_type,
         }
 
+    def create_position(
+        self,
+        ticker,
+        entry_time,
+        cost_price,
+        quantity,
+        recent_prices,
+        n_factor=None,
+        structure_stop=None,
+    ):
+        """
+        Manually create/record a position with provided history for ATR calculation.
+
+        Args:
+            ticker: Stock ticker
+            entry_time: Entry time (str or datetime)
+            cost_price: Cost price
+            quantity: Quantity
+            recent_prices: List of dicts or DataFrame with OHLC data
+            n_factor: Optional override
+            structure_stop: Optional override
+        """
+        if n_factor is None:
+            n_factor = self.n_factor
+
+        # 1. Calculate ATR from recent_prices
+        if isinstance(recent_prices, list):
+            df = pd.DataFrame(recent_prices)
+        else:
+            df = recent_prices.copy()
+
+        # Ensure columns
+        df.columns = [c.lower() for c in df.columns]
+
+        # Fix: Ensure datetime index for IndicatorEngine
+        if "ts" in df.columns:
+            df["datetime"] = pd.to_datetime(df["ts"])
+            df.set_index("datetime", inplace=True)
+        elif "date" in df.columns:
+            df["datetime"] = pd.to_datetime(df["date"])
+            df.set_index("datetime", inplace=True)
+        elif "time" in df.columns:
+            df["datetime"] = pd.to_datetime(df["time"])
+            df.set_index("datetime", inplace=True)
+        # If trade_date is used (common in some APIs)
+        elif "trade_date" in df.columns:
+            df["datetime"] = pd.to_datetime(df["trade_date"])
+            df.set_index("datetime", inplace=True)
+
+        # Calculate ATR
+        engine = IndicatorEngine()
+        atr_df = engine.calculate(df, ATR, N=14)
+
+        if atr_df.empty:
+            logger.error("Cannot calculate ATR from provided recent prices")
+            return None
+
+        init_atr = atr_df["atr"].iloc[-1]
+
+        # 2. Calculate Stop Price
+        if structure_stop is None:
+            structure_stop = float("-inf")
+
+        stop_res = self.calculate_stop_price(
+            cost_price, init_atr, structure_stop, n_factor
+        )
+        stop_price = stop_res["stop_price"]
+
+        # 3. Get Name
+        stock_name = ""
+        if self.data_loader:
+            try:
+                basic_info = self.data_loader.ticker_basic_info(ticker)
+                if not basic_info.empty and "code_name" in basic_info.columns:
+                    stock_name = basic_info["code_name"].iloc[0]
+            except Exception as e:
+                logger.warning(f"Failed to fetch stock name for {ticker}: {e}")
+
+        # 4. Construct Position Dict
+        risk_distance = cost_price - stop_price
+
+        # Ensure entry_time is string YYYY-MM-DD if possible
+        if isinstance(entry_time, datetime):
+            entry_time_str = entry_time.strftime("%Y-%m-%d")
+        else:
+            # Assume string
+            entry_time_str = str(entry_time)
+
+        position_entry = {
+            "ticker": ticker,
+            "name": stock_name,
+            "status": "HOLDING",
+            "entry_time": entry_time_str,
+            "last_trade_time": entry_time_str,
+            "first_entry_price": cost_price,
+            "cost_price": cost_price,
+            "latest_price": cost_price,
+            "quantity": quantity,
+            "base_quantity": quantity,
+            "initial_atr": float(init_atr),
+            "stop_price": stop_price,
+            "initial_risk_distance": risk_distance,
+            "pyramid_level": 0,
+            "n_factor": n_factor,
+            "time_stop_days": self.time_stop_days,
+            "risk_per_trade": self.risk_per_trade,
+        }
+
+        # 5. Save
+        self.positions[ticker] = position_entry
+        self.save_data()
+
+        logger.info(f"已手动创建 {ticker} 的持仓")
+        return position_entry
+
     def check_dead_position(self, ticker, current_price, current_date_str):
         """
         3) Check for 'Dead' positions to prune.
@@ -158,6 +397,7 @@ class PositionManager:
             return False
 
         pos = self.positions[ticker]
+        pos["latest_price"] = current_price  # Update latest price
         entry_date = datetime.strptime(pos["entry_time"], "%Y-%m-%d")
         current_date = datetime.strptime(current_date_str, "%Y-%m-%d")
 
@@ -214,6 +454,7 @@ class PositionManager:
             return None
 
         pos = self.positions[ticker]
+        pos["latest_price"] = current_price  # Update latest price
 
         entry_price = pos[
             "first_entry_price"
@@ -287,21 +528,34 @@ class PositionManager:
         5) Record new position (Base).
         """
         ticker = trade_data["ticker"]
+        stock_name = ""
+        if self.data_loader:
+            try:
+                basic_info = self.data_loader.ticker_basic_info(ticker)
+                if not basic_info.empty and "code_name" in basic_info.columns:
+                    stock_name = basic_info["code_name"].iloc[0]
+            except Exception as e:
+                logger.warning(f"Failed to fetch stock name for {ticker}: {e}")
 
         # Structure for JSON
         position_entry = {
             "ticker": ticker,
+            "name": stock_name,
             "status": "HOLDING",
             "entry_time": date_str,
             "last_trade_time": date_str,
             "first_entry_price": trade_data["price"],
             "cost_price": trade_data["price"],  # Weighted Average
+            "latest_price": trade_data["price"],
             "quantity": trade_data["quantity"],
             "base_quantity": trade_data["quantity"],  # Remember for equal add-ons
             "initial_atr": trade_data["atr"],
             "stop_price": trade_data["stop_price"],
             "initial_risk_distance": trade_data["risk_distance"],
             "pyramid_level": 0,
+            "n_factor": self.n_factor,
+            "time_stop_days": self.time_stop_days,
+            "risk_per_trade": self.risk_per_trade,
         }
 
         self.positions[ticker] = position_entry
@@ -335,6 +589,7 @@ class PositionManager:
         # Update Fields
         pos["quantity"] = total_qty
         pos["cost_price"] = avg_price
+        pos["latest_price"] = trade_data["price"]
         pos["last_trade_time"] = date_str
         pos["stop_price"] = trade_data["new_stop_price"]
         pos["pyramid_level"] = trade_data["level_to"]

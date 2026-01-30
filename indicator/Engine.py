@@ -63,7 +63,7 @@ class IndicatorEngine:
         ind = strat.ind
 
         output_data = {}
-        aliases = ind.lines.getaliases()
+        aliases = ind.lines.getlinealiases()
 
         # Iterate over lines defined in the indicator
         for line_i in range(ind.lines.size()):
