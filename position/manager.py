@@ -1,10 +1,11 @@
 import logging
 import uuid
 import json
+import time
 from datetime import datetime
-from sqlalchemy import create_engine, desc
+from sqlalchemy import create_engine, desc, text
 from sqlalchemy.orm import sessionmaker
-from .models import Base, ProfolioModel, PositionModel, TradeRecordModel
+from .schema import Base, ProfolioModel, PositionModel, TradeRecordModel, create_tables
 from utils.DataConnect import questDB
 from .modes.atr_mode import ATRMode
 
@@ -21,8 +22,6 @@ class PositionManager:
         self.data_loader = data_loader
         self.db = questDB()
         self.engine = self.db.pd_conn
-        # Create tables if they don't exist
-        Base.metadata.create_all(self.engine)
         self.Session = sessionmaker(bind=self.engine)
 
     def _get_mode_instance(self, mode_name, params_str):
@@ -37,6 +36,14 @@ class PositionManager:
     def create_profolio(self, name, cash=0.0):
         session = self.Session()
         try:
+            # Check for existing portfolio with the same name to prevent duplicates
+            existing = session.query(ProfolioModel).filter_by(name=name).first()
+            if existing:
+                logger.info(
+                    f"Portfolio with name '{name}' already exists. Returning existing ID: {existing.profolio_id}"
+                )
+                return existing.profolio_id
+
             profolio_id = str(uuid.uuid4())[:8]
             new_profolio = ProfolioModel(
                 profolio_id=profolio_id,
@@ -61,6 +68,7 @@ class PositionManager:
 
     # --- 11) Modify Profolio ---
     def modify_profolio(self, profolio_id, updates):
+        time.sleep(0.001)  # Ensure unique timestamp for history
         session = self.Session()
         try:
             latest = (
@@ -166,6 +174,115 @@ class PositionManager:
         finally:
             session.close()
 
+    # --- 14) Delete Profolio ---
+    def delete_profolio(self, profolio_id):
+        try:
+            # Use raw SQL to avoid SQLAlchemy's qualified column names which QuestDB may not support in DELETE
+            with self.engine.connect() as conn:
+                # 1. Get all position IDs first for manual cascade
+                result = conn.execute(
+                    text(
+                        "SELECT DISTINCT pos_id FROM positions WHERE profolio_id = :pid"
+                    ),
+                    {"pid": profolio_id},
+                )
+                pos_ids = [row[0] for row in result]
+
+                # 2. Delete Trade Records
+                for pid in pos_ids:
+                    conn.execute(
+                        text("DELETE FROM trade_records WHERE pos_id = :pid"),
+                        {"pid": pid},
+                    )
+
+                # 3. Delete Positions
+                conn.execute(
+                    text("DELETE FROM positions WHERE profolio_id = :pid"),
+                    {"pid": profolio_id},
+                )
+
+                # 4. Delete Portfolio records
+                conn.execute(
+                    text("DELETE FROM profolios WHERE profolio_id = :pid"),
+                    {"pid": profolio_id},
+                )
+
+                conn.commit()
+
+            logger.info(f"Deleted portfolio: {profolio_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to delete portfolio: {e}")
+            return False
+
+    # --- Helper Methods for LLM Interface ---
+
+    def get_position_by_ticker(self, profolio_id, ticker):
+        """Helper: Find the latest position record by ticker symbol."""
+        positions = self.list_positions(profolio_id)
+        for p in positions:
+            if p.ticker == ticker:
+                return p
+        return None
+
+    def refresh_all_positions(self, profolio_id):
+        """Force recalculate profit/market value for all positions in portfolio."""
+        positions = self.list_positions(profolio_id)
+        for p in positions:
+            # calculate_profit fetches price internally now
+            self.calculate_profit(p.pos_id)
+        # Recalculate total portfolio stats
+        self.calculate_profolio(profolio_id)
+        return True
+
+    def get_portfolio_summary(self, profolio_id):
+        """Get a full summary of the portfolio for LLM context."""
+        # 1. Refresh Data
+        self.refresh_all_positions(profolio_id)
+
+        # 2. Get Portfolio Info
+        session = self.Session()
+        try:
+            latest_pro = (
+                session.query(ProfolioModel)
+                .filter_by(profolio_id=profolio_id)
+                .order_by(desc(ProfolioModel.id))
+                .first()
+            )
+            if not latest_pro:
+                return {"error": "Portfolio not found"}
+
+            positions = self.list_positions(profolio_id)
+
+            pos_list = []
+            for p in positions:
+                pos_list.append(
+                    {
+                        "ticker": p.ticker,
+                        "name": p.name,
+                        "quantity": p.quantity,
+                        "cost_price": round(p.cost, 2),
+                        "current_price": round(p.market_value / p.quantity, 2)
+                        if p.quantity
+                        else 0,
+                        "market_value": round(p.market_value, 2),
+                        "unrealized_pnl": round(p.unrealized_profit, 2),
+                        "return_rate": f"{round(p.unrealized_profit_rate * 100, 2)}%",
+                        "mode": p.mode,
+                    }
+                )
+
+            return {
+                "portfolio_name": latest_pro.name,
+                "total_assets": round(latest_pro.total_assets, 2),
+                "cash": round(latest_pro.cash, 2),
+                "market_value": round(latest_pro.market_value, 2),
+                "total_unrealized_pnl": round(latest_pro.unrealized_profit, 2),
+                "positions": pos_list,
+            }
+        finally:
+            session.close()
+
     # --- 1) Create Position ---
     def create_position(self, profolio_id, ticker, name, mode, mode_params=None):
         session = self.Session()
@@ -181,6 +298,7 @@ class PositionManager:
                 created_at=now,
                 updated_at=now,
                 id=now,
+                quantity=0.0,
                 mode_params=json.dumps(mode_params) if mode_params else "{}",
             )
             session.add(new_pos)
@@ -198,6 +316,7 @@ class PositionManager:
 
     # --- 6) Modify Position ---
     def modify_position(self, pos_id, updates):
+        time.sleep(0.001)  # Ensure unique timestamp
         session = self.Session()
         try:
             latest = (
@@ -218,6 +337,7 @@ class PositionManager:
                 mode=updates.get("mode", latest.mode),
                 created_at=latest.created_at,
                 cost=updates.get("cost", latest.cost),
+                quantity=updates.get("quantity", latest.quantity),
                 market_value=updates.get("market_value", latest.market_value),
                 unrealized_profit=updates.get(
                     "unrealized_profit", latest.unrealized_profit
@@ -247,23 +367,29 @@ class PositionManager:
 
     # --- 7) Delete Position ---
     def delete_position(self, pos_id, history_id=None):
-        session = self.Session()
         try:
-            if history_id:
-                session.query(PositionModel).filter_by(
-                    pos_id=pos_id, id=history_id
-                ).delete()
-            else:
-                session.query(PositionModel).filter_by(pos_id=pos_id).delete()
-                session.query(TradeRecordModel).filter_by(pos_id=pos_id).delete()
-            session.commit()
+            with self.engine.connect() as conn:
+                if history_id:
+                    # Delete specific snapshot
+                    conn.execute(
+                        text("DELETE FROM positions WHERE pos_id = :pid AND id = :hid"),
+                        {"pid": pos_id, "hid": history_id},
+                    )
+                else:
+                    # Delete position and all related trades
+                    conn.execute(
+                        text("DELETE FROM trade_records WHERE pos_id = :pid"),
+                        {"pid": pos_id},
+                    )
+                    conn.execute(
+                        text("DELETE FROM positions WHERE pos_id = :pid"),
+                        {"pid": pos_id},
+                    )
+                conn.commit()
             return True
         except Exception as e:
-            session.rollback()
             logger.error(f"Failed to delete position: {e}")
             return False
-        finally:
-            session.close()
 
     # --- 9) List Positions ---
     def list_positions(self, profolio_id):
@@ -411,14 +537,29 @@ class PositionManager:
             latest_price = avg_cost  # Default
 
             # Use data_loader if available to get real-time price
+            price_found = False
             if self.data_loader and latest_pos.ticker:
                 try:
-                    price_df = self.data_loader.get_latest_price(latest_pos.ticker)
-                    if not price_df.empty:
+                    from datetime import datetime, timedelta
+
+                    end_str = datetime.now().strftime("%Y-%m-%d")
+                    start_str = (datetime.now() - timedelta(days=10)).strftime(
+                        "%Y-%m-%d"
+                    )
+                    data_map = self.data_loader.ohlc(
+                        latest_pos.ticker, start_str, end_str, freq="d", now=True
+                    )
+                    price_df = data_map.get(latest_pos.ticker)
+
+                    if price_df is not None and not price_df.empty:
                         latest_price = price_df["close"].iloc[-1]
-                except:
-                    pass
-            elif trades:
+                        price_found = True
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to fetch price for {latest_pos.ticker}: {e}"
+                    )
+
+            if not price_found and trades:
                 latest_price = trades[-1].price
 
             market_value = current_qty * latest_price
@@ -431,6 +572,7 @@ class PositionManager:
 
             updates = {
                 "cost": avg_cost,
+                "quantity": current_qty,
                 "market_value": market_value,
                 "unrealized_profit": unrealized_profit,
                 "unrealized_profit_rate": unrealized_profit_rate,

@@ -31,6 +31,7 @@ class PositionModel(Base):
     mode = Column(String(50))
     created_at = Column(DateTime, default=datetime.utcnow)
     cost = Column(Float, default=0.0)
+    quantity = Column(Float, default=0.0)  # Added quantity field
     market_value = Column(Float, default=0.0)
     unrealized_profit = Column(Float, default=0.0)
     unrealized_profit_rate = Column(Float, default=0.0)
@@ -51,3 +52,8 @@ class TradeRecordModel(Base):
     price = Column(Float, default=0.0)
     trade_date = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow)
+
+
+def create_tables(engine):
+    """Create all tables defined in this module"""
+    Base.metadata.create_all(engine)
