@@ -74,9 +74,25 @@ def _create_ohlc_table(db):
 
 
 def _create_stock_basic_table(db):
-    db.create_table(
-        'CREATE TABLE IF NOT EXISTS "stock_basic_info" (ts TIMESTAMP, code SYMBOL, name STRING, fullname STRING, main_operation_biz STRING, affiliate_industry STRING, total_share DOUBLE, float_share DOUBLE, total_mv DOUBLE, float_mv DOUBLE, list_date TIMESTAMP) TIMESTAMP(ts) PARTITION BY MONTH WAL DEDUP UPSERT KEYS(code, ts)'
-    )
+    create_sql = """CREATE TABLE IF NOT EXISTS "stock_basic_info" (ts TIMESTAMP, code SYMBOL, name STRING, fullname STRING, main_operation_biz STRING, affiliate_industry STRING, total_share DOUBLE, float_share DOUBLE, total_mv DOUBLE, float_mv DOUBLE, list_date TIMESTAMP) TIMESTAMP(ts) PARTITION BY MONTH WAL DEDUP UPSERT KEYS(code, ts)"""
+    alter_sqls = [
+        "ALTER TABLE stock_basic_info ADD COLUMN fullname STRING",
+        "ALTER TABLE stock_basic_info ADD COLUMN main_operation_biz STRING",
+        "ALTER TABLE stock_basic_info ADD COLUMN affiliate_industry STRING",
+        "ALTER TABLE stock_basic_info ADD COLUMN total_share DOUBLE",
+        "ALTER TABLE stock_basic_info ADD COLUMN float_share DOUBLE",
+        "ALTER TABLE stock_basic_info ADD COLUMN total_mv DOUBLE",
+        "ALTER TABLE stock_basic_info ADD COLUMN float_mv DOUBLE",
+        "ALTER TABLE stock_basic_info ADD COLUMN list_date TIMESTAMP",
+    ]
+
+    db.create_table(create_sql)
+
+    for alter_sql in alter_sqls:
+        try:
+            db.execute_raw_sql(alter_sql)
+        except Exception as e:
+            logger.warning(f"ALTER TABLE warning (column may already exist): {e}")
 
 
 def _create_fund_basic_table(db):

@@ -470,6 +470,36 @@ async def pm_delete_portfolio(portfolio_id: str) -> Dict[str, Any]:
 
 
 @mcp.tool()
+async def pm_modify_portfolio(
+    portfolio_id: str, name: str = None, cash: float = None
+) -> Dict[str, Any]:
+    """
+    Modify portfolio name or cash balance.
+
+    Args:
+        portfolio_id: Portfolio ID to modify.
+        name: New portfolio name (optional).
+        cash: New cash balance (optional).
+    """
+    return position_interface.modify_portfolio(portfolio_id, name, cash)
+
+
+@mcp.tool()
+async def pm_modify_position(
+    pos_id: str, name: str = None, quantity: float = None
+) -> Dict[str, Any]:
+    """
+    Modify position name or quantity.
+
+    Args:
+        pos_id: Position ID to modify.
+        name: New position name/stock name (optional).
+        quantity: New quantity (optional).
+    """
+    return position_interface.modify_position(pos_id, name, quantity)
+
+
+@mcp.tool()
 async def pm_get_portfolio_status(portfolio_id: str) -> Dict[str, Any]:
     """Get the current status of the portfolio."""
     return position_interface.get_portfolio_status(portfolio_id)

@@ -39,7 +39,7 @@ class PositionAgentInterface:
                 return self._response(
                     True,
                     f"Portfolio '{name}' already exists. Using existing portfolio.",
-                    {"portfolio_id": existing.profolio_id, "is_new": False},
+                    {"portfolio_id": existing.portfolio_id, "is_new": False},
                 )
 
             pid = self.manager.create_profolio(name, initial_cash)
@@ -64,10 +64,11 @@ class PositionAgentInterface:
             for p in portfolios:
                 data.append(
                     {
-                        "portfolio_id": p.profolio_id,
+                        "portfolio_id": p.portfolio_id,
                         "name": p.name,
-                        "total_assets": round(p.total_assets, 2),
-                        "cash": round(p.cash, 2),
+                        "cash": p.cash,
+                        "market_value": p.market_value,
+                        "total_assets": p.total_assets,
                     }
                 )
             return self._response(
@@ -87,6 +88,86 @@ class PositionAgentInterface:
             return self._response(False, f"Failed to delete portfolio {portfolio_id}.")
         except Exception as e:
             return self._response(False, f"Error deleting portfolio: {str(e)}")
+
+    def modify_portfolio(self, portfolio_id: str, name: str = None, cash: float = None):
+        """
+        Modify portfolio name or cash balance.
+
+        Args:
+            portfolio_id: Portfolio ID.
+            name: New name (optional).
+            cash: New cash balance (optional).
+        """
+        try:
+            updates = {}
+            if name is not None:
+                updates["name"] = name
+            if cash is not None:
+                updates["cash"] = cash
+
+            if not updates:
+                return self._response(False, "No updates provided.")
+
+            success = self.manager.modify_profolio(portfolio_id, updates)
+            if success:
+                return self._response(
+                    True, f"Portfolio {portfolio_id} updated.", updates
+                )
+            return self._response(False, f"Failed to update portfolio {portfolio_id}.")
+        except Exception as e:
+            return self._response(False, f"Error updating portfolio: {str(e)}")
+
+    def modify_position(self, pos_id: str, name: str = None, quantity: float = None):
+        """
+        Modify position name or other attributes.
+
+        Args:
+            pos_id: Position ID (can be 8-char short ID like 'abc12345' or full UUID).
+            name: New name (optional).
+            quantity: New quantity (optional).
+        """
+        try:
+            # 规范化 pos_id
+            short_id = pos_id
+            if len(pos_id) > 8 and "-" in pos_id:
+                # 完整 UUID 格式，尝试通过模糊匹配查找
+                # 使用前缀匹配
+                from utils.DataConnect import questDB
+                from sqlalchemy import text
+
+                db = questDB()
+                search_pattern = pos_id[:8] + "%"
+                with db.pd_conn.connect() as conn:
+                    result = conn.execute(
+                        text(
+                            "SELECT pos_id FROM positions WHERE pos_id LIKE :pattern AND deleted_at IS NULL LIMIT 1"
+                        ),
+                        {"pattern": search_pattern},
+                    ).fetchone()
+
+                if result:
+                    short_id = result[0]
+                    logger.info(f"Found position by UUID prefix: {short_id}")
+                else:
+                    return self._response(
+                        False, f"Position not found for UUID: {pos_id}"
+                    )
+
+            updates = {}
+            if name is not None:
+                updates["name"] = name
+            if quantity is not None:
+                updates["quantity"] = quantity
+
+            if not updates:
+                return self._response(False, "No updates provided.")
+
+            success = self.manager.modify_position(short_id, updates)
+            if success:
+                return self._response(True, f"Position {short_id} updated.", updates)
+            return self._response(False, f"Failed to update position {short_id}.")
+        except Exception as e:
+            return self._response(False, f"Error updating position: {str(e)}")
 
     def get_portfolio_status(self, portfolio_id: str):
         """

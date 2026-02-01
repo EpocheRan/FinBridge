@@ -5,7 +5,7 @@ import time
 from datetime import datetime
 from sqlalchemy import create_engine, desc, text
 from sqlalchemy.orm import sessionmaker
-from .schema import Base, ProfolioModel, PositionModel, TradeRecordModel, create_tables
+from .schema import Base, PortfolioModel, PositionModel, TradeRecordModel, create_tables
 from utils.DataConnect import questDB
 from .modes.atr_mode import ATRMode
 
@@ -37,16 +37,21 @@ class PositionManager:
         session = self.Session()
         try:
             # Check for existing portfolio with the same name to prevent duplicates
-            existing = session.query(ProfolioModel).filter_by(name=name).first()
+            existing = (
+                session.query(PortfolioModel)
+                .filter_by(name=name)
+                .filter_by(deleted_at=None)
+                .first()
+            )
             if existing:
                 logger.info(
-                    f"Portfolio with name '{name}' already exists. Returning existing ID: {existing.profolio_id}"
+                    f"Portfolio with name '{name}' already exists. Returning existing ID: {existing.portfolio_id}"
                 )
-                return existing.profolio_id
+                return existing.portfolio_id
 
-            profolio_id = str(uuid.uuid4())[:8]
-            new_profolio = ProfolioModel(
-                profolio_id=profolio_id,
+            portfolio_id = str(uuid.uuid4())[:8]
+            new_profolio = PortfolioModel(
+                portfolio_id=portfolio_id,
                 name=name,
                 total_assets=cash,
                 cash=cash,
@@ -57,8 +62,8 @@ class PositionManager:
             )
             session.add(new_profolio)
             session.commit()
-            logger.info(f"Created profolio: {name} ({profolio_id})")
-            return profolio_id
+            logger.info(f"Created profolio: {name} ({portfolio_id})")
+            return portfolio_id
         except Exception as e:
             session.rollback()
             logger.error(f"Failed to create profolio: {e}")
@@ -67,22 +72,23 @@ class PositionManager:
             session.close()
 
     # --- 11) Modify Profolio ---
-    def modify_profolio(self, profolio_id, updates):
+    def modify_profolio(self, portfolio_id, updates):
         time.sleep(0.001)  # Ensure unique timestamp for history
         session = self.Session()
         try:
             latest = (
-                session.query(ProfolioModel)
-                .filter_by(profolio_id=profolio_id)
-                .order_by(desc(ProfolioModel.id))
+                session.query(PortfolioModel)
+                .filter_by(portfolio_id=portfolio_id)
+                .filter_by(deleted_at=None)
+                .order_by(desc(PortfolioModel.id))
                 .first()
             )
             if not latest:
-                logger.error(f"Profolio {profolio_id} not found")
+                logger.error(f"Profolio {portfolio_id} not found")
                 return False
 
-            new_record = ProfolioModel(
-                profolio_id=profolio_id,
+            new_record = PortfolioModel(
+                portfolio_id=portfolio_id,
                 name=updates.get("name", latest.name),
                 total_assets=updates.get("total_assets", latest.total_assets),
                 cash=updates.get("cash", latest.cash),
@@ -104,13 +110,14 @@ class PositionManager:
             session.close()
 
     # --- 12) Calculate Profolio ---
-    def calculate_profolio(self, profolio_id):
+    def calculate_profolio(self, portfolio_id):
         session = self.Session()
         try:
             # Get latest versions of all positions for this portfolio
             all_pos_ids = (
                 session.query(PositionModel.pos_id)
-                .filter_by(profolio_id=profolio_id)
+                .filter_by(portfolio_id=portfolio_id)
+                .filter_by(deleted_at=None)
                 .distinct()
                 .all()
             )
@@ -120,9 +127,10 @@ class PositionManager:
             total_realized_profit = 0.0
 
             latest_pro = (
-                session.query(ProfolioModel)
-                .filter_by(profolio_id=profolio_id)
-                .order_by(desc(ProfolioModel.id))
+                session.query(PortfolioModel)
+                .filter_by(portfolio_id=portfolio_id)
+                .filter_by(deleted_at=None)
+                .order_by(desc(PortfolioModel.id))
                 .first()
             )
             if not latest_pro:
@@ -134,6 +142,7 @@ class PositionManager:
                 latest_pos = (
                     session.query(PositionModel)
                     .filter_by(pos_id=pos_id)
+                    .filter_by(deleted_at=None)
                     .order_by(desc(PositionModel.id))
                     .first()
                 )
@@ -149,7 +158,7 @@ class PositionManager:
                 "total_assets": total_cash + total_market_value,
             }
             session.close()
-            return self.modify_profolio(profolio_id, updates)
+            return self.modify_profolio(portfolio_id, updates)
         except Exception as e:
             logger.error(f"Failed to calculate profolio: {e}")
             return False
@@ -162,54 +171,56 @@ class PositionManager:
         session = self.Session()
         try:
             all_records = (
-                session.query(ProfolioModel).order_by(desc(ProfolioModel.id)).all()
+                session.query(PortfolioModel)
+                .filter_by(deleted_at=None)
+                .order_by(desc(PortfolioModel.id))
+                .all()
             )
             seen = set()
             latest_records = []
             for r in all_records:
-                if r.profolio_id not in seen:
+                if r.portfolio_id not in seen:
                     latest_records.append(r)
-                    seen.add(r.profolio_id)
+                    seen.add(r.portfolio_id)
             return latest_records
         finally:
             session.close()
 
     # --- 14) Delete Profolio ---
-    def delete_profolio(self, profolio_id):
+    def delete_profolio(self, portfolio_id):
         try:
-            # Use raw SQL to avoid SQLAlchemy's qualified column names which QuestDB may not support in DELETE
-            with self.engine.connect() as conn:
-                # 1. Get all position IDs first for manual cascade
-                result = conn.execute(
-                    text(
-                        "SELECT DISTINCT pos_id FROM positions WHERE profolio_id = :pid"
-                    ),
-                    {"pid": profolio_id},
-                )
-                pos_ids = [row[0] for row in result]
+            # Use soft delete via REST API (UPDATE instead of DELETE)
+            now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")
 
-                # 2. Delete Trade Records
-                for pid in pos_ids:
-                    conn.execute(
-                        text("DELETE FROM trade_records WHERE pos_id = :pid"),
-                        {"pid": pid},
-                    )
+            # 1. Get all position IDs first for manual cascade
+            session = self.Session()
+            result = (
+                session.query(PositionModel.pos_id)
+                .filter_by(portfolio_id=portfolio_id)
+                .filter_by(deleted_at=None)
+                .distinct()
+                .all()
+            )
+            pos_ids = [row[0] for row in result]
+            session.close()
 
-                # 3. Delete Positions
-                conn.execute(
-                    text("DELETE FROM positions WHERE profolio_id = :pid"),
-                    {"pid": profolio_id},
+            # 2. Soft delete Trade Records
+            for pid in pos_ids:
+                self.db.execute_raw_sql(
+                    f"UPDATE trade_records SET deleted_at = '{now}' WHERE pos_id = '{pid}' AND deleted_at IS NULL"
                 )
 
-                # 4. Delete Portfolio records
-                conn.execute(
-                    text("DELETE FROM profolios WHERE profolio_id = :pid"),
-                    {"pid": profolio_id},
-                )
+            # 3. Soft delete Positions
+            self.db.execute_raw_sql(
+                f"UPDATE positions SET deleted_at = '{now}' WHERE portfolio_id = '{portfolio_id}' AND deleted_at IS NULL"
+            )
 
-                conn.commit()
+            # 4. Soft delete Portfolio records
+            self.db.execute_raw_sql(
+                f"UPDATE portfolios SET deleted_at = '{now}' WHERE portfolio_id = '{portfolio_id}' AND deleted_at IS NULL"
+            )
 
-            logger.info(f"Deleted portfolio: {profolio_id}")
+            logger.info(f"Soft deleted portfolio: {portfolio_id}")
             return True
         except Exception as e:
             logger.error(f"Failed to delete portfolio: {e}")
@@ -217,58 +228,82 @@ class PositionManager:
 
     # --- Helper Methods for LLM Interface ---
 
-    def get_position_by_ticker(self, profolio_id, ticker):
+    def get_position_by_ticker(self, portfolio_id, ticker):
         """Helper: Find the latest position record by ticker symbol."""
-        positions = self.list_positions(profolio_id)
+        positions = self.list_positions(portfolio_id)
         for p in positions:
             if p.ticker == ticker:
                 return p
         return None
 
-    def refresh_all_positions(self, profolio_id):
+    def refresh_all_positions(self, portfolio_id):
         """Force recalculate profit/market value for all positions in portfolio."""
-        positions = self.list_positions(profolio_id)
+        positions = self.list_positions(portfolio_id)
         for p in positions:
             # calculate_profit fetches price internally now
             self.calculate_profit(p.pos_id)
         # Recalculate total portfolio stats
-        self.calculate_profolio(profolio_id)
+        self.calculate_profolio(portfolio_id)
         return True
 
-    def get_portfolio_summary(self, profolio_id):
+    def get_portfolio_summary(self, portfolio_id):
         """Get a full summary of the portfolio for LLM context."""
         # 1. Refresh Data
-        self.refresh_all_positions(profolio_id)
+        self.refresh_all_positions(portfolio_id)
 
         # 2. Get Portfolio Info
         session = self.Session()
         try:
             latest_pro = (
-                session.query(ProfolioModel)
-                .filter_by(profolio_id=profolio_id)
-                .order_by(desc(ProfolioModel.id))
+                session.query(PortfolioModel)
+                .filter_by(portfolio_id=portfolio_id)
+                .filter_by(deleted_at=None)
+                .order_by(desc(PortfolioModel.id))
                 .first()
             )
             if not latest_pro:
                 return {"error": "Portfolio not found"}
 
-            positions = self.list_positions(profolio_id)
+            positions = self.list_positions(portfolio_id)
 
             pos_list = []
             for p in positions:
+                mode_params = json.loads(p.mode_params or "{}")
                 pos_list.append(
                     {
+                        "pos_id": p.pos_id,
                         "ticker": p.ticker,
                         "name": p.name,
                         "quantity": p.quantity,
-                        "cost_price": round(p.cost, 2),
-                        "current_price": round(p.market_value / p.quantity, 2)
+                        "cost_price": float(p.cost) if p.cost else 0.0,
+                        "current_price": float(p.market_value / p.quantity)
                         if p.quantity
-                        else 0,
-                        "market_value": round(p.market_value, 2),
-                        "unrealized_pnl": round(p.unrealized_profit, 2),
-                        "return_rate": f"{round(p.unrealized_profit_rate * 100, 2)}%",
+                        else 0.0,
+                        "market_value": float(p.market_value)
+                        if p.market_value
+                        else 0.0,
+                        "unrealized_pnl": float(p.unrealized_profit)
+                        if p.unrealized_profit
+                        else 0.0,
+                        "return_rate": f"{float(p.unrealized_profit_rate * 100) if p.unrealized_profit_rate else 0.0:.2f}%",
                         "mode": p.mode,
+                        "stop_price": float(p.stop_price) if p.stop_price else None,
+                        "initial_atr": float(mode_params.get("initial_atr"))
+                        if mode_params.get("initial_atr")
+                        else None,
+                        "n_factor": float(mode_params.get("n_factor"))
+                        if mode_params.get("n_factor")
+                        else None,
+                        "risk_per_trade": float(mode_params.get("risk_per_trade"))
+                        if mode_params.get("risk_per_trade")
+                        else None,
+                        "time_stop_days": int(mode_params.get("time_stop_days"))
+                        if mode_params.get("time_stop_days")
+                        else None,
+                        "first_entry_date": p.first_entry_date.isoformat()
+                        if p.first_entry_date
+                        else None,
+                        "mode_params": mode_params,
                     }
                 )
 
@@ -284,14 +319,14 @@ class PositionManager:
             session.close()
 
     # --- 1) Create Position ---
-    def create_position(self, profolio_id, ticker, name, mode, mode_params=None):
+    def create_position(self, portfolio_id, ticker, name, mode, mode_params=None):
         session = self.Session()
         try:
             pos_id = str(uuid.uuid4())[:8]
             now = datetime.utcnow()
             new_pos = PositionModel(
                 pos_id=pos_id,
-                profolio_id=profolio_id,
+                portfolio_id=portfolio_id,
                 ticker=ticker,
                 name=name,
                 mode=mode,
@@ -304,7 +339,7 @@ class PositionManager:
             session.add(new_pos)
             session.commit()
             logger.info(
-                f"Created position: {ticker} ({pos_id}) in profolio {profolio_id}"
+                f"Created position: {ticker} ({pos_id}) in profolio {portfolio_id}"
             )
             return pos_id
         except Exception as e:
@@ -322,6 +357,7 @@ class PositionManager:
             latest = (
                 session.query(PositionModel)
                 .filter_by(pos_id=pos_id)
+                .filter_by(deleted_at=None)
                 .order_by(desc(PositionModel.id))
                 .first()
             )
@@ -331,7 +367,7 @@ class PositionManager:
             now = datetime.utcnow()
             new_record = PositionModel(
                 pos_id=pos_id,
-                profolio_id=latest.profolio_id,
+                portfolio_id=latest.portfolio_id,
                 ticker=updates.get("ticker", latest.ticker),
                 name=updates.get("name", latest.name),
                 mode=updates.get("mode", latest.mode),
@@ -353,7 +389,7 @@ class PositionManager:
             )
             session.add(new_record)
             session.commit()
-            pro_id = latest.profolio_id
+            pro_id = latest.portfolio_id
             session.close()
             self.calculate_profolio(pro_id)
             return True
@@ -368,36 +404,34 @@ class PositionManager:
     # --- 7) Delete Position ---
     def delete_position(self, pos_id, history_id=None):
         try:
-            with self.engine.connect() as conn:
-                if history_id:
-                    # Delete specific snapshot
-                    conn.execute(
-                        text("DELETE FROM positions WHERE pos_id = :pid AND id = :hid"),
-                        {"pid": pos_id, "hid": history_id},
-                    )
-                else:
-                    # Delete position and all related trades
-                    conn.execute(
-                        text("DELETE FROM trade_records WHERE pos_id = :pid"),
-                        {"pid": pos_id},
-                    )
-                    conn.execute(
-                        text("DELETE FROM positions WHERE pos_id = :pid"),
-                        {"pid": pos_id},
-                    )
-                conn.commit()
+            now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")
+
+            if history_id:
+                # Soft delete specific snapshot
+                self.db.execute_raw_sql(
+                    f"UPDATE positions SET deleted_at = '{now}' WHERE pos_id = '{pos_id}' AND id = '{history_id}'"
+                )
+            else:
+                # Soft delete position and all related trades
+                self.db.execute_raw_sql(
+                    f"UPDATE trade_records SET deleted_at = '{now}' WHERE pos_id = '{pos_id}' AND deleted_at IS NULL"
+                )
+                self.db.execute_raw_sql(
+                    f"UPDATE positions SET deleted_at = '{now}' WHERE pos_id = '{pos_id}' AND deleted_at IS NULL"
+                )
             return True
         except Exception as e:
             logger.error(f"Failed to delete position: {e}")
             return False
 
     # --- 9) List Positions ---
-    def list_positions(self, profolio_id):
+    def list_positions(self, portfolio_id):
         session = self.Session()
         try:
             all_records = (
                 session.query(PositionModel)
-                .filter_by(profolio_id=profolio_id)
+                .filter_by(portfolio_id=portfolio_id)
+                .filter_by(deleted_at=None)
                 .order_by(desc(PositionModel.id))
                 .all()
             )
@@ -417,20 +451,37 @@ class PositionManager:
     def add_trade_record(self, pos_id, trade_type, quantity, price, trade_date=None):
         session = self.Session()
         try:
+            # Check if this is the first buy trade (for setting first_entry_date)
+            existing_trades = (
+                session.query(TradeRecordModel)
+                .filter_by(pos_id=pos_id)
+                .filter_by(deleted_at=None)
+                .all()
+            )
+            is_first_trade = len(existing_trades) == 0
+
             trade_id = str(uuid.uuid4())[:8]
             now = datetime.utcnow()
+            actual_trade_date = trade_date or now
+
             new_trade = TradeRecordModel(
                 trade_id=trade_id,
                 pos_id=pos_id,
                 type=trade_type,
                 quantity=quantity,
                 price=price,
-                trade_date=trade_date or now,
+                trade_date=actual_trade_date,
                 updated_at=now,
             )
             session.add(new_trade)
             session.commit()
             session.close()
+            time.sleep(0.6)  # Wait for WAL commit
+
+            # If this is the first buy trade, update first_entry_date
+            if is_first_trade and trade_type == "买入":
+                self._update_first_entry_date(pos_id, actual_trade_date)
+
             self.calculate_profit(pos_id)
             return trade_id
         except Exception as e:
@@ -440,6 +491,54 @@ class PositionManager:
         finally:
             if session:
                 session.close()
+
+    def _update_first_entry_date(self, pos_id, first_entry_date):
+        """Update first_entry_date for a position"""
+        session = self.Session()
+        try:
+            latest = (
+                session.query(PositionModel)
+                .filter_by(pos_id=pos_id)
+                .filter_by(deleted_at=None)
+                .order_by(desc(PositionModel.id))
+                .first()
+            )
+            if not latest:
+                return False
+
+            # Create new record with first_entry_date
+            time.sleep(0.001)
+            now = datetime.utcnow()
+            new_record = PositionModel(
+                pos_id=pos_id,
+                portfolio_id=latest.portfolio_id,
+                ticker=latest.ticker,
+                name=latest.name,
+                mode=latest.mode,
+                created_at=latest.created_at,
+                cost=latest.cost,
+                quantity=latest.quantity,
+                market_value=latest.market_value,
+                unrealized_profit=latest.unrealized_profit,
+                unrealized_profit_rate=latest.unrealized_profit_rate,
+                realized_profit=latest.realized_profit,
+                total_profit=latest.total_profit,
+                mode_params=latest.mode_params,
+                updated_at=now,
+                id=now,
+                stop_price=latest.stop_price,
+                first_entry_date=first_entry_date,
+            )
+            session.add(new_record)
+            session.commit()
+            logger.info(f"Updated first_entry_date for {pos_id}: {first_entry_date}")
+            return True
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Failed to update first_entry_date: {e}")
+            return False
+        finally:
+            session.close()
 
     # --- 3) Modify Trade Record ---
     def modify_trade_record(self, trade_id, updates):
@@ -472,18 +571,19 @@ class PositionManager:
             if not trade:
                 return False
             p_id = trade.pos_id
-            session.delete(trade)
-            session.commit()
             session.close()
-            self.calculate_profit(p_id)
-            return True
+
+            # Use soft delete via REST API
+            now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")
+            success = self.db.execute_raw_sql(
+                f"UPDATE trade_records SET deleted_at = '{now}' WHERE trade_id = '{trade_id}'"
+            )
+            if success:
+                self.calculate_profit(p_id)
+            return success
         except Exception as e:
-            session.rollback()
             logger.error(f"Failed to delete trade: {e}")
             return False
-        finally:
-            if session:
-                session.close()
 
     # --- 8) List Trade Records ---
     def list_trade_record(self, pos_id):
@@ -492,6 +592,7 @@ class PositionManager:
             return (
                 session.query(TradeRecordModel)
                 .filter_by(pos_id=pos_id)
+                .filter_by(deleted_at=None)
                 .order_by(TradeRecordModel.trade_date)
                 .all()
             )
@@ -505,12 +606,14 @@ class PositionManager:
             trades = (
                 session.query(TradeRecordModel)
                 .filter_by(pos_id=pos_id)
+                .filter_by(deleted_at=None)
                 .order_by(TradeRecordModel.trade_date)
                 .all()
             )
             latest_pos = (
                 session.query(PositionModel)
                 .filter_by(pos_id=pos_id)
+                .filter_by(deleted_at=None)
                 .order_by(desc(PositionModel.id))
                 .first()
             )
@@ -580,10 +683,188 @@ class PositionManager:
                 "total_profit": total_profit,
             }
             session.close()
-            return self.modify_position(pos_id, updates)
+
+            # 调用 modify_position 更新基础数据
+            result = self.modify_position(pos_id, updates)
+
+            # 如果有数据加载器，尝试计算并保存新的 stop_price 和 initial_atr
+            if result and self.data_loader and latest_pos.ticker:
+                try:
+                    # 创建 mode 实例
+                    mode_params = json.loads(latest_pos.mode_params or "{}")
+                    mode = ATRMode(**mode_params)
+
+                    # 确定计算ATR的日期范围
+                    from datetime import timedelta
+
+                    # 如果有首次建仓日期，从建仓日期开始计算ATR
+                    if latest_pos.first_entry_date:
+                        entry_date = latest_pos.first_entry_date
+                        if isinstance(entry_date, str):
+                            entry_date = datetime.fromisoformat(
+                                entry_date.replace("Z", "+00:00")
+                            )
+                        # 建仓日期往前推14天作为起始日期
+                        start_str = (entry_date - timedelta(days=20)).strftime(
+                            "%Y-%m-%d"
+                        )
+                        end_str = entry_date.strftime("%Y-%m-%d")
+                        logger.info(
+                            f"Calculating ATR from first_entry_date: {start_str} to {end_str}"
+                        )
+                    else:
+                        # 默认使用最近10天
+                        end_str = datetime.now().strftime("%Y-%m-%d")
+                        start_str = (datetime.now() - timedelta(days=10)).strftime(
+                            "%Y-%m-%d"
+                        )
+
+                    data_map = self.data_loader.ohlc(
+                        latest_pos.ticker, start_str, end_str, freq="d", now=True
+                    )
+                    price_df = data_map.get(latest_pos.ticker)
+
+                    if price_df is not None and not price_df.empty:
+                        current_price = float(price_df["close"].iloc[-1])
+
+                        # 计算建仓日的ATR值
+                        if latest_pos.first_entry_date:
+                            # 计算ATR (默认使用14天EMA)
+                            atr_val = mode._calculate_atr_from_ohlcv(price_df)
+                            if atr_val > 0:
+                                # 更新 initial_atr
+                                mode_params["initial_atr"] = atr_val
+                                self._save_initial_atr(pos_id, atr_val)
+                                logger.info(
+                                    f"Set initial_atr for {pos_id} from entry date: {atr_val}"
+                                )
+
+                        # 计算新的止损价
+                        position_info = {
+                            "current_price": current_price,
+                            "ohlcv": price_df,
+                        }
+                        new_stop_price = mode.calculate_stop_price(position_info)
+
+                        # 保存 stop_price 到数据库
+                        self.save_stop_price(pos_id, new_stop_price, mode_params)
+                        logger.info(
+                            f"Updated stop_price for {pos_id}: {new_stop_price}"
+                        )
+                except Exception as e:
+                    logger.warning(f"Failed to update stop_price: {e}")
+
+            return result
         except Exception as e:
             logger.error(f"Failed to calculate profit: {e}")
             return False
         finally:
             if session:
                 session.close()
+
+    def _save_initial_atr(self, pos_id, atr_val):
+        """保存 initial_atr 到 mode_params"""
+        session = self.Session()
+        try:
+            latest = (
+                session.query(PositionModel)
+                .filter_by(pos_id=pos_id)
+                .filter_by(deleted_at=None)
+                .order_by(desc(PositionModel.id))
+                .first()
+            )
+            if not latest:
+                return False
+
+            mode_params = json.loads(latest.mode_params or "{}")
+            mode_params["initial_atr"] = float(atr_val)
+
+            time.sleep(0.001)
+            now = datetime.utcnow()
+            new_record = PositionModel(
+                pos_id=pos_id,
+                portfolio_id=latest.portfolio_id,
+                ticker=latest.ticker,
+                name=latest.name,
+                mode=latest.mode,
+                created_at=latest.created_at,
+                cost=latest.cost,
+                quantity=latest.quantity,
+                market_value=latest.market_value,
+                unrealized_profit=latest.unrealized_profit,
+                unrealized_profit_rate=latest.unrealized_profit_rate,
+                realized_profit=latest.realized_profit,
+                total_profit=latest.total_profit,
+                mode_params=json.dumps(mode_params),
+                updated_at=now,
+                id=now,
+                stop_price=latest.stop_price,
+                first_entry_date=latest.first_entry_date,
+            )
+            session.add(new_record)
+            session.commit()
+            return True
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Failed to save initial_atr: {e}")
+            return False
+        finally:
+            session.close()
+
+    # --- Save Stop Price ---
+    def save_stop_price(self, pos_id, stop_price, mode_params=None):
+        """
+        保存或更新 position 的 stop_price 到基础字段和 mode_params 中。
+        """
+        session = self.Session()
+        try:
+            latest = (
+                session.query(PositionModel)
+                .filter_by(pos_id=pos_id)
+                .filter_by(deleted_at=None)
+                .order_by(desc(PositionModel.id))
+                .first()
+            )
+            if not latest:
+                logger.warning(f"Position {pos_id} not found for saving stop_price")
+                return False
+
+            # 更新 mode_params
+            if mode_params is None:
+                mode_params = json.loads(latest.mode_params or "{}")
+            else:
+                mode_params = json.loads(json.dumps(mode_params))  # 确保是dict
+            mode_params["stop_price"] = stop_price
+
+            # 创建新记录保存更新（同时更新基础字段 stop_price）
+            time.sleep(0.001)
+            now = datetime.utcnow()
+            new_record = PositionModel(
+                pos_id=pos_id,
+                portfolio_id=latest.portfolio_id,
+                ticker=latest.ticker,
+                name=latest.name,
+                mode=latest.mode,
+                created_at=latest.created_at,
+                cost=latest.cost,
+                quantity=latest.quantity,
+                market_value=latest.market_value,
+                unrealized_profit=latest.unrealized_profit,
+                unrealized_profit_rate=latest.unrealized_profit_rate,
+                realized_profit=latest.realized_profit,
+                total_profit=latest.total_profit,
+                mode_params=json.dumps(mode_params),
+                updated_at=now,
+                id=now,
+                stop_price=stop_price,  # 保存到基础字段
+                first_entry_date=latest.first_entry_date,
+            )
+            session.add(new_record)
+            session.commit()
+            return True
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Failed to save stop_price: {e}")
+            return False
+        finally:
+            session.close()
