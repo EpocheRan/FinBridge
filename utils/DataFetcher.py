@@ -25,46 +25,6 @@ class DataFetcher:
         """
         self.source = source
         self.db = questDB()  # 默认建立数据库链接，用于支持多源交互
-        self.initialize_tables()
-
-    def initialize_tables(self, force=False):
-        """
-        确保数据库表存在，如果关键表不存在则执行初始化
-        :param force: 强制检查所有表格并创建缺失表格
-        """
-        if not force:
-            self._create_tables()
-            return
-
-        table_name = self.db.get_ohlc_table_name("d")
-        try:
-            query = "SELECT * FROM tables();"
-            df = pd.read_sql(query, self.db.pd_conn)
-            target_col = (
-                "name"
-                if "name" in df.columns
-                else "table_name"
-                if "table_name" in df.columns
-                else None
-            )
-            if target_col:
-                if table_name not in df[target_col].values:
-                    self._create_tables()
-            else:
-                self._create_tables()
-        except Exception:
-            self._create_tables()
-
-    def _create_tables(self):
-        self._create_ohlc_table()
-        self._create_stock_basic_table()
-        self._create_fund_basic_table()
-        self._create_financial_indicators_table()
-        self._create_stock_industry_table()
-        self._create_rolling_financial_table()
-        self._create_concept_boards_table()
-        self._create_concept_ohlc_table()
-        self._create_concept_constituents_table()
 
     def get_ohlc(self, stock_code, start_date, end_date, freq="d") -> pd.DataFrame:
         if self.source == "akshare":
@@ -729,69 +689,6 @@ class DataFetcher:
             for ts, row in data.iterrows()
         ]
         self.db.batch_insert(q, r)
-
-    def _create_ohlc_table(self):
-        freqs = ["1min", "5min", "15min", "30min", "60min", "d", "w", "m"]
-        pm = {
-            "1min": "HOUR",
-            "5min": "HOUR",
-            "15min": "DAY",
-            "30min": "DAY",
-            "60min": "DAY",
-            "d": "MONTH",
-            "w": "MONTH",
-            "m": "YEAR",
-        }
-        for f in freqs:
-            tn, cols = (
-                questDB.get_ohlc_table_name(f),
-                "ts TIMESTAMP, open DOUBLE, high DOUBLE, low DOUBLE, close DOUBLE, volume LONG, amount LONG, code SYMBOL, market SYMBOL",
-            )
-            if not f.endswith("min"):
-                cols = "ts TIMESTAMP, open DOUBLE, high DOUBLE, low DOUBLE, close DOUBLE, volume LONG, amount LONG, turnover DOUBLE, code SYMBOL, market SYMBOL"
-            self.db.create_table(
-                f'CREATE TABLE IF NOT EXISTS "{tn}" ({cols}) TIMESTAMP(ts) PARTITION BY {pm[f]} WAL DEDUP UPSERT KEYS(ts, code, market)'
-            )
-
-    def _create_stock_basic_table(self):
-        self.db.create_table(
-            'CREATE TABLE IF NOT EXISTS "stock_basic_info" (ts TIMESTAMP, code SYMBOL, name STRING, fullname STRING, main_operation_biz STRING, affiliate_industry STRING, total_share DOUBLE, float_share DOUBLE, total_mv DOUBLE, float_mv DOUBLE, list_date TIMESTAMP) TIMESTAMP(ts) PARTITION BY MONTH WAL DEDUP UPSERT KEYS(code, ts)'
-        )
-
-    def _create_fund_basic_table(self):
-        self.db.create_table(
-            'CREATE TABLE IF NOT EXISTS "fund_basic_info" (ts TIMESTAMP, code SYMBOL, name STRING, fullname STRING, found_date TIMESTAMP, total_asset STRING, management STRING, fund_type SYMBOL, rating_agency STRING, rating STRING) TIMESTAMP(ts) PARTITION BY MONTH WAL DEDUP UPSERT KEYS(code, ts)'
-        )
-
-    def _create_financial_indicators_table(self):
-        self.db.create_table(
-            'CREATE TABLE IF NOT EXISTS "financial_indicators" (ts TIMESTAMP, code SYMBOL, statDate STRING, pubDate STRING, roeAvg DOUBLE, npMargin DOUBLE, gpMargin DOUBLE, netProfit DOUBLE, epsTTM DOUBLE, MBRevenue DOUBLE, totalShare DOUBLE, liqaShare DOUBLE) TIMESTAMP(ts) PARTITION BY MONTH WAL DEDUP UPSERT KEYS(code, ts)'
-        )
-
-    def _create_stock_industry_table(self):
-        self.db.create_table(
-            'CREATE TABLE IF NOT EXISTS "stock_industry" (ts TIMESTAMP, code SYMBOL, industry_name STRING, industry_classification STRING) TIMESTAMP(ts) PARTITION BY MONTH WAL DEDUP UPSERT KEYS(code, ts)'
-        )
-
-    def _create_rolling_financial_table(self):
-        self.db.create_table(
-            'CREATE TABLE IF NOT EXISTS "rolling_financial" (ts TIMESTAMP, code SYMBOL, peTTM DOUBLE, psTTM DOUBLE, pcfNcfTTM DOUBLE, pbMRQ DOUBLE) TIMESTAMP(ts) PARTITION BY MONTH WAL DEDUP UPSERT KEYS(code, ts)'
-        )
-
-    def _create_concept_constituents_table(self):
-        self.db.create_table(
-            'CREATE TABLE IF NOT EXISTS "concept_constituents" (ts TIMESTAMP, board_name STRING, board_code SYMBOL, stock_name STRING, stock_code SYMBOL) TIMESTAMP(ts) PARTITION BY YEAR WAL DEDUP UPSERT KEYS(ts, board_code, stock_code)'
-        )
-
-    def _create_concept_boards_table(self):
-        self.db.create_table(
-            'CREATE TABLE IF NOT EXISTS "concept_boards" (ts TIMESTAMP, code SYMBOL, name STRING) TIMESTAMP(ts) PARTITION BY YEAR WAL DEDUP UPSERT KEYS(ts, code)'
-        )
-
-    def _create_concept_ohlc_table(self):
-        self.db.create_table(
-            'CREATE TABLE IF NOT EXISTS "concept_boards_ohlc" (ts TIMESTAMP, code SYMBOL, name STRING, open DOUBLE, high DOUBLE, low DOUBLE, close DOUBLE, volume DOUBLE, amount DOUBLE) TIMESTAMP(ts) PARTITION BY MONTH WAL DEDUP UPSERT KEYS(ts, code)'
-        )
 
     def _read_sql_to_df(self, q):
         try:

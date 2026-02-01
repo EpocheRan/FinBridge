@@ -752,10 +752,10 @@ class DataLoader:
             # 2. 检查交易时间 (9:30-11:30, 13:00-15:00)
             is_trading_hour = False
             time_val = curr_time.time()
-            if (
-                time_val >= datetime.strptime("09:30", "%H:%M").time()
-                and time_val <= datetime.strptime("24:00", "%H:%M").time()
-            ):
+            # 使用 23:59:59 作为当天最晚时间 (替代无效的 24:00)
+            end_time = datetime.strptime("23:59:59", "%H:%M:%S").time()
+            start_time = datetime.strptime("09:30", "%H:%M").time()
+            if time_val >= start_time and time_val <= end_time:
                 is_trading_hour = True
 
             if not (is_trading_day and is_trading_hour):

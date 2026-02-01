@@ -134,6 +134,68 @@ class questDB:
     def __del__(self):
         self.close()
 
+    def execute_raw_sql(self, query, params=None):
+        """通过REST API执行原生SQL（支持UPDATE等操作）"""
+        try:
+            import requests
+            from urllib.parse import quote
+
+            config = self.config["questdb"]
+            host = config["host"]
+            port = 9000  # QuestDB REST API port
+
+            # 构建查询URL (使用GET方法)
+            full_query = query
+            if params:
+                for key, value in params.items():
+                    if isinstance(value, str):
+                        full_query = full_query.replace(f":{key}", f"'{value}'")
+                    else:
+                        full_query = full_query.replace(f":{key}", str(value))
+
+            # URL编码查询
+            encoded_query = quote(full_query, safe="")
+            url = f"http://{host}:{port}/exec?query={encoded_query}"
+
+            # Try without auth first
+            response = requests.get(url, timeout=10)
+
+            if response.status_code == 200:
+                return True
+            elif response.status_code == 401:
+                # Try with basic auth
+                from requests.auth import HTTPBasicAuth
+
+                user = config.get("user", "admin")
+                password = config.get("password", "")
+                response = requests.get(
+                    url, auth=HTTPBasicAuth(user, password), timeout=10
+                )
+                if response.status_code == 200:
+                    return True
+                else:
+                    logger.error(
+                        f"REST API auth failed: {response.status_code} - {response.text}"
+                    )
+                    return False
+            else:
+                logger.error(
+                    f"REST API执行失败: {response.status_code} - {response.text}"
+                )
+                return False
+        except Exception as e:
+            logger.error(f"REST API调用失败: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"REST API调用失败: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"REST API调用失败: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"REST API调用失败: {e}")
+            return False
+
     @property
     def pd_conn(self):
         config_map = self.config["questdb"]

@@ -13,8 +13,8 @@ import pandas as pd
 # 导入本地模块
 from utils.DataLoader import DataLoader
 from utils.TradingDateManage import TradingDateManage
-from position import PositionManager
-from indicator import ATR, IndicatorEngine
+from scripts.initialize import check_and_initialize_tables
+from position import PositionAgentInterface
 
 
 # -----------------------------------------------------------------------------
@@ -126,11 +126,14 @@ logging.getLogger("Data Connection").setLevel(logging.WARNING)
 
 # 初始化数据加载器
 try:
+    logger.info("检查并初始化数据库表...")
+    check_and_initialize_tables()
+    logger.info("数据库表检查完成")
+
     logger.info("初始化数据加载器...")
     data_loader = DataLoader()
     trading_date_manager = TradingDateManage()
-    position_manager = PositionManager(data_loader=data_loader)
-    indicator_engine = IndicatorEngine()
+    position_interface = PositionAgentInterface(data_loader=data_loader)
     logger.info("数据加载器初始化完成")
 
 
@@ -449,431 +452,118 @@ async def get_data_status() -> Dict[str, Any]:
 
 
 @mcp.tool()
-async def pm_update_position(ticker: str, updates: str) -> Dict[str, Any]:
-    """
-    修改持仓信息中的指定字段
-
-    Args:
-        ticker: 股票代码
-        updates: JSON字符串，包含要修改的字段和值 (例如 '{"stop_price": 10.5, "n_factor": 2.0}')
-    """
-    import json
-
-    try:
-        updates_dict = {}
-        if isinstance(updates, str):
-            try:
-                updates_dict = json.loads(updates)
-            except json.JSONDecodeError:
-                return create_response(
-                    success=False,
-                    message="Updates 参数必须是有效的 JSON 字符串",
-                    error_type="JsonParseError",
-                    suggestion="请检查 JSON 格式，例如: '{\"stop_price\": 10.5}'，注意使用双引号。",
-                )
-        elif isinstance(updates, dict):
-            updates_dict = updates
-        else:
-            return create_response(
-                success=False,
-                message="Updates 参数类型错误",
-                error_type="TypeError",
-                suggestion="Updates 必须是 JSON 字符串或字典。",
-            )
-
-        success = position_manager.update_position(ticker, updates_dict)
-        if success:
-            return create_response(
-                success=True,
-                message=f"成功更新 {ticker} 的持仓信息",
-                result=updates_dict,
-            )
-        else:
-            return create_response(
-                success=False,
-                message=f"未找到股票 {ticker} 的持仓记录",
-                error_type="PositionNotFound",
-                suggestion="请先确认该股票是否在持仓列表中 (调用 pm_get_all_positions)，或检查代码是否正确。",
-            )
-    except Exception as e:
-        return create_response(
-            success=False,
-            message=f"更新持仓时发生未知错误",
-            error_type="SystemError",
-            suggestion=str(e),
-        )
+async def pm_create_portfolio(name: str, initial_cash: float) -> Dict[str, Any]:
+    """Create a new investment portfolio."""
+    return position_interface.create_portfolio(name, initial_cash)
 
 
 @mcp.tool()
-async def pm_update_capital(total_capital: float, cash: float) -> Dict[str, Any]:
-    """
-    更新账户总资产和可用现金
-
-    Args:
-        total_capital: 总资产
-        cash: 可用现金
-    """
-    try:
-        position_manager.update_capital(total_capital, cash)
-        return {
-            "success": True,
-            "message": f"Updated capital: total={total_capital}, cash={cash}",
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+async def pm_list_portfolios() -> Dict[str, Any]:
+    """List all available investment portfolios."""
+    return position_interface.list_portfolios()
 
 
 @mcp.tool()
-async def pm_update_config(
-    n_factor: float = None, time_stop_days: int = None, risk_per_trade: float = None
+async def pm_delete_portfolio(portfolio_id: str) -> Dict[str, Any]:
+    """Delete a portfolio and all its data."""
+    return position_interface.delete_portfolio(portfolio_id)
+
+
+@mcp.tool()
+async def pm_modify_portfolio(
+    portfolio_id: str, name: str = None, cash: float = None
 ) -> Dict[str, Any]:
     """
-    更新持仓管理的全局配置参数
+    Modify portfolio name or cash balance.
 
     Args:
-        n_factor: ATR倍数 (如 1.5, 2.0)
-        time_stop_days: 时间止损天数
-        risk_per_trade: 单笔交易风险比例 (如 0.02)
+        portfolio_id: Portfolio ID to modify.
+        name: New portfolio name (optional).
+        cash: New cash balance (optional).
     """
-    try:
-        position_manager.update_config(n_factor, time_stop_days, risk_per_trade)
-        return {
-            "success": True,
-            "message": f"Config updated successfully",
-            "config": {
-                "n_factor": position_manager.n_factor,
-                "time_stop_days": position_manager.time_stop_days,
-                "risk_per_trade": position_manager.risk_per_trade,
-            },
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    return position_interface.modify_portfolio(portfolio_id, name, cash)
 
 
 @mcp.tool()
-async def pm_calculate_base_position(
+async def pm_modify_position(
+    pos_id: str, name: str = None, quantity: float = None
+) -> Dict[str, Any]:
+    """
+    Modify position name or quantity.
+
+    Args:
+        pos_id: Position ID to modify.
+        name: New position name/stock name (optional).
+        quantity: New quantity (optional).
+    """
+    return position_interface.modify_position(pos_id, name, quantity)
+
+
+@mcp.tool()
+async def pm_get_portfolio_status(portfolio_id: str) -> Dict[str, Any]:
+    """Get the current status of the portfolio."""
+    return position_interface.get_portfolio_status(portfolio_id)
+
+
+@mcp.tool()
+async def pm_list_modes() -> Dict[str, Any]:
+    """List all available risk management and position sizing modes."""
+    return position_interface.get_available_modes()
+
+
+@mcp.tool()
+async def pm_open_position(
+    portfolio_id: str,
     ticker: str,
-    current_price: float,
-    atr: float,
-    structure_stop: float,
+    name: str,
+    mode: str,
+    initial_atr: float = None,
     n_factor: float = None,
 ) -> Dict[str, Any]:
     """
-    计算初始建仓仓位
-
-    Args:
-        ticker: 股票代码
-        current_price: 当前价格
-        atr: ATR值
-        structure_stop: 结构性止损价
-        n_factor: N系数 (可选)
+    Open a new tracking position.
+    Note: You should call pm_list_modes first to let user choose an appropriate mode.
     """
-    try:
-        # 0. 基础逻辑校验
-        if current_price <= 0:
-            return create_response(
-                success=False,
-                message="当前价格必须大于 0",
-                error_type="InvalidPrice",
-                suggestion="请检查 current_price 参数。",
-            )
-
-        if structure_stop >= current_price:
-            return create_response(
-                success=False,
-                message=f"结构性止损价 ({structure_stop}) 必须低于当前价格 ({current_price})",
-                error_type="InvalidStopPrice",
-                suggestion="对于做多策略，止损价必须位于现价下方。请重新分析支撑位。",
-            )
-
-        # 1. 检查资金状态 (前置拦截)
-        if position_manager.state["total_capital"] <= 0:
-            return create_response(
-                success=False,
-                message="账户总资产未设置或为 0",
-                error_type="InsufficientCapital",
-                suggestion="请先调用 'pm_update_capital' 工具设置您的账户总资金和可用现金。",
-            )
-
-        # 2. 执行计算
-        res = position_manager.calculate_base_position(
-            ticker, current_price, atr, structure_stop, n_factor
-        )
-
-        if res:
-            return create_response(
-                success=True, message=f"成功计算 {ticker} 的风控仓位", result=res
-            )
-        else:
-            # PositionManager 返回 None 通常是因为资金不足以购买 1 手，或止损距离为负
-            # 尝试推断原因
-            cash = position_manager.state["cash"]
-            if cash < current_price * 100:
-                return create_response(
-                    success=False,
-                    message="可用现金不足以购买 1 手 (100股)",
-                    error_type="InsufficientCash",
-                    suggestion=f"当前现金: {cash}, 最小买入成本约: {current_price * 100}。建议增加资金或放弃交易。",
-                )
-
-            return create_response(
-                success=False,
-                message="仓位计算失败 (返回为空)",
-                error_type="CalculationFailed",
-                suggestion="请检查 ATR 或止损价参数是否合理，导致风险距离为负或计算出的股数为 0。",
-            )
-
-    except Exception as e:
-        return create_response(
-            success=False,
-            message="计算仓位时发生异常",
-            error_type="SystemError",
-            suggestion=str(e),
-        )
+    kwargs = {}
+    if initial_atr is not None:
+        kwargs["initial_atr"] = initial_atr
+    if n_factor is not None:
+        kwargs["n_factor"] = n_factor
+    return position_interface.open_position(portfolio_id, ticker, name, mode, **kwargs)
 
 
 @mcp.tool()
-async def pm_calculate_stop_price(
-    current_price: float, atr: float, structure_stop: float, n_factor: float = None
+async def pm_execute_trade(
+    portfolio_id: str, ticker: str, action: str, quantity: float, price: float
 ) -> Dict[str, Any]:
-    """
-    计算止损价格
-
-    Args:
-        current_price: 当前价格
-        atr: ATR值
-        structure_stop: 结构性止损价
-        n_factor: N系数 (可选)
-    """
-    try:
-        res = position_manager.calculate_stop_price(
-            current_price, atr, structure_stop, n_factor
-        )
-        return {"success": True, "result": res}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-
-@mcp.tool()
-async def pm_create_position(
-    ticker: str,
-    entry_time: str,
-    cost_price: float,
-    quantity: float,
-    recent_prices: List[Dict[str, Any]],
-    n_factor: float = None,
-    structure_stop: float = None,
-) -> Dict[str, Any]:
-    """
-    手动创建持仓
-
-    Args:
-        ticker: 股票代码
-        entry_time: 建仓时间 'YYYY-MM-DD'
-        cost_price: 成本价
-        quantity: 数量
-        recent_prices: 最近一个月的价格数据 (列表，包含 open, high, low, close)
-        n_factor: N系数 (可选)
-        structure_stop: 结构化止损 (可选)
-    """
-    try:
-        res = position_manager.create_position(
-            ticker,
-            entry_time,
-            cost_price,
-            quantity,
-            recent_prices,
-            n_factor,
-            structure_stop,
-        )
-        if res:
-            return {"success": True, "result": res}
-        else:
-            return {"success": False, "error": "Failed to create position"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-
-@mcp.tool()
-async def pm_check_dead_position(
-    ticker: str, current_price: float, current_date_str: str
-) -> Dict[str, Any]:
-    """
-    检查是否为僵尸仓位（需要平仓）
-
-    Args:
-        ticker: 股票代码
-        current_price: 当前价格
-        current_date_str: 当前日期 'YYYY-MM-DD'
-    """
-    try:
-        is_dead = position_manager.check_dead_position(
-            ticker, current_price, current_date_str
-        )
-        return {"success": True, "is_dead": is_dead}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-
-@mcp.tool()
-async def pm_check_pyramid_signal(ticker: str, current_price: float) -> Dict[str, Any]:
-    """
-    检查加仓信号
-
-    Args:
-        ticker: 股票代码
-        current_price: 当前价格
-    """
-    try:
-        res = position_manager.check_pyramid_signal(ticker, current_price)
-        return {"success": True, "signal": res}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-
-@mcp.tool()
-async def pm_record_entry(trade_data: Dict[str, Any], date_str: str) -> Dict[str, Any]:
-    """
-    记录建仓交易
-
-    Args:
-        trade_data: 交易数据（通常来自 pm_calculate_base_position）
-        date_str: 交易日期 'YYYY-MM-DD'
-    """
-    try:
-        position_manager.record_entry(trade_data, date_str)
-        return {
-            "success": True,
-            "message": f"Recorded entry for {trade_data.get('ticker')}",
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-
-@mcp.tool()
-async def pm_record_addon(trade_data: Dict[str, Any], date_str: str) -> Dict[str, Any]:
-    """
-    记录加仓交易
-
-    Args:
-        trade_data: 交易数据（通常来自 pm_check_pyramid_signal）
-        date_str: 交易日期 'YYYY-MM-DD'
-    """
-    try:
-        position_manager.record_addon(trade_data, date_str)
-        return {
-            "success": True,
-            "message": f"Recorded addon for {trade_data.get('ticker')}",
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    """Record a buy or sell trade."""
+    return position_interface.execute_trade(
+        portfolio_id, ticker, action, quantity, price
+    )
 
 
 @mcp.tool()
 async def pm_close_position(
-    ticker: str, price: float, date_str: str, reason: str = "Signal"
+    portfolio_id: str, ticker: str, price: float
 ) -> Dict[str, Any]:
-    """
-    记录平仓交易
-
-    Args:
-        ticker: 股票代码
-        price: 平仓价格
-        date_str: 平仓日期 'YYYY-MM-DD'
-        reason: 平仓原因
-    """
-    try:
-        position_manager.close_position(ticker, price, date_str, reason)
-        return {"success": True, "message": f"Closed position for {ticker}"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    """Fully close a position."""
+    return position_interface.close_position(portfolio_id, ticker, price)
 
 
 @mcp.tool()
-async def pm_get_all_positions() -> Dict[str, Any]:
-    """
-    获取所有当前持仓和账户状态
-    """
-    try:
-        return {
-            "success": True,
-            "result": {
-                "state": position_manager.state,
-                "positions": position_manager.positions,
-            },
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-
-# --- Indicator Tools ---
+async def pm_check_signals(portfolio_id: str, ticker: str) -> Dict[str, Any]:
+    """Check for add/reduce signals for an existing position."""
+    return position_interface.get_trading_signals(portfolio_id, ticker)
 
 
 @mcp.tool()
-async def calculate_atr(
-    stock_code: str, start_date: str, end_date: str, n: int = 14, method: str = "EMA"
+async def pm_get_buying_advice(
+    portfolio_id: str, ticker: str, initial_risk_per_trade: float = None
 ) -> Dict[str, Any]:
-    """
-    计算股票的ATR (平均真实波幅)
-
-    Args:
-        stock_code: 股票代码 (如 600519)
-        start_date: 开始日期 YYYY-MM-DD
-        end_date: 结束日期 YYYY-MM-DD
-        n: 计算周期，默认 14
-        method: 计算方法，可选 "EMA", "SMA", "WMA"，默认 "EMA"
-    """
-    try:
-        # 1. 获取 OHLC 数据
-        # 考虑到指标计算需要一定的回看期 (lookback)，往前多取一个月的数据
-        from datetime import datetime, timedelta
-
-        lookback_start = (
-            datetime.strptime(start_date, "%Y-%m-%d") - timedelta(days=60)
-        ).strftime("%Y-%m-%d")
-
-        normalized_code = normalize_code(stock_code)
-        stock_data = data_loader.ohlc(
-            normalized_code, lookback_start, end_date, freq="d"
-        )
-
-        df = stock_data.get(normalized_code)
-        if df is None or df.empty:
-            return {"success": False, "error": f"No data found for {stock_code}"}
-
-        # 2. 准备数据格式给 backtrader (需要 open, high, low, close, volume)
-        # 确保列名为小写且存在
-        df.columns = [c.lower() for c in df.columns]
-
-        # 3. 计算 ATR
-        res_df = indicator_engine.calculate(df, ATR, N=n, method=method)
-
-        # 4. 过滤回用户请求的日期范围并格式化
-        mask = (res_df.index >= pd.to_datetime(start_date)) & (
-            res_df.index <= pd.to_datetime(end_date)
-        )
-        final_df = res_df.loc[mask].copy()
-        final_df["ts"] = final_df.index.strftime("%Y-%m-%d")
-
-        # 5. 提取最新的 ATR 值 (用于便捷使用)
-        latest_atr = None
-        if not final_df.empty:
-            latest_atr = float(final_df["atr"].iloc[-1])
-
-        data_list = final_df.reset_index(drop=True).to_dict("records")
-
-        return {
-            "success": True,
-            "result": {
-                "ticker": stock_code,
-                "latest_atr": latest_atr,
-                "data": data_list,
-                "count": len(data_list),
-            },
-        }
-    except Exception as e:
-        logger.error(f"Error calculating ATR for {stock_code}: {e}")
-        return {"success": False, "error": str(e)}
+    """Get position sizing advice for a potential new trade."""
+    return position_interface.get_buying_advice(
+        portfolio_id, ticker, initial_risk_per_trade
+    )
 
 
 if __name__ == "__main__":
