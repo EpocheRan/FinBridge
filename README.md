@@ -7,7 +7,7 @@
 ```bash
 docker-compose up -d
 ```
-> **注意**：在运行 Docker 时，请确保将 `quantProject` 所在的**项目目录共享（Share/Mount）给容器**，以便 Docker 环境能够正确访问 Python 代码、加载本地模块并读取配置文件 (`config.json`)。
+> **注意**：在运行 Docker 时，请确保将 `FinBridge` 所在的**项目目录共享（Share/Mount）给容器**，以便 Docker 环境能够正确访问 Python 代码、加载本地模块并读取配置文件 (`config.json`)。
 
 ### 2. 本地运行 (非 Docker)
 1. **安装 QuestDB**：访问 [QuestDB 官网](https://questdb.io/) 下载并安装，确保服务在 8812 端口运行。
@@ -81,7 +81,7 @@ await pm_execute_trade(portfolio_id=id, ticker="600519", action="BUY", quantity=
 
 ## 4. 项目结构
 ```text
-quantProject/
+FinBridge/
 ├── MCPserver.py        # MCP 服务器入口
 ├── config.json         # 数据库与系统配置
 ├── utils/              # 数据加载、抓取与连接管理
