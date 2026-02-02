@@ -41,7 +41,7 @@ docker-compose up -d
 
 
 ## 1. 项目概述
-QuantProject 是基于 **Model Context Protocol (MCP)** 的量化交易管理系统，旨在为 AI Agent 提供标准化的金融数据接口和专业的持仓风控功能。
+FinBridge 是基于 **Model Context Protocol (MCP)** 的量化交易管理系统，旨在为 AI Agent 提供标准化的金融数据接口和专业的持仓风控功能。
 
 - **数据层**：聚合 Akshare、Baostock，支持增量更新至 QuestDB。
 - **协议层**：基于 FastMCP 暴露标准化工具函数。
