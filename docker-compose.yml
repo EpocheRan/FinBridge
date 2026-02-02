@@ -13,6 +13,7 @@ services:
     # 数据持久化建议：取消下方注释以持久化数据到本地目录
     # volumes:
     #   - ./questdb_data:/var/lib/questdb
+    #   - "D:/questdbData:/var/lib/questdb"
 
 
   # 你的 Python MCP Server
