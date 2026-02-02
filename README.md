@@ -22,12 +22,18 @@ docker-compose up -d
      mcp.run()
      ```
 4. **安装依赖并启动**：
-   ```bash
-   uv pip install -e .  # 或 pip install -e .
-   python MCPserver.py
-   ```
+    ```bash
+    uv pip install -e .  # 或 pip install -e .
+    python MCPserver.py
+    ```
+
+### 3. SSE 客户端配置示例
+若使用 Claude Desktop 或其他支持 MCP SSE 的客户端，配置如下：
+- **类型 (Type)**: `sse`
+- **URL**: `http://localhost:8080/sse`
 
 ---
+
 
 ## 1. 项目概述
 QuantProject 是基于 **Model Context Protocol (MCP)** 的量化交易管理系统，旨在为 AI Agent 提供标准化的金融数据接口和专业的持仓风控功能。
