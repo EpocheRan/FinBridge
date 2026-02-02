@@ -1,4 +1,4 @@
-# QuantProject - 量化交易数据与持仓管理系统
+# FinBridge MCP - 量化交易数据与持仓管理系统
 
 ## 快速安装与配置
 
