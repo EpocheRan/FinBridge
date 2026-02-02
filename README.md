@@ -32,6 +32,11 @@ docker-compose up -d
 - **类型 (Type)**: `sse`
 - **URL**: `http://localhost:8080/sse`
 
+### 4. 数据持久化建议
+为了防止容器删除后数据丢失，建议为 QuestDB 配置持久化存储：
+- **Docker 方式**：取消 `docker-compose.yml` 中 `questdb` 服务下 `volumes` 的注释，将数据映射到本地 `./questdb_data` 目录。
+- **本地方式**：QuestDB 默认会将数据存储在其安装目录的 `db` 文件夹下，请定期备份该目录。
+
 ---
 
 

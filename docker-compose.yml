@@ -10,8 +10,10 @@ services:
       - "9000:9000"  # Web Console & HTTP API
       - "9009:9009"  # InfluxDB Line Protocol (ILP)
       - "8812:8812"  # PostgreSQL Wire Protocol
-    #volumes:
-    #  - "D:/questdbData:/var/lib/questdb" # 数据持久化到 D 盘
+    # 数据持久化建议：取消下方注释以持久化数据到本地目录
+    # volumes:
+    #   - ./questdb_data:/var/lib/questdb
+
 
   # 你的 Python MCP Server
   mcp-server:
