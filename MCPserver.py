@@ -586,9 +586,9 @@ if __name__ == "__main__":
 
     logger.info("启动MCP服务器...")
 
-    # 运行MCP服务器（使用stdio方式）
+    # 运行MCP服务器（使用SSE方式）
     try:
-        mcp.run()
+        mcp.run(transport="sse", host="0.0.0.0", port=8080)
     except KeyboardInterrupt:
         logger.info("MCP服务器被用户中断")
     except Exception as e:

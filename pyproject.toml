@@ -10,6 +10,6 @@ dependencies = [
     "baostock>=0.8.9",
     "fastmcp>=3.0.0b1",
     "pd>=0.0.4",
-    "psycopg2>=2.9.11",
+    "psycopg2-binary>=2.9.11",
     "sqlalchemy>=2.0.46",
 ]

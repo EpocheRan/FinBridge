@@ -1,0 +1,34 @@
+version: '3.8'
+
+services:
+  # QuestDB 数据库服务
+  questdb:
+    image: questdb/questdb:latest
+    container_name: questdb-server
+    restart: always
+    ports:
+      - "9000:9000"  # Web Console & HTTP API
+      - "9009:9009"  # InfluxDB Line Protocol (ILP)
+      - "8812:8812"  # PostgreSQL Wire Protocol
+    #volumes:
+    #  - "D:/questdbData:/var/lib/questdb" # 数据持久化到 D 盘
+
+  # 你的 Python MCP Server
+  mcp-server:
+    image: python:3.14.2-alpine3.23
+    container_name: mcp-app
+    working_dir: /app
+    volumes:
+      - .:/app 
+      - /app/.venv
+    environment:
+      - UV_PROJECT_ENVIRONMENT=/app/.venv
+      - QUESTDB_HOST=questdb 
+    ports:
+      - "8080:8080"
+    depends_on:
+      - questdb
+    command: >
+      sh -c "pip install uv && 
+             uv sync && 
+             .venv/bin/python MCPserver.py"

@@ -1,9 +1,9 @@
 {
     "questdb": {
-                "host": "localhost",
+                "host": "questdb",
                 "port": 8812,
                 "user": "admin",
-                "password": "ouGKb6PWSh_ZMcmg",
+                "password": "quest",
                 "database": "stocks"
             }
 }
