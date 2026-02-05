@@ -59,16 +59,33 @@ class questDB:
         try:
             self.conn = psycopg2.connect(**self.config["questdb"])
             self.conn.autocommit = True
+            # 设置连接参数，避免空闲超时
+            self.conn.set_session(autocommit=True, readonly=False)
             logger.info("数据库连接成功")
         except Exception as e:
             logger.error(f"数据库连接失败: {e}")
 
     def is_connected(self):
         """检查数据库是否连接成功"""
-        return self.conn is not None and self.conn.closed == 0
+        try:
+            if self.conn is None or self.conn.closed != 0:
+                return False
+            # 尝试执行简单查询验证连接
+            with self.conn.cursor() as cursor:
+                cursor.execute("SELECT 1")
+            return True
+        except Exception:
+            return False
+
+    def _ensure_connected(self):
+        """确保数据库连接，如果断开则重连"""
+        if not self.is_connected():
+            logger.warning("数据库连接已断开，尝试重连...")
+            self._connect()
 
     def query(self, query, params=None, fetch_all=True):
         """执行SQL查询"""
+        self._ensure_connected()
         if not self.is_connected():
             logger.error("数据库未连接")
             return None
@@ -79,11 +96,26 @@ class questDB:
                     return cursor.fetchall()
                 return cursor.fetchone()
         except Exception as e:
+            # 如果是连接错误，尝试重连一次
+            if "connection" in str(e).lower() or "closed" in str(e).lower():
+                logger.warning(f"查询连接错误，尝试重连: {e}")
+                self._ensure_connected()
+                if self.is_connected():
+                    try:
+                        with self.conn.cursor() as cursor:
+                            cursor.execute(query, params)
+                            if fetch_all:
+                                return cursor.fetchall()
+                            return cursor.fetchone()
+                    except Exception as retry_e:
+                        logger.error(f"重连后查询失败: {retry_e}")
+                        return None
             logger.error(f"查询执行失败: {e}\n查询: {query}\n参数: {params}")
             return None
 
     def update(self, query, params=None):
         """执行更新操作（INSERT/UPDATE/DELETE）"""
+        self._ensure_connected()
         if not self.is_connected():
             logger.error("数据库未连接")
             return False
@@ -91,14 +123,26 @@ class questDB:
         try:
             with self.conn.cursor() as cursor:
                 cursor.execute(query, params)
-                # self.conn.commit()
                 return True
         except Exception as e:
+            # 如果是连接错误，尝试重连一次
+            if "connection" in str(e).lower() or "closed" in str(e).lower():
+                logger.warning(f"更新连接错误，尝试重连: {e}")
+                self._ensure_connected()
+                if self.is_connected():
+                    try:
+                        with self.conn.cursor() as cursor:
+                            cursor.execute(query, params)
+                        return True
+                    except Exception as retry_e:
+                        logger.error(f"重连后更新失败: {retry_e}")
+                        return False
             logger.error(f"更新操作失败: {e}\n查询: {query}\n参数: {params}")
             return False
 
     def create_table(self, query):
         """创建表"""
+        self._ensure_connected()
         if not self.is_connected():
             logger.error("数据库未连接")
             return False
@@ -113,6 +157,7 @@ class questDB:
 
     def batch_insert(self, query, data):
         """批量插入数据"""
+        self._ensure_connected()
         if not data or not self.is_connected():
             return False
         try:
@@ -200,7 +245,13 @@ class questDB:
     def pd_conn(self):
         config_map = self.config["questdb"]
         return create_engine(
-            f"""postgresql+psycopg2://{config_map["user"]}:{config_map["password"]}@{config_map["host"]}:{config_map["port"]}/{config_map["database"]}"""
+            f"""postgresql+psycopg2://{config_map["user"]}:{config_map["password"]}@{config_map["host"]}:{config_map["port"]}/{config_map["database"]}""",
+            pool_pre_ping=True,  # 在使用连接前检查连接是否有效
+            pool_recycle=1800,  # 每30分钟回收连接，避免空闲超时
+            pool_size=5,  # 连接池大小
+            max_overflow=10,  # 最大额外连接数
+            pool_timeout=30,  # 获取连接超时时间
+            pool_reset_on_return="rollback",  # 重置连接
         )
 
     @staticmethod

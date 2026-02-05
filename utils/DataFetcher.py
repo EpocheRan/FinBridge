@@ -4,7 +4,6 @@
 
 import pandas as pd
 from datetime import datetime, timedelta
-import time
 import logging
 import akshare as ak
 
@@ -17,6 +16,13 @@ logging.basicConfig(
 logger = logging.getLogger("Data Fetcher")
 
 
+def _normalize_code(code: str) -> str:
+    """去除股票代码后缀，如 600519.SH -> 600519"""
+    if isinstance(code, str):
+        return code.split(".")[0]
+    return str(code)
+
+
 class DataFetcher:
     def __init__(self, source="questdb"):
         """
@@ -27,6 +33,9 @@ class DataFetcher:
         self.db = questDB()  # 默认建立数据库链接，用于支持多源交互
 
     def get_ohlc(self, stock_code, start_date, end_date, freq="d") -> pd.DataFrame:
+        # 标准化股票代码
+        stock_code = _normalize_code(stock_code)
+
         if self.source == "akshare":
             return self._fetch_from_akshare(stock_code, start_date, end_date, freq)
         elif self.source == "baostock":
@@ -42,7 +51,7 @@ class DataFetcher:
         sources = {
             "stock": ak.stock_zh_a_spot_em,
             "etf": ak.fund_etf_spot_ths,
-            "lof": ak.fund_lof_spot_em,
+            "lof": ak.stock_zh_a_spot,
         }
         if source_type in sources:
             try:
@@ -105,7 +114,6 @@ class DataFetcher:
     def _fetch_from_akshare(
         self, stock_code, start_date, end_date, freq
     ) -> pd.DataFrame:
-        max_retry, retry_delay = 3, 2
         ticker_type = self.get_ticker_type(stock_code)
 
         if freq.endswith("min"):
@@ -116,16 +124,37 @@ class DataFetcher:
                 datetime.strptime(end_date, "%Y-%m-%d"),
             )
 
-            if ticker_type == "etf":
-                func = ak.fund_etf_hist_min_em
-            elif ticker_type == "lof":
-                func = ak.fund_lof_hist_min_em
+            if ticker_type in ["etf", "lof"]:
+                # Use Sina for fund min data
+                prefix = (
+                    "sz"
+                    if stock_code.startswith(("15", "16", "18", "39", "159"))
+                    else "sh"
+                )
+                try:
+                    df = ak.stock_zh_a_minute(
+                        symbol=f"{prefix}{stock_code}", period=f"{period}", adjust="qfq"
+                    )
+                    if not df.empty:
+                        df.columns = ["ts", "open", "high", "low", "close", "volume"]
+                        df["amount"] = 0  # Sina minute doesn't provide amount
+                        df["ts"] = pd.to_datetime(df["ts"])
+                        df["code"] = stock_code
+                        # Filter by date range
+                        start_dt = pd.to_datetime(start_date)
+                        end_dt = pd.to_datetime(end_date) + timedelta(days=1)
+                        df = df[(df["ts"] >= start_dt) & (df["ts"] < end_dt)]
+                        df.set_index("ts", inplace=True)
+                        return df[
+                            ["code", "open", "high", "low", "close", "volume", "amount"]
+                        ]
+                except Exception as e:
+                    logger.warning(f"Sina min fetch failed for {stock_code}: {e}")
+                    return pd.DataFrame()
             else:
                 func = ak.stock_zh_a_hist_min_em
-
-            while curr <= end_dt:
-                ce = min(curr + timedelta(days=7), end_dt)
-                for _ in range(max_retry):
+                while curr <= end_dt:
+                    ce = min(curr + timedelta(days=7), end_dt)
                     try:
                         df = func(
                             symbol=stock_code,
@@ -136,65 +165,14 @@ class DataFetcher:
                         )
                         if not df.empty:
                             all_data.append(df)
-                        break
                     except:
-                        time.sleep(retry_delay)
-                curr = ce + timedelta(days=1)
-            if not all_data:
-                return pd.DataFrame()
-            df = pd.concat(all_data)
-            df.columns = (
-                [
-                    "ts",
-                    "open",
-                    "high",
-                    "low",
-                    "close",
-                    "volume",
-                    "amount",
-                    "dummy1",
-                    "dummy2",
-                ]
-                if len(df.columns) == 9
-                else ["ts", "open", "high", "low", "close", "volume", "amount"]
-            )
-            df["ts"] = pd.to_datetime(df["ts"])
-            df["code"] = stock_code
-            df.set_index("ts", inplace=True)
-            return df[["code", "open", "high", "low", "close", "volume", "amount"]]
-        else:
-            pm = {"d": "daily", "w": "weekly", "m": "monthly"}
-            start_c, end_c = start_date.replace("-", ""), end_date.replace("-", "")
-
-            if ticker_type == "etf":
-                func = ak.fund_etf_hist_em
-            elif ticker_type == "lof":
-                func = ak.fund_lof_hist_em
-            else:
-                func = ak.stock_zh_a_hist
-
-            for _ in range(max_retry):
-                try:
-                    df = func(
-                        symbol=stock_code,
-                        period=pm[freq],
-                        start_date=start_c,
-                        end_date=end_c,
-                        adjust="qfq",
-                    )
-                    df = df[
-                        [
-                            "日期",
-                            "开盘",
-                            "最高",
-                            "最低",
-                            "收盘",
-                            "成交量",
-                            "成交额",
-                            "换手率",
-                        ]
-                    ]
-                    df.columns = [
+                        pass
+                    curr = ce + timedelta(days=1)
+                if not all_data:
+                    return pd.DataFrame()
+                df = pd.concat(all_data)
+                df.columns = (
+                    [
                         "ts",
                         "open",
                         "high",
@@ -202,33 +180,157 @@ class DataFetcher:
                         "close",
                         "volume",
                         "amount",
-                        "turnover",
+                        "dummy1",
+                        "dummy2",
                     ]
-                    df["ts"] = pd.to_datetime(df["ts"])
-                    df["code"] = stock_code
-                    df.set_index("ts", inplace=True)
-                    return df[
-                        [
-                            "code",
-                            "open",
-                            "high",
-                            "low",
-                            "close",
-                            "volume",
-                            "amount",
-                            "turnover",
-                        ]
-                    ]
-                except:
-                    time.sleep(retry_delay)
-        return pd.DataFrame()
+                    if len(df.columns) == 9
+                    else ["ts", "open", "high", "low", "close", "volume", "amount"]
+                )
+                df["ts"] = pd.to_datetime(df["ts"])
+                df["code"] = stock_code
+                df.set_index("ts", inplace=True)
+                return df[["code", "open", "high", "low", "close", "volume", "amount"]]
+        else:
+            pm = {"d": "daily", "w": "weekly", "m": "monthly"}
+            start_c, end_c = start_date.replace("-", ""), end_date.replace("-", "")
+
+            if ticker_type in ["etf", "lof"]:
+                try:
+                    prefix = (
+                        "sz"
+                        if stock_code.startswith(("15", "16", "18", "39", "159"))
+                        else "sh"
+                    )
+                    df = ak.fund_etf_hist_sina(symbol=f"{prefix}{stock_code}")
+                    if df.empty:
+                        return pd.DataFrame()
+                    df["date"] = pd.to_datetime(df["date"])
+                    start_dt = pd.to_datetime(start_date)
+                    end_dt = pd.to_datetime(end_date)
+                    df = df[(df["date"] >= start_dt) & (df["date"] <= end_dt)]
+                    df.rename(
+                        columns={
+                            "date": "日期",
+                            "open": "开盘",
+                            "high": "最高",
+                            "low": "最低",
+                            "close": "收盘",
+                            "volume": "成交量",
+                            "amount": "成交额",
+                        },
+                        inplace=True,
+                    )
+                    if "换手率" not in df.columns:
+                        df["换手率"] = 0
+                except Exception as e:
+                    logger.warning(f"Sina fetch failed for {stock_code}: {e}")
+                    return pd.DataFrame()
+            else:
+                # Use Sina for stock daily data as Eastmoney is often blocked
+                prefix = "sh" if stock_code.startswith("6") else "sz"
+                if stock_code.startswith(("4", "8")):
+                    prefix = "bj"
+
+                try:
+                    df = ak.stock_zh_a_daily(
+                        symbol=f"{prefix}{stock_code}",
+                        start_date=start_c,
+                        end_date=end_c,
+                        adjust="qfq",
+                    )
+                    if df.empty:
+                        return pd.DataFrame()
+
+                    df.rename(
+                        columns={
+                            "date": "日期",
+                            "open": "开盘",
+                            "high": "最高",
+                            "low": "最低",
+                            "close": "收盘",
+                            "volume": "成交量",
+                            "amount": "成交额",
+                            "turnover": "换手率",
+                        },
+                        inplace=True,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"Sina stock_zh_a_daily failed for {stock_code}: {e}"
+                    )
+                    return pd.DataFrame()
+
+            if df.empty:
+                return pd.DataFrame()
+
+            df = df[
+                [
+                    "日期",
+                    "开盘",
+                    "最高",
+                    "最低",
+                    "收盘",
+                    "成交量",
+                    "成交额",
+                    "换手率",
+                ]
+            ]
+            df.columns = [
+                "ts",
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume",
+                "amount",
+                "turnover",
+            ]
+            df["ts"] = pd.to_datetime(df["ts"])
+            df["code"] = stock_code
+            df.set_index("ts", inplace=True)
+            return df[
+                [
+                    "code",
+                    "open",
+                    "high",
+                    "low",
+                    "close",
+                    "volume",
+                    "amount",
+                    "turnover",
+                ]
+            ]
 
     def _fetch_from_baostock(
         self, stock_code, start_date, end_date, freq
     ) -> pd.DataFrame:
-        exchange = "sh" if stock_code.startswith("60") else "sz"
-        if stock_code.startswith("0000"):
-            exchange = "sh"
+        # Improved exchange identification
+        if stock_code.startswith(("60", "68", "51", "58", "50", "000001")):
+            # Note: 000001 can be SZ stock or SH Index.
+            # In most cases for stocks we mean SZ.
+            # But Baostock uses sh.000001 for SSE Index.
+            # If it's exactly 000001 and we are in a stock context, it's tricky.
+            # However, for now let's follow a more comprehensive rule.
+            if stock_code == "000001":
+                # Check if it's likely the index or stock.
+                # This is a heuristic. Default to sz for 002977 etc.
+                exchange = "sz"
+            elif stock_code.startswith(("60", "68", "51", "58", "50")):
+                exchange = "sh"
+            else:
+                exchange = "sz"
+        elif stock_code.startswith(("00", "30", "15", "16", "18")):
+            exchange = "sz"
+        elif stock_code.startswith(("4", "8")):
+            exchange = "bj"
+        else:
+            exchange = "sz"
+
+        # Special case for SSE Index if needed, but usually codes are handled via ticker_type
+        if stock_code == "000001" and not self.get_ticker_type(stock_code) == "stock":
+            # This is still not perfect as get_ticker_type returns 'stock' for 000001
+            pass
+
         full_code = f"{exchange}.{stock_code}"
         fm = {
             "5min": "5",
@@ -270,7 +372,7 @@ class DataFetcher:
                 df.set_index("ts", inplace=True)
                 return df[
                     ["code", "open", "high", "low", "close", "volume", "amount"]
-                ].apply(pd.to_numeric, errors="ignore")
+                ].apply(pd.to_numeric, errors="coerce")
             else:
                 df["ts"] = pd.to_datetime(df["date"])
                 df["code"] = stock_code
@@ -287,7 +389,7 @@ class DataFetcher:
                         "amount",
                         "turnover",
                     ]
-                ].apply(pd.to_numeric, errors="ignore")
+                ].apply(pd.to_numeric, errors="coerce")
         except:
             return pd.DataFrame()
 
@@ -305,6 +407,9 @@ class DataFetcher:
         )
 
     def get_stock_basic_info(self, code=None) -> pd.DataFrame:
+        if code:
+            code = _normalize_code(code)
+
         if self.source == "questdb":
             q = (
                 f"SELECT * FROM \"stock_basic_info\" WHERE code = '{code}' LATEST ON ts PARTITION BY code"
@@ -381,18 +486,58 @@ class DataFetcher:
             if not code:
                 return pd.DataFrame()
             try:
-                df = ak.fund_individual_basic_info_xq(symbol=code)
+                # 1. 尝试从雪球获取
                 val = {}
-                if not df.empty and "item" in df.columns and "value" in df.columns:
-                    xq_map = dict(zip(df["item"], df["value"]))
-                    val["name"] = xq_map.get("基金名称")
-                    val["fullname"] = xq_map.get("基金全称")
-                    val["found_date"] = xq_map.get("成立时间")
-                    val["total_asset"] = xq_map.get("最新规模")
-                    val["management"] = xq_map.get("基金公司")
-                    val["fund_type"] = xq_map.get("基金类型")
-                    val["rating_agency"] = xq_map.get("评级机构")
-                    val["rating"] = xq_map.get("基金评级")
+                try:
+                    df = ak.fund_individual_basic_info_xq(symbol=code)
+                    if not df.empty and "item" in df.columns and "value" in df.columns:
+                        xq_map = dict(zip(df["item"], df["value"]))
+                        val["name"] = xq_map.get("基金名称")
+                        val["fullname"] = xq_map.get("基金全称")
+                        val["found_date"] = xq_map.get("成立时间")
+                        val["total_asset"] = xq_map.get("最新规模")
+                        val["management"] = xq_map.get("基金公司")
+                        val["fund_type"] = xq_map.get("基金类型")
+                        val["rating_agency"] = xq_map.get("评级机构")
+                        val["rating"] = xq_map.get("基金评级")
+                except Exception as e:
+                    logger.warning(f"Snowball (XQ) fetch failed for {code}: {e}")
+
+                # 2. 如果获取不到，尝试备选方案
+                if not val:
+                    # 针对深市 ETF (15, 16, 18, 39 开头)
+                    if code.startswith(("15", "16", "18", "39")):
+                        try:
+                            df_szse = ak.fund_etf_scale_szse()
+                            if not df_szse.empty:
+                                match = df_szse[df_szse["基金代码"].astype(str) == code]
+                                if not match.empty:
+                                    row = match.iloc[0]
+                                    val["name"] = row.get("基金简称")
+                                    val["fullname"] = row.get("基金简称")
+                                    val["total_asset"] = str(row.get("基金份额"))
+                                    val["fund_type"] = "ETF"
+                        except Exception as e_szse:
+                            logger.warning(
+                                f"Error fetching from szse fallback for {code}: {e_szse}"
+                            )
+
+                    # 针对沪市 ETF (51, 58, 68, 50 开头)
+                    elif code.startswith(("51", "58", "68", "50")):
+                        try:
+                            df_spot = ak.fund_etf_scale_sse()
+                            if not df_spot.empty:
+                                match = df_spot[df_spot["基金代码"] == code]
+                                if not match.empty:
+                                    row = match.iloc[0]
+                                    val["name"] = row.get("基金简称")
+                                    val["fullname"] = row.get("基金简称")
+                                    val["fund_type"] = "ETF"
+                        except Exception as e:
+                            logger.warning(f"SH ETF fallback failed for {code}: {e}")
+
+                if not val:
+                    return pd.DataFrame()
 
                 data = {
                     "ts": pd.Timestamp.now(),
@@ -543,7 +688,7 @@ class DataFetcher:
                     float(row["close"]),
                     int(row["volume"]),
                     float(row["amount"]),
-                    float(row["turnover"]),
+                    float(row.get("turnover", 0)),
                     str(row["code"]),
                 )
                 for ts, row in data.iterrows()

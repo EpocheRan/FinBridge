@@ -12,7 +12,7 @@ from utils.DataLoader import DataLoader
 def test_ticker_basic_info():
     loader = DataLoader()
     # Use a sample stock code
-    stock_code = "161129"
+    stock_code = "002977"
     print(f"Fetching basic info for {stock_code}...")
 
     try:

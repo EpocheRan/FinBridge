@@ -319,34 +319,43 @@ class DataLoader:
         if not missing_dates:
             return []
 
-        # 创建交易日索引映射
+        all_trading_days = [str(d) for d in all_trading_days]
         trading_day_index = {date: idx for idx, date in enumerate(all_trading_days)}
 
-        # 对缺失日期排序
-        missing_dates_sorted = sorted(missing_dates)
+        missing_dates_sorted = sorted([str(d) for d in missing_dates])
 
-        # 合并连续的交易日
+        logger.debug(
+            f"缺失日期数: {len(missing_dates_sorted)}, 交易日数: {len(all_trading_days)}"
+        )
+        logger.debug(f"缺失日期前5个: {missing_dates_sorted[:5]}")
+        logger.debug(f"交易日列表前5个: {all_trading_days[:5]}")
+
+        if missing_dates_sorted and missing_dates_sorted[0] not in trading_day_index:
+            logger.warning(f"第一个日期 {missing_dates_sorted[0]} 不在交易日列表中")
+            return []
+
         merged_ranges = []
         current_start = missing_dates_sorted[0]
         current_end = missing_dates_sorted[0]
         prev_index = trading_day_index[current_start]
 
         for date in missing_dates_sorted[1:]:
+            if date not in trading_day_index:
+                logger.warning(f"日期 {date} 不在交易日列表中，跳过")
+                continue
             current_index = trading_day_index[date]
 
-            # 检查是否连续（当前索引 = 上一个索引 + 1）
             if current_index == prev_index + 1:
                 current_end = date
             else:
-                # 结束当前范围，开始新范围
                 merged_ranges.append((current_start, current_end))
                 current_start = date
                 current_end = date
 
             prev_index = current_index
 
-        # 添加最后一个范围
         merged_ranges.append((current_start, current_end))
+        logger.debug(f"合并后范围数: {len(merged_ranges)}")
         return merged_ranges
 
     def _check_missing_data(self, local_df, expected_dates, trading_days, freq):
@@ -370,7 +379,6 @@ class DataLoader:
             expected_bars_per_day = self._calculate_expected_bars_per_day(freq)
 
             if not local_df.empty:
-                # 提取日期部分
                 local_df["date"] = local_df.index.strftime("%Y-%m-%d")
                 daily_counts = local_df.groupby("date").size()
 
@@ -383,7 +391,6 @@ class DataLoader:
             else:
                 missing_dates = expected_dates  # 全量缺失
 
-            # 合并连续缺失日期
             if missing_dates:
                 missing_date_ranges = self._merge_consecutive_trading_days(
                     missing_dates, trading_days
@@ -391,12 +398,16 @@ class DataLoader:
 
         elif freq == "d":  # 日线数据
             if not local_df.empty:
-                local_dates = local_df.index.strftime("%Y-%m-%d").tolist()
-                missing_dates = [
-                    date for date in expected_dates if date not in local_dates
-                ]
+                local_dates = set(local_df.index.strftime("%Y-%m-%d").tolist())
+                missing_dates = sorted(
+                    list(
+                        set(
+                            [date for date in expected_dates if date not in local_dates]
+                        )
+                    )
+                )
             else:
-                missing_dates = expected_dates
+                missing_dates = sorted(list(set(expected_dates)))
 
             if missing_dates:
                 missing_date_ranges = self._merge_consecutive_trading_days(
@@ -405,17 +416,21 @@ class DataLoader:
 
         else:  # 周线/月线
             if not local_df.empty:
-                local_dates = local_df.index.strftime("%Y-%m-%d").tolist()
-                missing_dates = [
-                    date for date in expected_dates if date not in local_dates
-                ]
+                local_dates = set(local_df.index.strftime("%Y-%m-%d").tolist())
+                missing_dates = sorted(
+                    list(
+                        set(
+                            [date for date in expected_dates if date not in local_dates]
+                        )
+                    )
+                )
             else:
-                missing_dates = expected_dates
+                missing_dates = sorted(list(set(expected_dates)))
 
             if missing_dates:
-                start = min(missing_dates)
-                end = max(missing_dates)
-                missing_date_ranges = [(start, end)]
+                missing_date_ranges = self._merge_consecutive_trading_days(
+                    missing_dates, trading_days
+                )
 
         return missing_date_ranges
 

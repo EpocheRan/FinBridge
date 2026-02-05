@@ -566,6 +566,35 @@ async def pm_get_buying_advice(
     )
 
 
+# --- Skill Tools ---
+
+
+# --- Skill Prompts ---
+
+
+def _load_skill_content(skill_name: str) -> str:
+    import os
+
+    skills_dir = os.path.join(os.path.dirname(__file__), "skills")
+    file_path = os.path.join(skills_dir, skill_name, "SKILL.md")
+    if os.path.exists(file_path):
+        with open(file_path, "r", encoding="utf-8") as f:
+            return f.read()
+    return f"Skill {skill_name} not found."
+
+
+@mcp.prompt()
+def manage_portfolio_skill() -> str:
+    """Return the operational guide for managing portfolios."""
+    return _load_skill_content("manage_portfolio")
+
+
+@mcp.prompt()
+def manage_position_skill() -> str:
+    """Return the operational guide for managing positions."""
+    return _load_skill_content("manage_position")
+
+
 if __name__ == "__main__":
     # 重定向标准输出和错误到文件，保持stdio干净用于MCP协议
     import sys
@@ -586,7 +615,6 @@ if __name__ == "__main__":
 
     logger.info("启动MCP服务器...")
 
-   
     try:
         # 运行MCP服务器（使用SSE方式）
         mcp.run(transport="sse", host="0.0.0.0", port=8080)

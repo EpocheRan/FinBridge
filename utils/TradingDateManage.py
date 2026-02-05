@@ -110,7 +110,7 @@ class TradingDateManage:
         # 从数据库查询交易日（利用 QuestDB 的时间序列特性）
         trading_days = self.db.query(
             """
-                SELECT ts
+                SELECT DISTINCT ts
                 FROM trading_days 
                 WHERE ts BETWEEN %s AND %s 
                 AND is_trading = true

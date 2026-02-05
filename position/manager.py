@@ -73,41 +73,40 @@ class PositionManager:
 
     # --- 11) Modify Profolio ---
     def modify_profolio(self, portfolio_id, updates):
-        time.sleep(0.001)  # Ensure unique timestamp for history
-        session = self.Session()
         try:
-            latest = (
-                session.query(PortfolioModel)
-                .filter_by(portfolio_id=portfolio_id)
-                .filter_by(deleted_at=None)
-                .order_by(desc(PortfolioModel.id))
-                .first()
-            )
-            if not latest:
-                logger.error(f"Profolio {portfolio_id} not found")
+            # 构建 SET 子句
+            set_parts = []
+            for key, val in updates.items():
+                if isinstance(val, str):
+                    set_parts.append(f"{key} = '{val}'")
+                elif isinstance(val, (int, float)):
+                    set_parts.append(f"{key} = {val}")
+                # 忽略 None 值，或者根据需求处理
+
+            if not set_parts:
+                return True
+
+            set_clause = ", ".join(set_parts)
+
+            # 使用 REST API 执行 UPDATE
+            # 为了确保只更新最新的那条（如果存在多条历史），最好指定 ID，或者如果目标是全量更新则直接用 portfolio_id
+            # 这里我们使用 portfolio_id 更新所有记录（符合"修改同一条数据"的语义，即不再区分历史版本）
+            # 注意：这会更新该 portfolio_id 下的所有记录
+
+            sql = f"UPDATE portfolios SET {set_clause} WHERE portfolio_id = '{portfolio_id}'"
+
+            result = self.db.execute_raw_sql(sql)
+            if result:
+                time.sleep(0.6)  # Wait for WAL commit
+                logger.info(f"Modified portfolio {portfolio_id} via REST API")
+                return True
+            else:
+                logger.error(f"Failed to modify portfolio {portfolio_id} via REST API")
                 return False
 
-            new_record = PortfolioModel(
-                portfolio_id=portfolio_id,
-                name=updates.get("name", latest.name),
-                total_assets=updates.get("total_assets", latest.total_assets),
-                cash=updates.get("cash", latest.cash),
-                market_value=updates.get("market_value", latest.market_value),
-                unrealized_profit=updates.get(
-                    "unrealized_profit", latest.unrealized_profit
-                ),
-                realized_profit=updates.get("realized_profit", latest.realized_profit),
-                id=datetime.utcnow(),
-            )
-            session.add(new_record)
-            session.commit()
-            return True
         except Exception as e:
-            session.rollback()
             logger.error(f"Failed to modify profolio: {e}")
             return False
-        finally:
-            session.close()
 
     # --- 12) Calculate Profolio ---
     def calculate_profolio(self, portfolio_id):
@@ -173,7 +172,7 @@ class PositionManager:
             all_records = (
                 session.query(PortfolioModel)
                 .filter_by(deleted_at=None)
-                .order_by(desc(PortfolioModel.id))
+                .order_by(PortfolioModel.id)
                 .all()
             )
             seen = set()
@@ -351,55 +350,45 @@ class PositionManager:
 
     # --- 6) Modify Position ---
     def modify_position(self, pos_id, updates):
-        time.sleep(0.001)  # Ensure unique timestamp
-        session = self.Session()
         try:
-            latest = (
-                session.query(PositionModel)
-                .filter_by(pos_id=pos_id)
-                .filter_by(deleted_at=None)
-                .order_by(desc(PositionModel.id))
-                .first()
-            )
-            if not latest:
+            # 获取 portfolio_id 以便重新计算
+            session = self.Session()
+            pos = session.query(PositionModel).filter_by(pos_id=pos_id).first()
+            if not pos:
+                session.close()
                 return False
-
-            now = datetime.utcnow()
-            new_record = PositionModel(
-                pos_id=pos_id,
-                portfolio_id=latest.portfolio_id,
-                ticker=updates.get("ticker", latest.ticker),
-                name=updates.get("name", latest.name),
-                mode=updates.get("mode", latest.mode),
-                created_at=latest.created_at,
-                cost=updates.get("cost", latest.cost),
-                quantity=updates.get("quantity", latest.quantity),
-                market_value=updates.get("market_value", latest.market_value),
-                unrealized_profit=updates.get(
-                    "unrealized_profit", latest.unrealized_profit
-                ),
-                unrealized_profit_rate=updates.get(
-                    "unrealized_profit_rate", latest.unrealized_profit_rate
-                ),
-                realized_profit=updates.get("realized_profit", latest.realized_profit),
-                total_profit=updates.get("total_profit", latest.total_profit),
-                mode_params=updates.get("mode_params", latest.mode_params),
-                updated_at=now,
-                id=now,
-            )
-            session.add(new_record)
-            session.commit()
-            pro_id = latest.portfolio_id
+            pro_id = pos.portfolio_id
             session.close()
-            self.calculate_profolio(pro_id)
-            return True
+
+            # 构建 SET 子句
+            set_parts = []
+            for key, val in updates.items():
+                if key == "mode_params" and isinstance(val, dict):
+                    val = json.dumps(val)
+
+                if isinstance(val, str):
+                    set_parts.append(f"{key} = '{val}'")
+                elif isinstance(val, (int, float)):
+                    set_parts.append(f"{key} = {val}")
+
+            if not set_parts:
+                return True
+
+            set_clause = ", ".join(set_parts)
+
+            sql = f"UPDATE positions SET {set_clause} WHERE pos_id = '{pos_id}'"
+
+            success = self.db.execute_raw_sql(sql)
+
+            if success:
+                time.sleep(0.6)  # Wait for WAL commit
+                self.calculate_profolio(pro_id)
+                return True
+            return False
+
         except Exception as e:
-            session.rollback()
             logger.error(f"Failed to modify position: {e}")
             return False
-        finally:
-            if session:
-                session.close()
 
     # --- 7) Delete Position ---
     def delete_position(self, pos_id, history_id=None):
@@ -432,14 +421,13 @@ class PositionManager:
                 session.query(PositionModel)
                 .filter_by(portfolio_id=portfolio_id)
                 .filter_by(deleted_at=None)
-                .order_by(desc(PositionModel.id))
+                .order_by(PositionModel.id)
                 .all()
             )
             seen = set()
             latest_records = []
             for r in all_records:
                 if r.pos_id not in seen:
-                    # Attach mode instance to the record object (volatile)
                     r.mode_instance = self._get_mode_instance(r.mode, r.mode_params)
                     latest_records.append(r)
                     seen.add(r.pos_id)
@@ -494,51 +482,19 @@ class PositionManager:
 
     def _update_first_entry_date(self, pos_id, first_entry_date):
         """Update first_entry_date for a position"""
-        session = self.Session()
         try:
-            latest = (
-                session.query(PositionModel)
-                .filter_by(pos_id=pos_id)
-                .filter_by(deleted_at=None)
-                .order_by(desc(PositionModel.id))
-                .first()
-            )
-            if not latest:
-                return False
+            date_str = first_entry_date.strftime("%Y-%m-%dT%H:%M:%S.%f")
+            sql = f"UPDATE positions SET first_entry_date = '{date_str}' WHERE pos_id = '{pos_id}'"
 
-            # Create new record with first_entry_date
-            time.sleep(0.001)
-            now = datetime.utcnow()
-            new_record = PositionModel(
-                pos_id=pos_id,
-                portfolio_id=latest.portfolio_id,
-                ticker=latest.ticker,
-                name=latest.name,
-                mode=latest.mode,
-                created_at=latest.created_at,
-                cost=latest.cost,
-                quantity=latest.quantity,
-                market_value=latest.market_value,
-                unrealized_profit=latest.unrealized_profit,
-                unrealized_profit_rate=latest.unrealized_profit_rate,
-                realized_profit=latest.realized_profit,
-                total_profit=latest.total_profit,
-                mode_params=latest.mode_params,
-                updated_at=now,
-                id=now,
-                stop_price=latest.stop_price,
-                first_entry_date=first_entry_date,
-            )
-            session.add(new_record)
-            session.commit()
-            logger.info(f"Updated first_entry_date for {pos_id}: {first_entry_date}")
-            return True
+            if self.db.execute_raw_sql(sql):
+                logger.info(
+                    f"Updated first_entry_date for {pos_id}: {first_entry_date}"
+                )
+                return True
+            return False
         except Exception as e:
-            session.rollback()
             logger.error(f"Failed to update first_entry_date: {e}")
             return False
-        finally:
-            session.close()
 
     # --- 3) Modify Trade Record ---
     def modify_trade_record(self, trade_id, updates):
@@ -764,107 +720,62 @@ class PositionManager:
 
     def _save_initial_atr(self, pos_id, atr_val):
         """保存 initial_atr 到 mode_params"""
-        session = self.Session()
         try:
-            latest = (
-                session.query(PositionModel)
-                .filter_by(pos_id=pos_id)
-                .filter_by(deleted_at=None)
-                .order_by(desc(PositionModel.id))
-                .first()
-            )
-            if not latest:
+            # 需要先读取现有的 mode_params
+            session = self.Session()
+            pos = session.query(PositionModel).filter_by(pos_id=pos_id).first()
+            if not pos:
+                session.close()
                 return False
 
-            mode_params = json.loads(latest.mode_params or "{}")
-            mode_params["initial_atr"] = float(atr_val)
+            mode_params = json.loads(pos.mode_params or "{}")
+            session.close()
 
-            time.sleep(0.001)
-            now = datetime.utcnow()
-            new_record = PositionModel(
-                pos_id=pos_id,
-                portfolio_id=latest.portfolio_id,
-                ticker=latest.ticker,
-                name=latest.name,
-                mode=latest.mode,
-                created_at=latest.created_at,
-                cost=latest.cost,
-                quantity=latest.quantity,
-                market_value=latest.market_value,
-                unrealized_profit=latest.unrealized_profit,
-                unrealized_profit_rate=latest.unrealized_profit_rate,
-                realized_profit=latest.realized_profit,
-                total_profit=latest.total_profit,
-                mode_params=json.dumps(mode_params),
-                updated_at=now,
-                id=now,
-                stop_price=latest.stop_price,
-                first_entry_date=latest.first_entry_date,
-            )
-            session.add(new_record)
-            session.commit()
-            return True
+            mode_params["initial_atr"] = float(atr_val)
+            params_str = json.dumps(mode_params)
+
+            # 使用 SQL Update，注意 json 字符串中的引号需要转义
+            # 这里简单的 replace "'" 可能不够，但 mode_params 主要是数字，应该还好
+            # 使用 execute_raw_sql 的参数化替换更安全
+
+            sql = f"UPDATE positions SET mode_params = :params WHERE pos_id = :pid"
+
+            if self.db.execute_raw_sql(sql, {"params": params_str, "pid": pos_id}):
+                time.sleep(0.6)  # Wait for WAL commit
+                return True
+            return False
+
         except Exception as e:
-            session.rollback()
             logger.error(f"Failed to save initial_atr: {e}")
             return False
-        finally:
-            session.close()
 
     # --- Save Stop Price ---
     def save_stop_price(self, pos_id, stop_price, mode_params=None):
         """
         保存或更新 position 的 stop_price 到基础字段和 mode_params 中。
         """
-        session = self.Session()
         try:
-            latest = (
-                session.query(PositionModel)
-                .filter_by(pos_id=pos_id)
-                .filter_by(deleted_at=None)
-                .order_by(desc(PositionModel.id))
-                .first()
-            )
-            if not latest:
-                logger.warning(f"Position {pos_id} not found for saving stop_price")
-                return False
-
-            # 更新 mode_params
             if mode_params is None:
-                mode_params = json.loads(latest.mode_params or "{}")
+                session = self.Session()
+                pos = session.query(PositionModel).filter_by(pos_id=pos_id).first()
+                if not pos:
+                    session.close()
+                    return False
+                mode_params = json.loads(pos.mode_params or "{}")
+                session.close()
             else:
-                mode_params = json.loads(json.dumps(mode_params))  # 确保是dict
-            mode_params["stop_price"] = stop_price
+                mode_params = json.loads(json.dumps(mode_params))
 
-            # 创建新记录保存更新（同时更新基础字段 stop_price）
-            time.sleep(0.001)
-            now = datetime.utcnow()
-            new_record = PositionModel(
-                pos_id=pos_id,
-                portfolio_id=latest.portfolio_id,
-                ticker=latest.ticker,
-                name=latest.name,
-                mode=latest.mode,
-                created_at=latest.created_at,
-                cost=latest.cost,
-                quantity=latest.quantity,
-                market_value=latest.market_value,
-                unrealized_profit=latest.unrealized_profit,
-                unrealized_profit_rate=latest.unrealized_profit_rate,
-                realized_profit=latest.realized_profit,
-                total_profit=latest.total_profit,
-                mode_params=json.dumps(mode_params),
-                updated_at=now,
-                id=now,
-                stop_price=stop_price,  # 保存到基础字段
-                first_entry_date=latest.first_entry_date,
-            )
-            session.add(new_record)
-            session.commit()
-            return True
+            mode_params["stop_price"] = stop_price
+            params_str = json.dumps(mode_params)
+
+            sql = f"UPDATE positions SET stop_price = {stop_price}, mode_params = :params WHERE pos_id = :pid"
+
+            if self.db.execute_raw_sql(sql, {"params": params_str, "pid": pos_id}):
+                time.sleep(0.6)  # Wait for WAL commit
+                return True
+            return False
+
         except Exception as e:
-            session.rollback()
             logger.error(f"Failed to save stop_price: {e}")
             return False
-        finally:
-            session.close()
