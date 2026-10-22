@@ -21,36 +21,93 @@ class PositionAgentInterface:
         """Standardized response format for LLM reasoning."""
         return {"success": success, "message": message, "data": data or {}}
 
-    def create_portfolio(self, name: str, initial_cash: float):
+    def create_portfolio(
+        self,
+        name: str,
+        initial_cash: float,
+        reuse_existing: bool = None,
+        tickers: list = None,
+    ):
         """
-        Create a new investment portfolio. If a portfolio with the same name already exists,
-        it returns the existing portfolio ID.
+        Create a new investment portfolio, or confirm reuse of a similar existing one.
 
         Args:
-            name: Name of the portfolio (e.g., "High Risk Strategy")
-            initial_cash: Initial capital available (e.g., 100000.0)
+            name: Portfolio name.
+            initial_cash: Initial capital.
+            reuse_existing: True=复用相似组合；False=强制新建；None=自动探测并请求确认。
+            tickers: 该组合计划交易的标的列表（用于「同标的」相似度检测）。
         """
         try:
-            # Check if name exists via list__profolio to inform user accurately
             portfolios = self.manager.list__profolio()
-            existing = next((p for p in portfolios if p.name == name), None)
+            name_norm = (name or "").strip().lower()
+            tickers_set = set()
+            if tickers:
+                tickers_set = {str(t).split(".")[0] for t in tickers}
 
-            if existing:
+            # 找出相似组合（同名 / 同标的）
+            candidates = []
+            for p in portfolios:
+                reasons = []
+                if p.name and p.name.strip().lower() == name_norm:
+                    reasons.append("same_name")
+                if tickers_set:
+                    held = {
+                        pos.ticker
+                        for pos in self.manager.list_positions(p.portfolio_id)
+                        if pos.ticker
+                    }
+                    if held & tickers_set:
+                        reasons.append("same_ticker")
+                if reasons:
+                    candidates.append(
+                        {
+                            "portfolio_id": p.portfolio_id,
+                            "name": p.name,
+                            "cash": p.cash,
+                            "total_assets": p.total_assets,
+                            "reason": reasons,
+                        }
+                    )
+
+            # 未指定 reuse_existing 且存在相似组合 -> 请求确认（不创建）
+            if candidates and reuse_existing is None:
+                first = candidates[0]
+                reasons_cn = "/".join(
+                    "同名" if r == "same_name" else "同标的" for r in first["reason"]
+                )
                 return self._response(
-                    True,
-                    f"Portfolio '{name}' already exists. Using existing portfolio.",
-                    {"portfolio_id": existing.portfolio_id, "is_new": False},
+                    False,
+                    f"发现相似组合「{first['name']}」({first['portfolio_id']})，原因：{reasons_cn}。"
+                    f"请确认：复用现有组合请再次调用并传 reuse_existing=true；"
+                    f"要新建则传 reuse_existing=false。",
+                    {"needs_confirmation": True, "candidates": candidates},
                 )
 
-            pid = self.manager.create_profolio(name, initial_cash)
+            # 决定复用
+            if candidates and reuse_existing is True:
+                first = candidates[0]
+                return self._response(
+                    True,
+                    f"复用现有组合「{first['name']}」({first['portfolio_id']})。",
+                    {
+                        "portfolio_id": first["portfolio_id"],
+                        "is_new": False,
+                        "reused": True,
+                        "candidates": candidates,
+                    },
+                )
+
+            # 新建（reuse_existing=False 或 无相似组合）
+            pid = self.manager.create_profolio(
+                name, initial_cash, force=(reuse_existing is False)
+            )
             if pid:
                 return self._response(
                     True,
                     f"Portfolio '{name}' created successfully.",
                     {"portfolio_id": pid, "is_new": True},
                 )
-            else:
-                return self._response(False, "Failed to create portfolio. Check logs.")
+            return self._response(False, "Failed to create portfolio. Check logs.")
         except Exception as e:
             return self._response(False, f"Error creating portfolio: {str(e)}")
 
@@ -117,14 +174,22 @@ class PositionAgentInterface:
         except Exception as e:
             return self._response(False, f"Error updating portfolio: {str(e)}")
 
-    def modify_position(self, pos_id: str, name: str = None, quantity: float = None):
+    def modify_position(
+        self,
+        pos_id: str,
+        name: str = None,
+        quantity: float = None,
+        mode_params: dict = None,
+    ):
         """
-        Modify position name or other attributes.
+        Modify position name, quantity, or mode parameters.
 
         Args:
             pos_id: Position ID (can be 8-char short ID like 'abc12345' or full UUID).
             name: New name (optional).
             quantity: New quantity (optional).
+            mode_params: 要更新的模式参数（会与现有参数合并），
+                         例如 ATR: {"n_factor": 2.5, "risk_per_trade": 0.03}.
         """
         try:
             # 规范化 pos_id
@@ -158,6 +223,8 @@ class PositionAgentInterface:
                 updates["name"] = name
             if quantity is not None:
                 updates["quantity"] = quantity
+            if mode_params:
+                updates["mode_params"] = mode_params
 
             if not updates:
                 return self._response(False, "No updates provided.")
@@ -199,7 +266,21 @@ class PositionAgentInterface:
                     "risk_per_trade": "单笔交易风险比例，例如 0.02 表示账户资金的 2%",
                     "time_stop_days": "僵尸仓位自动清理天数",
                 },
-            }
+            },
+            {
+                "name": "GRID",
+                "description": "网格交易模式：以中枢价为核心上下铺设网格，下跌逐格买入、上涨逐格卖出，跌破下界清仓，适合震荡行情。",
+                "parameters": {
+                    "base_price": "网格中枢价（可选，不填则以当前价为准）",
+                    "grid_step": "网格间距（绝对价格，优先使用）",
+                    "grid_step_pct": "网格间距（百分比，例如 0.02 表示 2%）",
+                    "grid_count": "上下各铺设几格（默认 5）",
+                    "quantity_per_grid": "每格交易数量",
+                    "max_position": "最大持仓数量（0 表示不限）",
+                    "lower_bound": "网格下界（0 表示自动 = base - count*step）",
+                    "upper_bound": "网格上界（0 表示自动 = base + count*step）",
+                },
+            },
         ]
         return self._response(True, "Available modes retrieved.", {"modes": modes})
 
@@ -386,6 +467,7 @@ class PositionAgentInterface:
                 "first_entry_price": position.cost,
                 "avg_cost": position.cost,
                 "cost_price": position.cost,
+                "quantity": position.quantity,
                 "pyramid_level": 0,  # Assumption: 0 if not tracked elsewhere
                 "has_added": False,  # Assumption
             }
@@ -410,7 +492,11 @@ class PositionAgentInterface:
             return self._response(False, f"Error checking signals: {str(e)}")
 
     def get_buying_advice(
-        self, portfolio_id: str, ticker: str, initial_risk_per_trade: float = None
+        self,
+        portfolio_id: str,
+        ticker: str,
+        initial_risk_per_trade: float = None,
+        mode: str = "ATR",
     ):
         """
         Calculate suggested position size for a NEW position based on risk management.
@@ -444,12 +530,14 @@ class PositionAgentInterface:
             if ohlcv is None or ohlcv.empty:
                 return self._response(False, f"No market data for {ticker}.")
 
-            # Instantiate a temporary mode to calculate advice
-            from .modes.atr_mode import ATRMode
+            # 按指定模式实例化（走注册表工厂，支持 ATR / GRID 等）
+            from .modes import create_mode
 
-            mode = ATRMode(risk_per_trade=initial_risk_per_trade or 0.02)
+            mode_instance = create_mode(
+                mode, {"risk_per_trade": initial_risk_per_trade or 0.02}
+            )
 
-            advice = mode.calculate_purchase_advice(
+            advice = mode_instance.calculate_purchase_advice(
                 {
                     "ohlcv": ohlcv,
                     "total_capital": total_capital,

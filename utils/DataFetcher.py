@@ -23,6 +23,17 @@ def _normalize_code(code: str) -> str:
     return str(code)
 
 
+def _to_baostock_code(code: str) -> str:
+    """将 6 位证券代码转换为 baostock 代码 (如 600519 -> sh.600519)"""
+    code = _normalize_code(code)
+    if code.startswith(("60", "68", "51", "58", "50")):
+        return f"sh.{code}"
+    elif code.startswith(("4", "8")):
+        return f"bj.{code}"
+    else:  # 00/30/15/16/18/39 等深市，含 000001 平安银行
+        return f"sz.{code}"
+
+
 class DataFetcher:
     def __init__(self, source="questdb"):
         """
@@ -46,7 +57,52 @@ class DataFetcher:
         else:
             raise ValueError(f"未知数据源: {self.source}")
 
+    def _fetch_tencent_realtime(self, code: str) -> pd.DataFrame:
+        """腾讯单只股票实时行情 (qt.gtimg.cn)，避免拉全市场快照，返回 OHLCV DataFrame"""
+        import requests
+
+        prefix = (
+            "sh"
+            if code.startswith(("6", "9", "5"))
+            else ("bj" if code.startswith(("4", "8")) else "sz")
+        )
+        try:
+            r = requests.get(f"http://qt.gtimg.cn/q={prefix}{code}", timeout=8)
+            r.encoding = "gbk"
+            text = r.text
+            if '="' not in text:
+                return pd.DataFrame()
+            data = text.split('="')[1].rstrip('";\n').split("~")
+            if len(data) < 40:
+                return pd.DataFrame()
+            close = float(data[3]) if data[3] else None
+            if close is None:
+                return pd.DataFrame()
+            df = pd.DataFrame(
+                [
+                    {
+                        "code": code,
+                        "open": float(data[5]) if data[5] else close,
+                        "high": float(data[33]) if data[33] else close,
+                        "low": float(data[34]) if data[34] else close,
+                        "close": close,
+                        "volume": float(data[6]) * 100 if data[6] else 0.0,
+                        "amount": float(data[37]) * 10000 if data[37] else 0.0,
+                    }
+                ]
+            )
+            df["ts"] = pd.Timestamp.now()
+            df.set_index("ts", inplace=True)
+            return df[["code", "open", "high", "low", "close", "volume", "amount"]]
+        except Exception as e:
+            logger.warning(f"腾讯实时行情获取失败 {code}: {e}")
+            return pd.DataFrame()
+
     def get_realtime_quotes(self, ticker=None, source_type=None) -> dict | pd.DataFrame:
+        # 单只股票实时行情走腾讯 (快)；未指定 ticker 时才回退到全市场快照
+        if ticker:
+            return self._fetch_tencent_realtime(_normalize_code(ticker))
+
         dfs = []
         sources = {
             "stock": ak.stock_zh_a_spot_em,
@@ -370,15 +426,18 @@ class DataFetcher:
                 df["ts"] = pd.to_datetime(df["time"].str[:12])
                 df["code"] = stock_code
                 df.set_index("ts", inplace=True)
-                return df[
+                out = df[
                     ["code", "open", "high", "low", "close", "volume", "amount"]
-                ].apply(pd.to_numeric, errors="coerce")
+                ].copy()
+                num_cols = ["open", "high", "low", "close", "volume", "amount"]
+                out[num_cols] = out[num_cols].apply(pd.to_numeric, errors="coerce")
+                return out
             else:
                 df["ts"] = pd.to_datetime(df["date"])
                 df["code"] = stock_code
                 df.rename(columns={"turn": "turnover"}, inplace=True)
                 df.set_index("ts", inplace=True)
-                return df[
+                out = df[
                     [
                         "code",
                         "open",
@@ -389,7 +448,18 @@ class DataFetcher:
                         "amount",
                         "turnover",
                     ]
-                ].apply(pd.to_numeric, errors="coerce")
+                ].copy()
+                num_cols = [
+                    "open",
+                    "high",
+                    "low",
+                    "close",
+                    "volume",
+                    "amount",
+                    "turnover",
+                ]
+                out[num_cols] = out[num_cols].apply(pd.to_numeric, errors="coerce")
+                return out
         except:
             return pd.DataFrame()
 
@@ -471,6 +541,96 @@ class DataFetcher:
                 return pd.DataFrame([data])
             except Exception as e:
                 logger.error(f"Error fetching basic info from akshare for {code}: {e}")
+                return pd.DataFrame()
+        elif self.source == "baostock":
+            if not code:
+                return pd.DataFrame()
+            try:
+                bs = BS()
+                full_code = _to_baostock_code(code)
+
+                # 1. 名称 + 上市日期 (baostock)
+                name, list_date = None, None
+                rs = bs().query_stock_basic(code=full_code)
+                rows = []
+                while rs.error_code == "0" and rs.next():
+                    rows.append(rs.get_row_data())
+                if rows:
+                    row = dict(zip(rs.fields, rows[0]))
+                    name = row.get("code_name")
+                    list_date = pd.to_datetime(row.get("ipoDate"), errors="coerce")
+                else:
+                    return pd.DataFrame()
+
+                # 2. 行业 (baostock)
+                affiliate_industry = None
+                try:
+                    rs = bs().query_stock_industry(code=full_code)
+                    inds = []
+                    while rs.error_code == "0" and rs.next():
+                        inds.append(rs.get_row_data())
+                    if inds:
+                        affiliate_industry = dict(zip(rs.fields, inds[0])).get("industry")
+                except Exception as e:
+                    logger.warning(f"baostock 行业获取失败 {code}: {e}")
+
+                # 3. 总股本/流通股本 (baostock 财报, 取最近一期)
+                total_share, float_share = None, None
+                try:
+                    y, q = datetime.now().year, (datetime.now().month - 1) // 3 + 1
+                    for _ in range(4):
+                        rs = bs().query_profit_data(code=full_code, year=y, quarter=q)
+                        fin = []
+                        while rs.error_code == "0" and rs.next():
+                            fin.append(rs.get_row_data())
+                        if fin:
+                            frow = dict(zip(rs.fields, fin[0]))
+                            total_share = pd.to_numeric(frow.get("totalShare"), errors="coerce")
+                            float_share = pd.to_numeric(frow.get("liqaShare"), errors="coerce")
+                            break
+                        q -= 1
+                        if q == 0:
+                            y, q = y - 1, 4
+                except Exception as e:
+                    logger.warning(f"baostock 股本获取失败 {code}: {e}")
+
+                # 4. 全称 + 主营业务 (巨潮资讯 cninfo)
+                fullname, main_operation_biz = None, None
+                try:
+                    prof = ak.stock_profile_cninfo(symbol=code)
+                    if not prof.empty:
+                        fullname = prof["公司名称"].iloc[0] if "公司名称" in prof.columns else None
+                        main_operation_biz = prof["主营业务"].iloc[0] if "主营业务" in prof.columns else None
+                except Exception as e:
+                    logger.warning(f"cninfo 全称/主营业务获取失败 {code}: {e}")
+
+                # 5. 总市值 (百度估值, 单位亿元 -> 元), 并推算流通市值
+                total_mv, float_mv = None, None
+                try:
+                    mv = ak.stock_zh_valuation_baidu(symbol=code, indicator="总市值", period="近一年")
+                    if not mv.empty and pd.notna(mv["value"].iloc[-1]):
+                        total_mv = float(mv["value"].iloc[-1]) * 1e8
+                        if pd.notna(total_share) and pd.notna(float_share) and total_share > 0:
+                            float_mv = total_mv * float(float_share) / float(total_share)
+                except Exception as e:
+                    logger.warning(f"百度总市值获取失败 {code}: {e}")
+
+                data = {
+                    "ts": pd.Timestamp.now(),
+                    "code": code,
+                    "name": name,
+                    "fullname": fullname,
+                    "main_operation_biz": main_operation_biz,
+                    "affiliate_industry": affiliate_industry,
+                    "total_share": total_share,
+                    "float_share": float_share,
+                    "total_mv": total_mv,
+                    "float_mv": float_mv,
+                    "list_date": list_date,
+                }
+                return pd.DataFrame([data])
+            except Exception as e:
+                logger.error(f"Error fetching basic info from baostock for {code}: {e}")
                 return pd.DataFrame()
         return pd.DataFrame()
 
@@ -587,6 +747,34 @@ class DataFetcher:
             return self._read_sql_to_df(
                 f"SELECT * FROM \"{tn}\" WHERE ts BETWEEN '{start_date}' AND '{end_date}' AND code = '{stock_code}' ORDER BY ts"
             )
+        elif self.source == "baostock":
+            try:
+                bs = BS()
+                rs = bs().query_history_k_data_plus(
+                    _to_baostock_code(stock_code),
+                    "date,peTTM,psTTM,pcfNcfTTM,pbMRQ",
+                    start_date=start_date,
+                    end_date=end_date,
+                    frequency="d",
+                    adjustflag="3",
+                )
+                rows = []
+                while rs.error_code == "0" and rs.next():
+                    rows.append(rs.get_row_data())
+                if not rows:
+                    return pd.DataFrame()
+                df = pd.DataFrame(rows, columns=rs.fields)
+                df["ts"] = pd.to_datetime(df["date"])
+                df["code"] = stock_code
+                for col in ["peTTM", "psTTM", "pcfNcfTTM", "pbMRQ"]:
+                    df[col] = pd.to_numeric(df[col], errors="coerce")
+                df.set_index("ts", inplace=True)
+                return df[["code", "peTTM", "psTTM", "pcfNcfTTM", "pbMRQ"]]
+            except Exception as e:
+                logger.error(
+                    f"Error fetching rolling financial from baostock for {stock_code}: {e}"
+                )
+                return pd.DataFrame()
         return pd.DataFrame()
 
     def get_concept_boards(self) -> pd.DataFrame:

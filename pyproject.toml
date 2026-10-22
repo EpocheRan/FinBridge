@@ -3,12 +3,12 @@ name = "quantproject"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
-    "akshare>=1.18.22",
+    "akshare>=1.19.1",
     "backtrader>=1.9.78.123",
-    "baostock>=0.8.9",
-    "fastmcp>=3.0.0b1",
+    "baostock>=0.9.4",
+    "fastmcp>=3.0.0b1,<4.0.0",
     "pd>=0.0.4",
     "psycopg2-binary>=2.9.11",
     "sqlalchemy>=2.0.46",

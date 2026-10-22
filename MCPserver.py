@@ -403,58 +403,28 @@ async def get_today_date() -> Dict[str, Any]:
     }
 
 
-@mcp.tool()
-async def get_data_status() -> Dict[str, Any]:
-    """
-    获取数据源状态信息
-
-    Returns:
-        包含数据源状态的字典
-    """
-    try:
-        from utils.DataConnect import questDB
-
-        # 检查数据库连接状态
-        db = questDB()
-        is_connected = db.is_connected()
-
-        # 获取最新数据日期
-        latest_ohlc = None
-        try:
-            result = db.query("SELECT MAX(ts) FROM ohlcv_1d;", fetch_all=False)
-            if result and result[0]:
-                latest_ohlc = result[0].strftime("%Y-%m-%d")
-        except:
-            pass
-
-        status_info = {
-            "database_connected": is_connected,
-            "latest_ohlc_date": latest_ohlc,
-            "current_date": datetime.now().strftime("%Y-%m-%d"),
-            "data_sources": ["questdb", "akshare", "baostock"],
-        }
-
-        return {
-            "success": True,
-            "message": "Data status retrieved successfully",
-            "result": status_info,
-        }
-
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e),
-            "message": "Failed to retrieve data status",
-        }
-
-
 # --- Position Management Tools ---
 
 
 @mcp.tool()
-async def pm_create_portfolio(name: str, initial_cash: float) -> Dict[str, Any]:
-    """Create a new investment portfolio."""
-    return position_interface.create_portfolio(name, initial_cash)
+async def pm_create_portfolio(
+    name: str,
+    initial_cash: float,
+    reuse_existing: bool = None,
+    tickers: List[str] = None,
+) -> Dict[str, Any]:
+    """
+    Create a new investment portfolio, or confirm reuse of a similar existing one.
+
+    Args:
+        name: Portfolio name.
+        initial_cash: Initial capital.
+        reuse_existing: true=复用相似组合；false=强制新建；不传=自动探测并返回确认提示。
+        tickers: 该组合计划交易的标的（可选，用于「同标的」相似度检测）。
+    """
+    return position_interface.create_portfolio(
+        name, initial_cash, reuse_existing, tickers
+    )
 
 
 @mcp.tool()
@@ -486,17 +456,31 @@ async def pm_modify_portfolio(
 
 @mcp.tool()
 async def pm_modify_position(
-    pos_id: str, name: str = None, quantity: float = None
+    pos_id: str,
+    name: str = None,
+    quantity: float = None,
+    n_factor: float = None,
+    risk_per_trade: float = None,
+    mode_params: dict = None,
 ) -> Dict[str, Any]:
     """
-    Modify position name or quantity.
+    Modify position name, quantity, or risk parameters.
 
     Args:
         pos_id: Position ID to modify.
         name: New position name/stock name (optional).
         quantity: New quantity (optional).
+        n_factor: ATR 系数，如 2.0（ATR 模式，可选）。
+        risk_per_trade: 单笔风险比例，如 0.02 表示 2%（ATR 模式，可选）。
+        mode_params: 其他模式参数（与现有参数合并），如 {"time_stop_days": 10}；
+                     GRID 可改 grid_step、grid_count、quantity_per_grid、max_position 等。
     """
-    return position_interface.modify_position(pos_id, name, quantity)
+    merged = dict(mode_params or {})
+    if n_factor is not None:
+        merged["n_factor"] = n_factor
+    if risk_per_trade is not None:
+        merged["risk_per_trade"] = risk_per_trade
+    return position_interface.modify_position(pos_id, name, quantity, merged or None)
 
 
 @mcp.tool()
@@ -519,16 +503,24 @@ async def pm_open_position(
     mode: str,
     initial_atr: float = None,
     n_factor: float = None,
+    risk_per_trade: float = None,
 ) -> Dict[str, Any]:
     """
     Open a new tracking position.
     Note: You should call pm_list_modes first to let user choose an appropriate mode.
+
+    Args:
+        initial_atr: 初始 ATR（可选，ATR 模式）。
+        n_factor: ATR 系数，如 2.0（可选，ATR 模式）。
+        risk_per_trade: 单笔风险比例，如 0.02 表示 2%（可选，ATR 模式）。
     """
     kwargs = {}
     if initial_atr is not None:
         kwargs["initial_atr"] = initial_atr
     if n_factor is not None:
         kwargs["n_factor"] = n_factor
+    if risk_per_trade is not None:
+        kwargs["risk_per_trade"] = risk_per_trade
     return position_interface.open_position(portfolio_id, ticker, name, mode, **kwargs)
 
 
@@ -558,11 +550,18 @@ async def pm_check_signals(portfolio_id: str, ticker: str) -> Dict[str, Any]:
 
 @mcp.tool()
 async def pm_get_buying_advice(
-    portfolio_id: str, ticker: str, initial_risk_per_trade: float = None
+    portfolio_id: str,
+    ticker: str,
+    initial_risk_per_trade: float = None,
+    mode: str = "ATR",
 ) -> Dict[str, Any]:
-    """Get position sizing advice for a potential new trade."""
+    """Get position sizing advice for a potential new trade.
+
+    Args:
+        mode: Risk mode to use for the advice, e.g. "ATR" or "GRID".
+    """
     return position_interface.get_buying_advice(
-        portfolio_id, ticker, initial_risk_per_trade
+        portfolio_id, ticker, initial_risk_per_trade, mode
     )
 
 

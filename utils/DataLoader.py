@@ -600,11 +600,19 @@ class DataLoader:
             else:
                 logger.warning("数据库数据中缺少'ts'字段，将尝试更新")
 
-        # 4. 从API获取最新数据
+        # 4. 从API获取最新数据（优先 baostock，稳定；失败再尝试 akshare）
         logger.info("从API获取最新股票基本信息")
         try:
-            api_fetcher = DataFetcher(source="akshare")
-            api_data = tool.get_data(api_fetcher, stock_code=stock_code)
+            api_data = pd.DataFrame()
+            for source in ["baostock", "akshare"]:
+                try:
+                    api_fetcher = DataFetcher(source=source)
+                    api_data = tool.get_data(api_fetcher, stock_code=stock_code)
+                except Exception as src_e:
+                    logger.warning(f"数据源 {source} 获取失败: {src_e}")
+                    api_data = pd.DataFrame()
+                if not api_data.empty:
+                    break
 
             if not api_data.empty:
                 # 添加当前日期作为更新时间戳

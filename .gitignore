@@ -2,3 +2,4 @@ utils/__pycache__/*
 *.log
 *.pyc
 .venv
+/questdb_data

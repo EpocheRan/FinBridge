@@ -231,15 +231,6 @@ class questDB:
         except Exception as e:
             logger.error(f"REST API调用失败: {e}")
             return False
-        except Exception as e:
-            logger.error(f"REST API调用失败: {e}")
-            return False
-        except Exception as e:
-            logger.error(f"REST API调用失败: {e}")
-            return False
-        except Exception as e:
-            logger.error(f"REST API调用失败: {e}")
-            return False
 
     @property
     def pd_conn(self):

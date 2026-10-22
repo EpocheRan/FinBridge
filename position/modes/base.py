@@ -51,3 +51,10 @@ class PositionModeBase:
     def calculate_purchase_advice(self, data):
         """h. 计算购买建议：输入数据（含ohlcv、资金等），计算最佳持仓数量与止损价格"""
         return {"quantity": 0, "stop_price": self.stop_price}
+
+    def advance_level(self, trade_type, price, quantity, had_position=False):
+        """i. 成交后推进模式内部层级（如金字塔加仓层、网格当前格）。
+
+        默认无操作；具体模式按自身语义实现。
+        """
+        return None

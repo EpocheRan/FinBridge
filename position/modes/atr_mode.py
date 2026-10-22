@@ -65,38 +65,40 @@ class ATRMode(PositionModeBase):
 
     def calculate_stop_price(self, position_info):
         """
-        ATR 止损 (硬逻辑)：价格 - N * ATR
-        结构止损 (软逻辑)：由外部传入的 structure_stop（如近期低点、支撑位）
-        决策规则：max(p_atr, p_struct)。系统会选择离当前价格更近的那个作为止损点。
+        ATR 追踪止损（只升不降）：
+        1. 初始止损基于【建仓价】：entry_price - N × initial_atr
+        2. 追踪止损基于【当前价】：current_price - N × initial_atr（仅随价格上移）
+        3. 铁律：止损只升不降 —— 取 已有止损 / 初始止损 / 追踪止损 / 结构止损 的最大值
         """
         current_price = position_info.get("current_price")
-        atr = position_info.get("atr")
-
-        # 如果没有传入atr，尝试使用ohlcv计算
-        if atr is None and "ohlcv" in position_info:
+        entry_price = position_info.get("entry_price")
+        # 优先使用建仓时固定的 initial_atr；未设置时回退到传入 atr 或从 ohlcv 计算
+        atr = self.initial_atr or position_info.get("atr")
+        if not atr and "ohlcv" in position_info:
             atr = self._calculate_atr_from_ohlcv(position_info["ohlcv"])
 
-        # 如果计算失败或仍为None，则使用initial_atr
-        if atr is None or atr == 0:
-            atr = self.initial_atr
-
-        # 如果外部没有传入结构止损，则默认为极小值，此时将采用 ATR 止损
         structure_stop = position_info.get("structure_stop", float("-inf"))
 
         if current_price is None:
             logger.warning("calculate_stop_price: missing current_price")
             return self.stop_price
 
-        if atr is None or atr == 0:
-            logger.warning("calculate_stop_price: missing atr and initial_atr is 0")
+        if not atr or atr <= 0:
+            logger.warning("calculate_stop_price: missing atr / initial_atr")
             return self.stop_price
 
-        # ATR 止损计算
-        p_atr = current_price - (self.n_factor * atr)
+        # 未提供建仓价时退回当前价（兼容旧调用）
+        if entry_price is None:
+            entry_price = current_price
 
-        # 决策：选择更接近当前价格（更大值）的止损位
-        self.stop_price = max(p_atr, structure_stop)
+        initial_stop = entry_price - self.n_factor * atr      # 建仓价 - N×ATR
+        trailing_stop = current_price - self.n_factor * atr    # 当前价 - N×ATR
 
+        # 铁律：止损只升不降
+        prev_stop = (
+            self.stop_price if (self.stop_price and self.stop_price > 0) else float("-inf")
+        )
+        self.stop_price = max(prev_stop, initial_stop, trailing_stop, structure_stop)
         return self.stop_price
 
     def get_mode_data(self):
@@ -292,3 +294,13 @@ class ATRMode(PositionModeBase):
             "q_risk": q_risk,
             "q_cash": q_cash,
         }
+
+    def advance_level(self, trade_type, price, quantity, had_position=False):
+        """ATR 金字塔：仅当已有底仓时再次买入才视为「加仓」，pyramid_level +1。
+
+        首次建仓（had_position=False）保持 0。
+        """
+        if trade_type == "买入" and had_position:
+            self.pyramid_level += 1
+            logger.info(f"ATR pyramid_level advanced to {self.pyramid_level}")
+        return self.pyramid_level

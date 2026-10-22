@@ -32,7 +32,7 @@ def init_tables():
                     unrealized_profit DOUBLE,
                     realized_profit DOUBLE,
                     deleted_at TIMESTAMP
-                ) timestamp(id) PARTITION BY YEAR WAL
+                ) timestamp(id) PARTITION BY YEAR
             """,
             "positions": """
                 CREATE TABLE IF NOT EXISTS positions (
@@ -55,7 +55,7 @@ def init_tables():
                     deleted_at TIMESTAMP,
                     stop_price DOUBLE,
                     first_entry_date TIMESTAMP
-                ) timestamp(id) PARTITION BY YEAR WAL
+                ) timestamp(id) PARTITION BY YEAR
             """,
             "trade_records": """
                 CREATE TABLE IF NOT EXISTS trade_records (
@@ -67,7 +67,7 @@ def init_tables():
                     trade_date TIMESTAMP,
                     updated_at TIMESTAMP,
                     deleted_at TIMESTAMP
-                ) timestamp(trade_date) PARTITION BY YEAR WAL
+                ) timestamp(trade_date) PARTITION BY YEAR
             """,
         }
 

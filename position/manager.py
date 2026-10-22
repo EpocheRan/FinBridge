@@ -7,7 +7,7 @@ from sqlalchemy import create_engine, desc, text
 from sqlalchemy.orm import sessionmaker
 from .schema import Base, PortfolioModel, PositionModel, TradeRecordModel, create_tables
 from utils.DataConnect import questDB
-from .modes.atr_mode import ATRMode
+from .modes import create_mode
 
 # Setup logging
 logging.basicConfig(
@@ -23,31 +23,30 @@ class PositionManager:
         self.db = questDB()
         self.engine = self.db.pd_conn
         self.Session = sessionmaker(bind=self.engine)
+        self._last_refresh = {}  # {portfolio_id: timestamp} 刷新缓存
 
     def _get_mode_instance(self, mode_name, params_str):
-        """Helper to instantiate the mode class from database string"""
+        """Helper to instantiate the mode class from database string (走注册表工厂)"""
         params = json.loads(params_str) if params_str else {}
-        if mode_name == "ATR":
-            return ATRMode(**params)
-        # Default fallback or other modes
-        return ATRMode(**params)
+        return create_mode(mode_name, params)
 
     # --- 10) Create Profolio ---
-    def create_profolio(self, name, cash=0.0):
+    def create_profolio(self, name, cash=0.0, force=False):
         session = self.Session()
         try:
             # Check for existing portfolio with the same name to prevent duplicates
-            existing = (
-                session.query(PortfolioModel)
-                .filter_by(name=name)
-                .filter_by(deleted_at=None)
-                .first()
-            )
-            if existing:
-                logger.info(
-                    f"Portfolio with name '{name}' already exists. Returning existing ID: {existing.portfolio_id}"
+            if not force:
+                existing = (
+                    session.query(PortfolioModel)
+                    .filter_by(name=name)
+                    .filter_by(deleted_at=None)
+                    .first()
                 )
-                return existing.portfolio_id
+                if existing:
+                    logger.info(
+                        f"Portfolio with name '{name}' already exists. Returning existing ID: {existing.portfolio_id}"
+                    )
+                    return existing.portfolio_id
 
             portfolio_id = str(uuid.uuid4())[:8]
             new_profolio = PortfolioModel(
@@ -62,6 +61,7 @@ class PositionManager:
             )
             session.add(new_profolio)
             session.commit()
+            time.sleep(0.6)  # Wait for WAL commit (QuestDB 异步落盘)
             logger.info(f"Created profolio: {name} ({portfolio_id})")
             return portfolio_id
         except Exception as e:
@@ -235,14 +235,18 @@ class PositionManager:
                 return p
         return None
 
-    def refresh_all_positions(self, portfolio_id):
-        """Force recalculate profit/market value for all positions in portfolio."""
+    def refresh_all_positions(self, portfolio_id, force=False):
+        """Force recalculate profit/market value for all positions (带 60 秒缓存，避免重复拉行情)."""
+        now = time.time()
+        if not force and (now - self._last_refresh.get(portfolio_id, 0)) < 60:
+            return True
         positions = self.list_positions(portfolio_id)
         for p in positions:
             # calculate_profit fetches price internally now
             self.calculate_profit(p.pos_id)
         # Recalculate total portfolio stats
         self.calculate_profolio(portfolio_id)
+        self._last_refresh[portfolio_id] = now
         return True
 
     def get_portfolio_summary(self, portfolio_id):
@@ -337,6 +341,7 @@ class PositionManager:
             )
             session.add(new_pos)
             session.commit()
+            time.sleep(0.6)  # Wait for WAL commit (QuestDB 异步落盘)
             logger.info(
                 f"Created position: {ticker} ({pos_id}) in profolio {portfolio_id}"
             )
@@ -358,13 +363,16 @@ class PositionManager:
                 session.close()
                 return False
             pro_id = pos.portfolio_id
+            # 现有 mode_params（用于合并，保留 stop_price / 层级等字段）
+            existing_mode_params = json.loads(pos.mode_params or "{}") if pos.mode_params else {}
             session.close()
 
             # 构建 SET 子句
             set_parts = []
             for key, val in updates.items():
                 if key == "mode_params" and isinstance(val, dict):
-                    val = json.dumps(val)
+                    # 合并而非整体替换（避免丢失 stop_price / pyramid_level / grid_level）
+                    val = json.dumps({**existing_mode_params, **val})
 
                 if isinstance(val, str):
                     set_parts.append(f"{key} = '{val}'")
@@ -447,6 +455,10 @@ class PositionManager:
                 .all()
             )
             is_first_trade = len(existing_trades) == 0
+            # 成交前是否已有持仓（用于判断「加仓」并推进金字塔层级）
+            buy_qty_before = sum(t.quantity for t in existing_trades if t.type == "买入")
+            sell_qty_before = sum(t.quantity for t in existing_trades if t.type != "买入")
+            had_position = (buy_qty_before - sell_qty_before) > 0
 
             trade_id = str(uuid.uuid4())[:8]
             now = datetime.utcnow()
@@ -470,7 +482,15 @@ class PositionManager:
             if is_first_trade and trade_type == "买入":
                 self._update_first_entry_date(pos_id, actual_trade_date)
 
-            self.calculate_profit(pos_id)
+            self.calculate_profit(
+                pos_id,
+                trade={
+                    "type": trade_type,
+                    "price": price,
+                    "quantity": quantity,
+                    "had_position": had_position,
+                },
+            )
             return trade_id
         except Exception as e:
             session.rollback()
@@ -556,7 +576,7 @@ class PositionManager:
             session.close()
 
     # --- 5) Calculate Profit ---
-    def calculate_profit(self, pos_id):
+    def calculate_profit(self, pos_id, trade=None):
         session = self.Session()
         try:
             trades = (
@@ -595,30 +615,40 @@ class PositionManager:
             avg_cost = total_buy_cost / total_buy_qty if total_buy_qty > 0 else 0.0
             latest_price = avg_cost  # Default
 
-            # Use data_loader if available to get real-time price
-            price_found = False
+            # 一次性拉取行情 (60天窗口, 同时用于最新价和 ATR/止损)
+            price_df = None
             if self.data_loader and latest_pos.ticker:
                 try:
                     from datetime import datetime, timedelta
 
+                    # 若已有建仓日期，从建仓日往前推；否则取最近60天
+                    if latest_pos.first_entry_date:
+                        entry_date = latest_pos.first_entry_date
+                        if isinstance(entry_date, str):
+                            entry_date = datetime.fromisoformat(
+                                entry_date.replace("Z", "+00:00")
+                            )
+                        start_str = (entry_date - timedelta(days=60)).strftime(
+                            "%Y-%m-%d"
+                        )
+                    else:
+                        start_str = (datetime.now() - timedelta(days=60)).strftime(
+                            "%Y-%m-%d"
+                        )
                     end_str = datetime.now().strftime("%Y-%m-%d")
-                    start_str = (datetime.now() - timedelta(days=10)).strftime(
-                        "%Y-%m-%d"
-                    )
+
                     data_map = self.data_loader.ohlc(
                         latest_pos.ticker, start_str, end_str, freq="d", now=True
                     )
                     price_df = data_map.get(latest_pos.ticker)
-
-                    if price_df is not None and not price_df.empty:
-                        latest_price = price_df["close"].iloc[-1]
-                        price_found = True
                 except Exception as e:
                     logger.warning(
                         f"Failed to fetch price for {latest_pos.ticker}: {e}"
                     )
 
-            if not price_found and trades:
+            if price_df is not None and not price_df.empty:
+                latest_price = price_df["close"].iloc[-1]
+            elif trades:
                 latest_price = trades[-1].price
 
             market_value = current_qty * latest_price
@@ -643,70 +673,75 @@ class PositionManager:
             # 调用 modify_position 更新基础数据
             result = self.modify_position(pos_id, updates)
 
-            # 如果有数据加载器，尝试计算并保存新的 stop_price 和 initial_atr
-            if result and self.data_loader and latest_pos.ticker:
+            # 如果有数据加载器，尝试计算并保存新的 stop_price 和 initial_atr (复用上方拉取的 price_df)
+            if (
+                result
+                and self.data_loader
+                and latest_pos.ticker
+                and price_df is not None
+                and not price_df.empty
+            ):
                 try:
-                    # 创建 mode 实例
+                    # 创建 mode 实例（按持仓配置的模式，走工厂）
                     mode_params = json.loads(latest_pos.mode_params or "{}")
-                    mode = ATRMode(**mode_params)
+                    mode = create_mode(latest_pos.mode, mode_params)
 
-                    # 确定计算ATR的日期范围
-                    from datetime import timedelta
+                    # 成交后推进模式层级（仅本次带成交信息时）
+                    if trade:
+                        mode.advance_level(
+                            trade.get("type"),
+                            trade.get("price"),
+                            trade.get("quantity"),
+                            trade.get("had_position", False),
+                        )
+                        # 合并模式最新状态（pyramid_level / grid_level 等）到 mode_params
+                        mode_params.update(mode.get_mode_data())
 
-                    # 如果有首次建仓日期，从建仓日期开始计算ATR
-                    if latest_pos.first_entry_date:
-                        entry_date = latest_pos.first_entry_date
-                        if isinstance(entry_date, str):
-                            entry_date = datetime.fromisoformat(
-                                entry_date.replace("Z", "+00:00")
-                            )
-                        # 建仓日期往前推14天作为起始日期
-                        start_str = (entry_date - timedelta(days=20)).strftime(
-                            "%Y-%m-%d"
-                        )
-                        end_str = entry_date.strftime("%Y-%m-%d")
-                        logger.info(
-                            f"Calculating ATR from first_entry_date: {start_str} to {end_str}"
-                        )
-                    else:
-                        # 默认使用最近10天
-                        end_str = datetime.now().strftime("%Y-%m-%d")
-                        start_str = (datetime.now() - timedelta(days=10)).strftime(
-                            "%Y-%m-%d"
-                        )
+                    current_price = float(price_df["close"].iloc[-1])
 
-                    data_map = self.data_loader.ohlc(
-                        latest_pos.ticker, start_str, end_str, freq="d", now=True
+                    # 建仓日的 ATR：仅首次计算，且只用建仓日及之前的数据
+                    if (
+                        latest_pos.first_entry_date
+                        and hasattr(mode, "_calculate_atr_from_ohlcv")
+                        and not mode_params.get("initial_atr")
+                    ):
+                        try:
+                            entry_ts = latest_pos.first_entry_date
+                            hist = price_df[price_df.index <= entry_ts]
+                            if len(hist) >= 15:
+                                atr_val = mode._calculate_atr_from_ohlcv(hist)
+                                if atr_val > 0:
+                                    mode_params["initial_atr"] = atr_val
+                                    mode.initial_atr = atr_val  # 本次止损计算立即使用
+                                    self._save_initial_atr(pos_id, atr_val)
+                                    logger.info(
+                                        f"Set initial_atr for {pos_id} from entry-day data: {atr_val}"
+                                    )
+                        except Exception as e:
+                            logger.warning(f"Failed to compute entry-day ATR: {e}")
+
+                    # 建仓价 = 首笔买入价（初始止损基准）
+                    entry_price = None
+                    for t in trades:
+                        if t.type == "买入":
+                            entry_price = float(t.price)
+                            break
+                    if entry_price is None:
+                        entry_price = float(avg_cost)
+
+                    # 计算新的止损价（基于建仓价 + 初始 ATR，且只升不降）
+                    position_info = {
+                        "current_price": current_price,
+                        "entry_price": entry_price,
+                        "ohlcv": price_df,
+                    }
+                    new_stop_price = mode.calculate_stop_price(position_info)
+
+                    # 保存 stop_price 到数据库
+                    self.save_stop_price(pos_id, new_stop_price, mode_params)
+                    logger.info(
+                        f"Updated stop_price for {pos_id}: {new_stop_price}"
                     )
-                    price_df = data_map.get(latest_pos.ticker)
-
-                    if price_df is not None and not price_df.empty:
-                        current_price = float(price_df["close"].iloc[-1])
-
-                        # 计算建仓日的ATR值
-                        if latest_pos.first_entry_date:
-                            # 计算ATR (默认使用14天EMA)
-                            atr_val = mode._calculate_atr_from_ohlcv(price_df)
-                            if atr_val > 0:
-                                # 更新 initial_atr
-                                mode_params["initial_atr"] = atr_val
-                                self._save_initial_atr(pos_id, atr_val)
-                                logger.info(
-                                    f"Set initial_atr for {pos_id} from entry date: {atr_val}"
-                                )
-
-                        # 计算新的止损价
-                        position_info = {
-                            "current_price": current_price,
-                            "ohlcv": price_df,
-                        }
-                        new_stop_price = mode.calculate_stop_price(position_info)
-
-                        # 保存 stop_price 到数据库
-                        self.save_stop_price(pos_id, new_stop_price, mode_params)
-                        logger.info(
-                            f"Updated stop_price for {pos_id}: {new_stop_price}"
-                        )
                 except Exception as e:
                     logger.warning(f"Failed to update stop_price: {e}")
 

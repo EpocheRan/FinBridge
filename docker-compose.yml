@@ -12,11 +12,11 @@ services:
       - "8812:8812"  # PostgreSQL Wire Protocol
     shm_size: 1g  # 增加共享内存到1GB
     volumes:
-      # - ./questdb_data:/var/lib/questdb
+      - questdb_data:/var/lib/questdb
       # - "D:/stockData:/var/lib/questdb"
     environment:
-      - CAIRO_WAL_ENABLED_DEFAULT=false  # 禁用新表的WAL
-      - CAIRO_COMMIT_MODE=sync  # 同步提交确保数据立即持久化
+      - QDB_CAIRO_WAL_ENABLED_DEFAULT=false  # 禁用新表的WAL（position 表写入同步可见）
+      - QDB_CAIRO_COMMIT_MODE=nosync  # 不做每次 fsync，避免 UPDATE 阻塞（非 WAL 表已即时可见）
       - QDB_PG_USER=admin
       - QDB_PG_PASSWORD=quest
 
@@ -41,3 +41,7 @@ services:
       sh -c "pip install uv && 
              uv sync && 
              .venv/bin/python MCPserver.py"
+
+
+volumes:
+  questdb_data:
