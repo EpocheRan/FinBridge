@@ -12,7 +12,7 @@
     "tushare": {
         "enabled": true,
         "token": "<YOUR_TUSHARE_TOKEN>",
-        "points": 2120,
+        "points": 2000,
         "requests_per_minute": 200,
         "daily_request_limit_per_api": 100000,
         "max_retries": 3,
