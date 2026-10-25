@@ -18,12 +18,10 @@ from typing import Any, Iterable
 from data_interface.common.questdb_client import QuestDBClient
 
 from .fields import (
-    BALANCE_COLUMNS,
     BOARD_COLUMNS,
-    CASH_FLOW_COLUMNS,
     ESTIMATE_COLUMNS,
     FIELD_DICT_COLUMNS,
-    INCOME_COLUMNS,
+    INDICATOR_COLUMNS,
     PROFILE_COLUMNS,
     RAW_REPORT_COLUMNS,
     REPORT_META_COLUMNS,
@@ -73,6 +71,9 @@ class FinancialRepository:
     def upsert_estimates(self, rows: Iterable[dict[str, Any]]) -> int:
         return self._insert("fin_estimate", ESTIMATE_COLUMNS, rows)
 
+    def upsert_indicators(self, rows: Iterable[dict[str, Any]]) -> int:
+        return self._insert("fin_indicator", INDICATOR_COLUMNS, rows)
+
     def upsert_valuation(self, rows: Iterable[dict[str, Any]]) -> int:
         return self._insert("fin_valuation_daily", VALUATION_COLUMNS, rows)
 
@@ -101,6 +102,20 @@ class FinancialRepository:
         )
         return rows[0] if rows else None
 
+    def get_fund_codes(self) -> list[str]:
+        rows = self._query_dicts(
+            'SELECT code FROM "fund_basic_info" LATEST ON ts PARTITION BY code'
+        )
+        return sorted({row["code"] for row in rows if row.get("code")})
+
+    def get_profile_codes(self, active_only: bool = True) -> list[str]:
+        sql = 'SELECT code FROM "stock_basic_info"'
+        if active_only:
+            sql += " WHERE list_status = 'L'"
+        sql += " LATEST ON ts PARTITION BY code"
+        rows = self._query_dicts(sql)
+        return sorted({row["code"] for row in rows if row.get("code")})
+
     def get_statements(
         self,
         code: str,
@@ -110,7 +125,16 @@ class FinancialRepository:
         end_date: str | None = None,
         as_of: str | None = None,
         report_type: str | None = "consolidated",
+        latest_per_period: bool = True,
     ) -> list[dict[str, Any]]:
+        """查询报表。
+
+        Args:
+            latest_per_period:
+                True（默认）= 每个报告期只返回最新披露版本（面向用户查询）；
+                False = 返回**全部版本**，供 Point-in-Time 计算按 ``as_of``
+                选择当时已知的那一版（否则重述前的历史估值会少一个季度）。
+        """
         table = STATEMENT_TYPE_TO_TABLE[statement_type]
         conditions = ["code = %s"]
         params: list[Any] = [code]
@@ -131,6 +155,8 @@ class FinancialRepository:
             " ORDER BY period_end DESC, publish_date DESC"
         )
         rows = self._query_dicts(sql, tuple(params))
+        if not latest_per_period:
+            return sorted(rows, key=lambda item: (item.get("period_end"), item.get("publish_date") or 0))
 
         # 同一报告期取最新披露版本；同一版本优先合并报表
         latest: dict[tuple, dict[str, Any]] = {}
@@ -147,6 +173,86 @@ class FinancialRepository:
             (code,),
         )
         return rows[0]["period_end"] if rows else None
+
+    def get_statement_periods(
+        self,
+        code: str,
+        statement_type: str,
+        *,
+        report_type: str = "consolidated",
+    ) -> set[datetime]:
+        """返回数据库中已有报告期，用于计算缺失区间。"""
+        table = STATEMENT_TYPE_TO_TABLE[statement_type]
+        rows = self._query_dicts(
+            f'SELECT DISTINCT period_end FROM "{table}" '
+            "WHERE code = %s AND report_type = %s",
+            (code, report_type),
+        )
+        return {row["period_end"] for row in rows if row.get("period_end")}
+
+    def get_raw_report_ids(self, code: str, statement_type: str) -> set[str]:
+        rows = self._query_dicts(
+            'SELECT DISTINCT report_id FROM "fin_raw_report" '
+            "WHERE code = %s AND statement_type = %s",
+            (code, statement_type),
+        )
+        return {row["report_id"] for row in rows if row.get("report_id")}
+
+    def get_valuation_dates(
+        self,
+        code: str,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> set:
+        conditions = ["code = %s"]
+        params: list[Any] = [code]
+        if start_date:
+            conditions.append("ts >= CAST(%s AS TIMESTAMP)")
+            params.append(start_date)
+        if end_date:
+            conditions.append("ts <= CAST(%s AS TIMESTAMP)")
+            params.append(end_date)
+        rows = self._query_dicts(
+            'SELECT DISTINCT ts FROM "fin_valuation_daily" WHERE '
+            + " AND ".join(conditions),
+            tuple(params),
+        )
+        return {row["ts"].date() for row in rows if row.get("ts")}
+
+    def get_indicators(
+        self,
+        code: str,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> list[dict[str, Any]]:
+        conditions = ["code = %s"]
+        params: list[Any] = [code]
+        if start_date:
+            conditions.append("period_end >= CAST(%s AS TIMESTAMP)")
+            params.append(start_date)
+        if end_date:
+            conditions.append("period_end <= CAST(%s AS TIMESTAMP)")
+            params.append(end_date)
+        rows = self._query_dicts(
+            'SELECT * FROM "fin_indicator" WHERE ' + " AND ".join(conditions) +
+            " ORDER BY period_end DESC, report_type DESC",
+            tuple(params),
+        )
+        latest: dict[tuple, dict[str, Any]] = {}
+        for row in rows:
+            key = (row.get("period_end"), row.get("report_type"))
+            if key not in latest:
+                latest[key] = row
+        return sorted(latest.values(), key=lambda item: item["period_end"])
+
+    def get_indicator_periods(self, code: str) -> set[datetime]:
+        rows = self._query_dicts(
+            'SELECT DISTINCT period_end FROM "fin_indicator" WHERE code = %s',
+            (code,),
+        )
+        return {row["period_end"] for row in rows if row.get("period_end")}
 
     def get_valuation(
         self,
@@ -198,17 +304,15 @@ class FinancialRepository:
         return list(latest.values())
 
     def get_board_membership(self, code: str) -> list[dict[str, Any]]:
+        # 板块归属是「追加快照」语义：用 LATEST ON 只取每个板块的最新一行，
+        # 避免随使用天数增长而全表扫描（旧实现把所有历史版本拉回 Python 去重）
         rows = self._query_dicts(
-            'SELECT * FROM "map_stock_board" WHERE code = %s ORDER BY ts DESC',
+            'SELECT * FROM "map_stock_board" WHERE code = %s '
+            "LATEST ON ts PARTITION BY board_id",
             (code,),
         )
-        latest: dict[tuple, dict[str, Any]] = {}
-        for row in rows:
-            key = (row.get("board_type"), row.get("board_name"))
-            if key not in latest:
-                latest[key] = row
         return sorted(
-            latest.values(), key=lambda item: (item.get("board_type") or "", item.get("board_name") or "")
+            rows, key=lambda item: (item.get("board_type") or "", item.get("board_name") or "")
         )
 
     def get_sync_state(self, code: str, dataset: str) -> dict[str, Any] | None:

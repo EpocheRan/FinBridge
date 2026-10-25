@@ -1,4 +1,4 @@
-﻿"""AkShare 财务/板块补充数据源。
+"""AkShare 财务/板块补充数据源。
 
 定位：
 - Tushare 为主源，AkShare 负责基础信息、板块归属、以及一致预期的免费兜底。
@@ -9,15 +9,27 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime
+import math
 from typing import Any
 
 from data_interface.common.config import get_config
 from data_interface.common.exceptions import SourceUnavailableError
+from data_interface.common.timeutil import now_cn
 
 from ..normalizer import normalize_code, parse_date, safe_float
 
 logger = logging.getLogger("DataInterface.AkShareFinancial")
+
+
+def _safe_count(value: Any) -> int:
+    """把可能是 NaN/空串/浮点的机构数安全转成 int。"""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 0
+    if math.isnan(number) or math.isinf(number) or number <= 0:
+        return 0
+    return int(number)
 
 
 class AkShareFinancialSource:
@@ -166,7 +178,7 @@ class AkShareFinancialSource:
                     "market_cap_change_pct": None,
                     "source": "akshare_indicator",
                     "formula_version": "v1",
-                    "ingested_at": datetime.utcnow(),
+                    "ingested_at": now_cn(),
                 }
             )
         return rows
@@ -177,7 +189,8 @@ class AkShareFinancialSource:
         code = normalize_code(code)
         ak = self._ak()
         rows: list[dict[str, Any]] = []
-        as_of = datetime.utcnow()
+        # 预期快照按天去重，避免同一天重复同步产生多条相同记录
+        as_of = now_cn().replace(hour=0, minute=0, second=0, microsecond=0)
 
         for indicator, metric, unit, scale in (
             ("预测年报每股收益", "eps", "CNY/SHARE", 1.0),
@@ -196,27 +209,32 @@ class AkShareFinancialSource:
                     fiscal_year = int(year)
                 except (TypeError, ValueError):
                     continue
-                rows.append(
-                    {
-                        "as_of": as_of,
-                        "code": code,
-                        "metric": metric,
-                        "fiscal_year": fiscal_year,
-                        "fiscal_period": "FY",
-                        "horizon": "FY",
-                        "value_mean": safe_float(item.get("均值")),
-                        "value_median": None,
-                        "value_high": safe_float(item.get("最大值")),
-                        "value_low": safe_float(item.get("最小值")),
-                        "analyst_count": int(item.get("预测机构数") or 0),
-                        "unit": unit,
-                        "source": "akshare_profit_forecast",
-                        "source_updated_at": as_of,
-                        "ingested_at": as_of,
-                        # 净利润原始单位为亿元
-                        "_scale": scale,
-                    }
-                )
+                try:
+                    rows.append(
+                        {
+                            "as_of": as_of,
+                            "code": code,
+                            "metric": metric,
+                            "fiscal_year": fiscal_year,
+                            "fiscal_period": "FY",
+                            "horizon": "FY",
+                            "value_mean": safe_float(item.get("均值")),
+                            "value_median": None,
+                            "value_high": safe_float(item.get("最大值")),
+                            "value_low": safe_float(item.get("最小值")),
+                            # pandas 的 NaN 是 truthy，`NaN or 0` 仍是 NaN，int(NaN) 会抛错
+                            "analyst_count": _safe_count(item.get("预测机构数")),
+                            "unit": unit,
+                            "source": "akshare_profit_forecast",
+                            "source_updated_at": as_of,
+                            "ingested_at": as_of,
+                            # 净利润原始单位为亿元
+                            "_scale": scale,
+                        }
+                    )
+                except Exception as exc:  # 单行坏数据不拖垮整批兜底
+                    logger.warning("AkShare 盈利预测行解析失败 %s: %s", code, exc)
+                    continue
 
         for row in rows:
             scale = row.pop("_scale", 1.0)

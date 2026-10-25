@@ -2,10 +2,14 @@
 
 所有可变配置（QuestDB、Tushare token、限流、服务端口）统一放在项目根目录
 ``config.json``。环境变量只用于少量部署覆盖，便于 Docker/本地切换。
+
+安全约定：``config.json`` 已被 ``.gitignore`` 排除，仓库只保留
+``config.example.json``；CI/生产用环境变量 ``TUSHARE_TOKEN`` 等覆盖。
 """
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 from functools import lru_cache
@@ -16,6 +20,7 @@ from .exceptions import ConfigurationError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config.json"
+EXAMPLE_CONFIG_PATH = PROJECT_ROOT / "config.example.json"
 
 
 def project_path(*parts: str) -> Path:
@@ -33,10 +38,14 @@ def _deep_merge(base: dict, override: dict) -> dict:
     return result
 
 
-@lru_cache(maxsize=1)
-def load_config(path: str | None = None) -> dict[str, Any]:
-    """读取并缓存配置。"""
-    config_path = Path(path) if path else DEFAULT_CONFIG_PATH
+@lru_cache(maxsize=8)
+def _load_config_cached(path_key: str) -> dict[str, Any]:
+    config_path = Path(path_key) if path_key else DEFAULT_CONFIG_PATH
+    if not config_path.exists() and not path_key:
+        # 首次部署常见：只有 example，没有真实配置
+        raise ConfigurationError(
+            f"配置文件不存在: {config_path}。请复制 config.example.json 为 config.json 后填写。"
+        )
     if not config_path.exists():
         raise ConfigurationError(f"配置文件不存在: {config_path}")
 
@@ -62,6 +71,12 @@ def load_config(path: str | None = None) -> dict[str, Any]:
             raise ConfigurationError(f"配置文件缺少 '{section}' 配置段")
 
     return config
+
+
+def load_config(path: str | None = None) -> dict[str, Any]:
+    """读取配置（按路径缓存，返回深拷贝避免调用方互相污染）。"""
+    path_key = str(Path(path).expanduser().resolve()) if path else ""
+    return copy.deepcopy(_load_config_cached(path_key))
 
 
 def get_config() -> dict[str, Any]:

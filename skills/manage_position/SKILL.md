@@ -29,13 +29,20 @@ description: "Procedure for opening, trading, modifying, and closing stock posit
 
 **Minimum required**
 - `portfolio_id`: The ID of the owner portfolio.
-- `ticker`: Stock symbol (e.g., "AAPL").
-- `action`: open, buy, sell, modify, close.
+- `ticker`: Stock symbol (e.g., "600519").
+- `action`: **only** `buy` / `买入` or `sell` / `卖出` / `close`.
+  Opening tracking uses `pm_open_position`; anything else returns an error.
 - For trade: `quantity`, `price`.
 
 **Missing-info strategy**
 - If `portfolio_id` is missing, call `pm_list_portfolios` and ask the user to select.
-- If `price` is missing for a trade, use `get_ohlc_data` to fetch the latest close price and confirm with the user.
+- If `price` is missing for a trade, use `get_ohlc_data(..., adjust="none")` to fetch the
+  latest **raw** close and confirm with the user (cost basis is raw, not adjusted).
+
+**Hard rules**
+- `quantity` must not exceed the current holding for a sell — the tool rejects it.
+- To change the recorded quantity manually, call `pm_modify_position(quantity=...)`;
+  it writes an `调整` ledger entry that survives recalculation.
 
 ## Outputs (deliverables)
 
@@ -74,6 +81,7 @@ description: "Procedure for opening, trading, modifying, and closing stock posit
 
 ## Quality gate (required)
 - All trades MUST be followed by a `pm_get_portfolio_status` call to confirm the database updated.
+- Read `success` first; when it is `false`, follow `error_details.suggestion` instead of retrying blindly.
 - Use tables to display the final state.
 
 ## Examples

@@ -175,6 +175,28 @@ CASH_FLOW_COLUMNS = [
     "ingested_at",
 ]
 
+INDICATOR_COLUMNS = [
+    "period_end",
+    "code",
+    "report_type",
+    "fiscal_year",
+    "period_type",
+    "revenue",
+    "net_income",
+    "gross_margin",
+    "net_margin",
+    "roe",
+    "roa",
+    "debt_to_assets",
+    "current_ratio",
+    "ocf",
+    "free_cash_flow",
+    "revenue_yoy",
+    "net_income_yoy",
+    "source",
+    "ingested_at",
+]
+
 ESTIMATE_COLUMNS = [
     "as_of",
     "code",

@@ -22,5 +22,12 @@ dev = [
     "pytest>=8.0",
 ]
 
+# PEP 735：uv 默认安装 dev 组，`uv run pytest` 开箱可用
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]

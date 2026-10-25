@@ -20,47 +20,29 @@ from .fields import (
     STATEMENT_MAP,
     TUSHARE_FINA_INDICATOR_MAP,
 )
+from data_interface.common.security_code import normalize_code
+from data_interface.common.security_code import to_baostock_code as to_baostock_code
+from data_interface.common.security_code import to_ts_code as to_ts_code
+from data_interface.common.timeutil import now_cn
+
+# 兼容旧导入路径（`from data_interface.financial.normalizer import to_ts_code`）
+__all__ = [
+    "normalize_code",
+    "to_ts_code",
+    "to_baostock_code",
+    "parse_date",
+    "safe_float",
+    "normalize_statement",
+    "normalize_daily_basic",
+    "merge_fina_indicator",
+    "row_to_values",
+    "make_report_id",
+]
 
 
 # ---------------------------------------------------------------------------
 # 基础工具
 # ---------------------------------------------------------------------------
-def normalize_code(code: str) -> str:
-    """600519.SH / sh.600519 / 600519 -> 600519。"""
-    if code is None:
-        return ""
-    text = str(code).strip()
-    if "." in text:
-        parts = text.split(".")
-        # sh.600519 / 600519.SH 两种形态都取 6 位部分
-        for part in parts:
-            if part.isdigit():
-                return part
-        return parts[0]
-    return text
-
-
-def to_ts_code(code: str) -> str:
-    """6 位代码 -> Tushare ts_code。"""
-    code = normalize_code(code)
-    if not code:
-        return ""
-    if code.startswith(("6", "9")):
-        return f"{code}.SH"
-    if code.startswith(("0", "1", "2", "3")):
-        return f"{code}.SZ"
-    if code.startswith(("4", "8")):
-        return f"{code}.BJ"
-    return f"{code}.SH"
-
-
-def to_baostock_code(code: str) -> str:
-    code = normalize_code(code)
-    if code.startswith(("60", "68", "51", "58", "50")):
-        return f"sh.{code}"
-    if code.startswith(("4", "8")):
-        return f"bj.{code}"
-    return f"sz.{code}"
 
 
 def parse_date(value: Any) -> datetime | None:
@@ -161,7 +143,7 @@ def _base_statement_row(
             code, statement_type, period_end, report_type, publish_date, source
         ),
         "source": source,
-        "ingested_at": ingested_at or datetime.utcnow(),
+        "ingested_at": ingested_at or now_cn(),
         "quality_status": "OK" if publish_date else "PARTIAL",
     }
 
@@ -176,6 +158,8 @@ def _fill_income_derived(row: dict[str, Any]) -> None:
     cost = row.get("cost_of_revenue")
     if row.get("gross_profit") is None and revenue is not None and cost is not None:
         row["gross_profit"] = revenue - cost
+        # 标记为派生值：_validate_statement 不能用它反过来校验 revenue-cost
+        row["_gross_profit_derived"] = True
 
     selling = row.get("selling_expense")
     admin = row.get("general_and_admin_expense")
@@ -189,10 +173,14 @@ def _fill_income_derived(row: dict[str, Any]) -> None:
     if row.get("ebit") is None and row.get("pretax_profit") is not None:
         row["ebit"] = row["pretax_profit"] + (row.get("interest_expense") or 0.0)
 
+    # EBITDA 只能在拿到 D&A 之后算；merge_fina_indicator 补完 D&A 会再调一次。
+    # 打标记是为了区分“源数据自带 EBITDA”和“本地派生 EBITDA”，
+    # 后者才允许在补入 D&A 后重算，不能无条件覆盖源数据。
     if row.get("ebitda") is None and row.get("ebit") is not None:
         row["ebitda"] = row["ebit"] + (
             row.get("depreciation_and_amortization") or 0.0
         )
+        row["_ebitda_derived"] = True
 
 
 def _fill_balance_derived(row: dict[str, Any]) -> None:
@@ -237,7 +225,13 @@ def _validate_statement(statement_type: str, row: dict[str, Any]) -> str:
         revenue = row.get("revenue")
         cost = row.get("cost_of_revenue")
         gross = row.get("gross_profit")
-        if revenue and cost is not None and gross is not None:
+        # 派生出来的 gross_profit 恒等于 revenue-cost，用它校验没有意义
+        if (
+            revenue
+            and cost is not None
+            and gross is not None
+            and not row.get("_gross_profit_derived")
+        ):
             if abs(revenue - cost - gross) > max(1.0, abs(revenue) * 0.01):
                 status = "SUSPECT"
     return status
@@ -281,10 +275,33 @@ def merge_fina_indicator(
         fina = by_period.get(key)
         if not fina:
             continue
+
+        da_filled = False
         for source_field, canonical_field in TUSHARE_FINA_INDICATOR_MAP.items():
             value = safe_float(fina.get(source_field))
-            if value is not None and row.get(canonical_field) is None:
+            if value is None:
+                continue
+            if canonical_field == "ebitda":
+                # 源数据 EBITDA 优先；如果当前值是本地派生的，允许被源值替换
+                if row.get("ebitda") is None or row.get("_ebitda_derived"):
+                    row["ebitda"] = value
+                    row["_ebitda_derived"] = False
+                continue
+            if row.get(canonical_field) is None:
                 row[canonical_field] = value
+                if canonical_field == "depreciation_and_amortization":
+                    da_filled = True
+
+        # 只在“本次补入了 D&A”且当前 EBITDA 是派生值时重算；
+        # 不能无条件清空，否则 fina_indicator 没有 daa 时会把源 EBITDA 抹掉。
+        if (
+            row.get("statement_type") == "IS"
+            and da_filled
+            and (row.get("ebitda") is None or row.get("_ebitda_derived"))
+        ):
+            row["ebitda"] = None
+            row["_ebitda_derived"] = False
+            _fill_income_derived(row)
 
         # fina_indicator 给出的是净债务/带息债务，补齐后再重算派生值
         if row.get("total_debt") is not None and row.get("net_debt") is None:
@@ -348,7 +365,7 @@ def normalize_daily_basic(
         "market_cap_change_pct": None,
         "source": source,
         "formula_version": "v1",
-        "ingested_at": ingested_at or datetime.utcnow(),
+        "ingested_at": ingested_at or now_cn(),
     }
 
 

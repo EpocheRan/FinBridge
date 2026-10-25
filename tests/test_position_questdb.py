@@ -1,5 +1,14 @@
-﻿import unittest
-from unittest.mock import MagicMock, patch
+# 该用例依赖真实网络/QuestDB：默认跳过，RUN_LIVE_TESTS=1 pytest 可开启
+import os
+
+import pytest
+
+pytestmark = pytest.mark.skipif(
+    os.getenv("RUN_LIVE_TESTS") != "1",
+    reason="需要真实数据源/QuestDB；设置 RUN_LIVE_TESTS=1 开启",
+)
+import unittest
+from unittest.mock import MagicMock
 import sys
 import os
 import pandas as pd
@@ -73,9 +82,9 @@ class TestPositionQuestDB(unittest.TestCase):
         time.sleep(0.6)
 
         # 1. Create Position
-        ticker = "AAPL"
+        ticker = "600519"
         pos_id = self.manager.create_position(
-            pid, ticker, "Apple Inc", "ATR", {"initial_atr": 5.0}
+            pid, ticker, "贵州茅台", "ATR", {"initial_atr": 5.0}
         )
         self.assertIsNotNone(pos_id)
 
@@ -114,9 +123,9 @@ class TestPositionQuestDB(unittest.TestCase):
         time.sleep(0.6)
 
         # Open position
-        ticker = "TSLA"
+        ticker = "600519"
         pos_id = self.manager.create_position(
-            pid, ticker, "Tesla", "ATR", {"initial_atr": 10.0}
+            pid, ticker, "贵州茅台", "ATR", {"initial_atr": 10.0}
         )
         self.manager.add_trade_record(pos_id, "买入", 10, 200.0)  # Cost 2000
 
@@ -144,7 +153,7 @@ class TestPositionQuestDB(unittest.TestCase):
         """测试级联删除：删除组合应清除持仓和交易"""
         print("\nTesting Deletion Cascading...")
         pid = self.manager.create_profolio(self.test_prefix + "Delete", cash=1000.0)
-        pos_id = self.manager.create_position(pid, "BTC", "Bitcoin", "ATR")
+        pos_id = self.manager.create_position(pid, "600519", "贵州茅台", "ATR")
         self.manager.add_trade_record(pos_id, "买入", 1, 50000.0)
 
         # Wait for WAL commit

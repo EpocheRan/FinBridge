@@ -1414,6 +1414,11 @@ dev = [
     { name = "pytest" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "akshare", specifier = ">=1.19.1" },
@@ -1429,6 +1434,9 @@ requires-dist = [
     { name = "tushare", specifier = ">=1.4.0" },
 ]
 provides-extras = ["dev"]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=8.0" }]
 
 [[package]]
 name = "referencing"

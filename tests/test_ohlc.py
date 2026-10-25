@@ -1,6 +1,14 @@
-﻿import sys
+# 该用例依赖真实网络/QuestDB：默认跳过，RUN_LIVE_TESTS=1 pytest 可开启
 import os
-import pandas as pd
+
+import pytest
+
+pytestmark = pytest.mark.skipif(
+    os.getenv("RUN_LIVE_TESTS") != "1",
+    reason="需要真实数据源/QuestDB；设置 RUN_LIVE_TESTS=1 开启",
+)
+import sys
+import os
 
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(project_root)

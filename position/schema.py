@@ -1,14 +1,16 @@
-from sqlalchemy import Column, String, Float, DateTime, create_engine
+from __future__ import annotations
+
+from sqlalchemy import Column, DateTime, Float, String
 from sqlalchemy.orm import declarative_base
-from datetime import datetime
-import uuid
+
+from data_interface.common.timeutil import now_cn
 
 Base = declarative_base()
 
 
 class PortfolioModel(Base):
     __tablename__ = "portfolios"
-    id = Column(DateTime, primary_key=True, default=datetime.utcnow)
+    id = Column(DateTime, primary_key=True, default=now_cn)
     portfolio_id = Column(String(50), unique=True, nullable=False)
     name = Column(String(100))
     total_assets = Column(Float, default=0.0)
@@ -21,13 +23,13 @@ class PortfolioModel(Base):
 
 class PositionModel(Base):
     __tablename__ = "positions"
-    id = Column(DateTime, primary_key=True, default=datetime.utcnow)
+    id = Column(DateTime, primary_key=True, default=now_cn)
     pos_id = Column(String(50), unique=True, nullable=False)
     portfolio_id = Column(String(50), index=True)
     ticker = Column(String(20))
     name = Column(String(100))
     mode = Column(String(50))
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=now_cn)
     cost = Column(Float, default=0.0)
     quantity = Column(Float, default=0.0)
     market_value = Column(Float, default=0.0)
@@ -35,7 +37,7 @@ class PositionModel(Base):
     unrealized_profit_rate = Column(Float, default=0.0)
     realized_profit = Column(Float, default=0.0)
     total_profit = Column(Float, default=0.0)
-    updated_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=now_cn)
     mode_params = Column(String(1000), default="{}")
     deleted_at = Column(DateTime, default=None)
     # 止损价作为基础属性
@@ -51,8 +53,8 @@ class TradeRecordModel(Base):
     type = Column(String(10))
     quantity = Column(Float, default=0.0)
     price = Column(Float, default=0.0)
-    trade_date = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow)
+    trade_date = Column(DateTime, default=now_cn)
+    updated_at = Column(DateTime, default=now_cn)
     deleted_at = Column(DateTime, default=None)
 
 

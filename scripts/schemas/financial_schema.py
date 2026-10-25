@@ -1,4 +1,4 @@
-﻿"""财务相关表结构（QuestDB）。
+"""财务相关表结构（QuestDB）。
 
 设计要点：
 - 报表用 ``period_end`` 作为 designated timestamp，按年分区；
@@ -11,8 +11,6 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
-
 from data_interface.financial.fields import (
     FIELD_DEFINITIONS,
     FIELD_DICT_COLUMNS,
@@ -153,6 +151,30 @@ def _ddl() -> list[str]:
         DEDUP UPSERT KEYS(period_end, report_id)
         """,
         """
+        CREATE TABLE IF NOT EXISTS "fin_indicator" (
+            period_end TIMESTAMP,
+            code SYMBOL,
+            report_type SYMBOL,
+            fiscal_year INT,
+            period_type SYMBOL,
+            revenue DOUBLE,
+            net_income DOUBLE,
+            gross_margin DOUBLE,
+            net_margin DOUBLE,
+            roe DOUBLE,
+            roa DOUBLE,
+            debt_to_assets DOUBLE,
+            current_ratio DOUBLE,
+            ocf DOUBLE,
+            free_cash_flow DOUBLE,
+            revenue_yoy DOUBLE,
+            net_income_yoy DOUBLE,
+            source SYMBOL,
+            ingested_at TIMESTAMP
+        ) TIMESTAMP(period_end) PARTITION BY YEAR WAL
+        DEDUP UPSERT KEYS(period_end, code, report_type)
+        """,
+        """
         CREATE TABLE IF NOT EXISTS "fin_estimate" (
             as_of TIMESTAMP,
             code SYMBOL,
@@ -270,7 +292,9 @@ def _ddl() -> list[str]:
 
 
 def _seed_field_dict(db, *, dry_run: bool = False) -> None:
-    now = datetime.utcnow()
+    from data_interface.common.timeutil import now_cn
+
+    now = now_cn()
     columns = FIELD_DICT_COLUMNS
     quoted = ", ".join(f'"{column}"' for column in columns)
     placeholders = ", ".join(["%s"] * len(columns))

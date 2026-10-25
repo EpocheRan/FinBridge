@@ -1,13 +1,23 @@
 """财务派生指标：TTM、EV、估值倍数、成长/盈利能力。
 
-报表原始数据可能是累计值（Q1/H1/Q3/FY），这里统一拆成单季度后再滚动
-求和，避免直接用累计值做 TTM 导致重复计算。
+关键不变量（2026-10 修订）：
+
+1. 累计报表 -> 单季度：只允许 **相邻报告期** 相减（Q1→H1→Q3→FY）。
+   跳期（缺 H1 直接拿到 Q3）算不出单季，一律置 ``None`` 并标 ``PARTIAL``，
+   不再用「当前累计值 - 上一期累计值」硬凑。
+2. TTM：必须是**连续 4 个季度**且 4 个值都非空才求和；缺一期就返回 ``None``，
+   PE/PS/EV 也跟着为 ``None``，绝不输出「看起来正常」的错数。
+3. EV：资产负债表缺失时 ``enterprise_value`` 为 ``None``（不能退化成市值），
+   对应 ``ev_*`` 全部为 ``None``。
+4. 增长率：revenue_yoy 与 net_income_yoy 统一用 ``(本期-上期)/|上期|``。
 """
 
 from __future__ import annotations
 
 from datetime import datetime
 from typing import Any, Iterable
+
+from data_interface.common.timeutil import now_cn
 
 INCOME_TTM_FIELDS = [
     "revenue",
@@ -44,6 +54,17 @@ CASH_FLOW_TTM_FIELDS = [
     "dividends_paid",
 ]
 
+#: 报告期类型 -> 累计进度序号（用于相邻性判断）
+PERIOD_ORDER = {"Q1": 1, "H1": 2, "Q3": 3, "FY": 4}
+#: 年末月份 -> 季度序号（3/6/9/12）
+MONTH_TO_QUARTER = {3: 0, 6: 1, 9: 2, 12: 3}
+
+QUALITY_OK = "OK"
+QUALITY_SINGLE = "SINGLE_QUARTER"
+QUALITY_MISSING_PRIOR = "MISSING_PRIOR"
+QUALITY_GAP = "GAP"
+QUALITY_ANOMALY = "ANOMALY"
+
 
 def _safe_div(numerator: float | None, denominator: float | None) -> float | None:
     if numerator is None or denominator in (None, 0):
@@ -55,16 +76,33 @@ def _safe_div(numerator: float | None, denominator: float | None) -> float | Non
 
 
 def _sub(a: float | None, b: float | None) -> float | None:
-    if a is None:
+    """累计值相减；任一缺失返回 None（绝不把缺失前值当 0）。"""
+    if a is None or b is None:
         return None
-    return a - (b or 0.0)
+    return a - b
+
+
+def _yoy(current: float | None, previous: float | None) -> float | None:
+    """统一增长率口径：``(本期-上期)/|上期|``。"""
+    if current is None or previous in (None, 0):
+        return None
+    return (current - previous) / abs(previous)
+
+
+def quarter_index(period_end: datetime) -> int | None:
+    """报告期 -> 连续季度序号（年*4 + 季），用于相邻性判断。"""
+    quarter = MONTH_TO_QUARTER.get(period_end.month)
+    if quarter is None:
+        return None
+    return period_end.year * 4 + quarter
 
 
 def quarterize(rows: Iterable[dict[str, Any]], fields: list[str]) -> list[dict[str, Any]]:
     """把累计报表拆成单季度。
 
-    - ``report_type == single_quarter`` 直接使用；
-    - 否则按 fiscal_year 内 Q1 -> H1 -> Q3 -> FY 逐级相减。
+    - ``report_type == single_quarter`` 直接使用（标记 ``QUALITY_SINGLE``）；
+    - 其余按 fiscal_year 内 Q1 → H1 → Q3 → FY 逐级相减；
+    - 跳期/重复/缺前值 的条目对应字段置 ``None``，并写 ``_single_quality``。
     """
     deduped: dict[tuple, dict[str, Any]] = {}
     for row in rows:
@@ -73,9 +111,7 @@ def quarterize(rows: Iterable[dict[str, Any]], fields: list[str]) -> list[dict[s
     ordered = sorted(deduped.values(), key=lambda item: item["period_end"])
 
     # 同一报告期可能同时存在合并/调整/母公司版本；优先使用合并报表。
-    consolidated = [
-        row for row in ordered if row.get("report_type") == "consolidated"
-    ]
+    consolidated = [row for row in ordered if row.get("report_type") == "consolidated"]
     if consolidated:
         ordered = consolidated
     else:
@@ -86,53 +122,105 @@ def quarterize(rows: Iterable[dict[str, Any]], fields: list[str]) -> list[dict[s
         ]
 
     by_year: dict[int, list[dict[str, Any]]] = {}
-    single_rows: list[dict[str, Any]] = []
+    result: list[dict[str, Any]] = []
 
     for row in ordered:
         if row.get("report_type") == "single_quarter":
-            single_rows.append({**row, "_single": True})
+            result.append({**row, "_single": True, "_single_quality": QUALITY_SINGLE})
         else:
             by_year.setdefault(row.get("fiscal_year") or row["period_end"].year, []).append(row)
 
-    result: list[dict[str, Any]] = list(single_rows)
     for year_rows in by_year.values():
+        year_rows.sort(key=lambda item: item["period_end"])
         previous: dict[str, Any] | None = None
+        previous_order: int | None = None
         for row in year_rows:
             item = dict(row)
-            if previous is None and row.get("period_type") == "Q1":
-                pass
-            elif previous is not None:
+            order = PERIOD_ORDER.get(str(row.get("period_type")), None)
+            quality = QUALITY_OK
+
+            if order is None:
+                quality = QUALITY_ANOMALY
+            elif previous is None:
+                if order == PERIOD_ORDER["Q1"]:
+                    # Q1 累计值本身就是单季值
+                    quality = QUALITY_OK
+                else:
+                    for field in fields:
+                        item[field] = None
+                    quality = QUALITY_MISSING_PRIOR
+            elif previous_order is not None and order - previous_order == 1:
                 for field in fields:
                     item[field] = _sub(row.get(field), previous.get(field))
+                if any(item.get(field) is None for field in fields):
+                    quality = QUALITY_OK  # 单个字段缺失是源数据问题，不否整行
             else:
-                # 数据从 H1/Q3/FY 开始，无法拆出 Q1，保留 None
                 for field in fields:
                     item[field] = None
+                quality = QUALITY_GAP
+
             item["_single"] = True
+            item["_single_quality"] = quality
             result.append(item)
             previous = row
+            previous_order = order
+
     return sorted(result, key=lambda item: item["period_end"])
 
 
-def ttm(rows: Iterable[dict[str, Any]], fields: list[str]) -> dict[str, float | None]:
-    quarters = quarterize(rows, fields)
+def is_consecutive_quarters(rows: list[dict[str, Any]]) -> bool:
+    """四行是否严格连续四个季度（3 月/6 月/9 月/12 月各一次）。"""
+    if len(rows) != 4:
+        return False
+    indexes = []
+    for row in rows:
+        index = quarter_index(row["period_end"])
+        if index is None:
+            return False
+        indexes.append(index)
+    return indexes == list(range(indexes[0], indexes[0] + 4))
+
+
+def ttm(
+    rows: Iterable[dict[str, Any]],
+    fields: list[str],
+    *,
+    require_complete: bool = True,
+) -> dict[str, float | None]:
+    """滚动 12 个月合计。
+
+    只有「连续 4 个季度 + 该字段 4 期皆非空」才返回数值，否则返回 ``None``。
+    这样 PE/PS/EV 在缺季时会显示为空，避免输出虚高的 TTM。
+    """
+    quarters = [row for row in quarterize(rows, fields) if row.get("_single")]
+    quarters.sort(key=lambda item: item["period_end"])
     recent = quarters[-4:]
-    if not recent:
+    if len(recent) < 4 or (require_complete and not is_consecutive_quarters(recent)):
         return {field: None for field in fields}
+
     result: dict[str, float | None] = {}
     for field in fields:
-        values = [row.get(field) for row in recent if row.get(field) is not None]
-        result[field] = sum(values) if values else None
+        values = [row.get(field) for row in recent]
+        if any(value is None for value in values):
+            result[field] = None
+        else:
+            result[field] = sum(values)
     return result
 
 
 def latest_row(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
-    ordered = sorted(rows, key=lambda item: (item["period_end"], item.get("publish_date") or datetime.min))
+    ordered = sorted(
+        rows,
+        key=lambda item: (
+            item["period_end"],
+            item.get("publish_date") or datetime.min,
+        ),
+    )
     return ordered[-1] if ordered else {}
 
 
 class FinancialMetricsCalculator:
-    formula_version = "v1"
+    formula_version = "v2"
 
     def build_valuation_row(
         self,
@@ -161,8 +249,19 @@ class FinancialMetricsCalculator:
             total_debt = (balance.get("short_term_debt") or 0.0) + (
                 balance.get("long_term_debt") or 0.0
             )
+        # 没有资产负债表就不能假装 EV = 市值
+        balance_available = bool(balance) and any(
+            balance.get(key) is not None
+            for key in (
+                "total_assets",
+                "total_equity",
+                "total_liabilities",
+                "cash_and_cash_equivalents",
+                "total_debt",
+            )
+        )
         enterprise_value = None
-        if market_cap is not None:
+        if market_cap is not None and balance_available:
             enterprise_value = market_cap + (total_debt or 0.0) - (cash or 0.0)
 
         net_income_ttm = income_ttm.get("net_income")
@@ -207,7 +306,7 @@ class FinancialMetricsCalculator:
             "market_cap_change_pct": market_cap_change_pct,
             "source": daily_basic.get("source", "derived"),
             "formula_version": self.formula_version,
-            "ingested_at": daily_basic.get("ingested_at") or datetime.utcnow(),
+            "ingested_at": daily_basic.get("ingested_at") or now_cn(),
         }
 
     def build_indicator_rows(
@@ -215,17 +314,21 @@ class FinancialMetricsCalculator:
         income_rows: list[dict[str, Any]],
         balance_rows: list[dict[str, Any]],
         cash_flow_rows: list[dict[str, Any]],
+        *,
+        code: str | None = None,
     ) -> list[dict[str, Any]]:
-        """按报告期输出常用财务指标，供 MCP 查询。"""
+        """按报告期输出常用财务指标。
+
+        入参必须是**全量历史**（否则同比会缺上年同期、ROE 也无从对比）。
+        """
         income_by_period = {row["period_end"]: row for row in income_rows}
         balance_by_period = {row["period_end"]: row for row in balance_rows}
         cash_by_period = {row["period_end"]: row for row in cash_flow_rows}
         periods = sorted(set(income_by_period) | set(balance_by_period))
 
-        # 同比按“相同报告期类型、上一年度”比较，避免 Q1 与 FY 直接相减
+        # 同比按「相同报告期类型、上一年度」比较，避免 Q1 与 FY 直接相减
         history = {
-            (row.get("period_type"), row.get("fiscal_year")): row
-            for row in income_rows
+            (row.get("period_type"), row.get("fiscal_year")): row for row in income_rows
         }
 
         result = []
@@ -238,16 +341,24 @@ class FinancialMetricsCalculator:
             equity = balance.get("total_equity")
             assets = balance.get("total_assets")
             previous = history.get(
-                (income.get("period_type"), (income.get("fiscal_year") or 0) - 1),
-                {},
+                (income.get("period_type"), (income.get("fiscal_year") or 0) - 1), {}
             )
             previous_revenue = previous.get("revenue") or previous.get("total_revenue")
             previous_profit = previous.get("net_income")
+            period_type = income.get("period_type") or {
+                3: "Q1",
+                6: "H1",
+                9: "Q3",
+                12: "FY",
+            }.get(period.month, "UNKNOWN")
             result.append(
                 {
                     "ts": period,
                     "period_end": period,
-                    "report_type": income.get("report_type"),
+                    "code": code,
+                    "report_type": income.get("report_type") or balance.get("report_type"),
+                    "fiscal_year": income.get("fiscal_year") or period.year,
+                    "period_type": period_type,
                     "revenue": revenue,
                     "net_income": net_income,
                     "gross_margin": _safe_div(income.get("gross_profit"), revenue),
@@ -261,16 +372,8 @@ class FinancialMetricsCalculator:
                     ),
                     "ocf": cash.get("operating_cash_flow"),
                     "free_cash_flow": cash.get("free_cash_flow"),
-                    "revenue_yoy": _safe_div(
-                        revenue - previous_revenue, previous_revenue
-                    )
-                    if previous_revenue not in (None, 0) and revenue is not None
-                    else None,
-                    "net_income_yoy": _safe_div(
-                        net_income - previous_profit, abs(previous_profit)
-                    )
-                    if previous_profit not in (None, 0) and net_income is not None
-                    else None,
+                    "revenue_yoy": _yoy(revenue, previous_revenue),
+                    "net_income_yoy": _yoy(net_income, previous_profit),
                 }
             )
         return result

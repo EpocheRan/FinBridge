@@ -1,8 +1,16 @@
-utils/__pycache__/*
+# --- Python ---
 __pycache__/
-*.pyc
-*.log
-.venv
+*.py[cod]
 .pytest_cache/
-data/runtime/
+.venv/
+*.egg-info/
+
+# --- 本地密钥/运行数据（绝对不要提交）---
+config.json
+config.local.json
+data/
+logs/
+*.log
+
+# --- 数据库/容器 ---
 /questdb_data

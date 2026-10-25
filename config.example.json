@@ -1,6 +1,6 @@
 {
     "questdb": {
-        "host": "questdb",
+        "host": "localhost",
         "port": 8812,
         "user": "admin",
         "password": "quest",
@@ -11,7 +11,7 @@
     },
     "tushare": {
         "enabled": true,
-        "token": "dca55dbc4fc49150d6b03f3441ba515262fccfbd38afe387aaafeb42",
+        "token": "<YOUR_TUSHARE_TOKEN>",
         "points": 2120,
         "requests_per_minute": 200,
         "daily_request_limit_per_api": 100000,
@@ -26,7 +26,8 @@
         "request_timeout_seconds": 8,
         "incremental_source_priority": [
             "baostock",
-            "akshare"
+            "akshare",
+            "tushare"
         ],
         "default_ohlc_frequency": "d"
     },
@@ -38,6 +39,7 @@
         ],
         "statement_start_year": 2000,
         "valuation_start_year": 2020,
+        "restatement_lookback_years": 1,
         "estimate_enabled": true,
         "estimate_source_priority": [
             "tushare_report_rc",
@@ -46,11 +48,28 @@
         "valuation_source_priority": [
             "tushare_daily_basic",
             "akshare_indicator"
-        ]
+        ],
+        "disclosure_lag_days": {
+            "Q1": 30,
+            "H1": 62,
+            "Q3": 31,
+            "FY": 120
+        }
+    },
+    "scheduled_tasks": {
+        "daily_start_date": "2020-01-01",
+        "daily_batch_days": 20,
+        "financial_start_year": 2020,
+        "financial_batch_stocks": 15,
+        "include_valuation": false,
+        "include_funds": true,
+        "fund_universe_min_count": 500,
+        "min_universe_size": 1000,
+        "empty_day_retry_limit": 3
     },
     "server": {
         "name": "QuantDataServer",
-        "transport": "sse",
+        "transport": "http",
         "host": "0.0.0.0",
         "port": 8080
     },
@@ -59,6 +78,7 @@
         "directory": "logs",
         "file": "mcp_server.log",
         "max_bytes": 10485760,
-        "backup_count": 7
+        "backup_count": 7,
+        "console_level": "ERROR"
     }
 }

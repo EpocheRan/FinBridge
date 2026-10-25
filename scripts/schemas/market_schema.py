@@ -1,4 +1,12 @@
-"""行情相关表结构（QuestDB）。"""
+"""行情相关表结构（QuestDB）。
+
+存储口径（2026-10 起）：
+
+- OHLCV 表只存**不复权（raw）**价，复权由读取端按 ``adj_factor`` 计算
+  （见 ``data_interface/market/adjust.py``）。``adj_factor`` 是累计后复权因子。
+- ``DEDUP UPSERT KEYS(ts, code, market)``：同一根 bar 幂等覆盖。
+- 金额 ``amount`` 为 DOUBLE（元）；``volume`` 为 LONG（股）。
+"""
 
 from __future__ import annotations
 
@@ -19,23 +27,32 @@ OHLC_PARTITION = {
     "m": "YEAR",
 }
 
+#: 需要在存量库上补齐的列（(列名, 类型)），迁移脚本与 init 共用
+OHLC_EXTRA_COLUMNS = (("adj_factor", "DOUBLE"),)
+
 
 def _ohlc_sql(table: str, freq: str) -> str:
     partition = OHLC_PARTITION[freq]
     columns = (
         "ts TIMESTAMP, open DOUBLE, high DOUBLE, low DOUBLE, close DOUBLE, "
-        "volume LONG, amount LONG, code SYMBOL, market SYMBOL"
+        "volume LONG, amount DOUBLE, adj_factor DOUBLE, code SYMBOL, market SYMBOL"
     )
     if not freq.endswith("min"):
         columns = (
             "ts TIMESTAMP, open DOUBLE, high DOUBLE, low DOUBLE, close DOUBLE, "
-            "volume LONG, amount LONG, turnover DOUBLE, code SYMBOL, market SYMBOL"
+            "volume LONG, amount DOUBLE, turnover DOUBLE, adj_factor DOUBLE, "
+            "code SYMBOL, market SYMBOL"
         )
     return (
         f'CREATE TABLE IF NOT EXISTS "{table}" ({columns}) '
         f"TIMESTAMP(ts) PARTITION BY {partition} WAL "
         "DEDUP UPSERT KEYS(ts, code, market)"
     )
+
+
+def ohlc_table_ddl(table: str, freq: str) -> str:
+    """生成单张 OHLCV 表的 DDL（迁移脚本重建表时复用）。"""
+    return _ohlc_sql(table, freq)
 
 
 def create_market_tables(db, *, dry_run: bool = False) -> list[str]:
@@ -136,6 +153,20 @@ def create_market_tables(db, *, dry_run: bool = False) -> list[str]:
     for sql in statements:
         if dry_run:
             logger.info("[dry-run] %s", sql.strip().splitlines()[0])
+        else:
+            db.execute_ddl(sql)
+    return statements
+
+
+def migrate_market_tables(db, *, dry_run: bool = False) -> list[str]:
+    """存量库补齐：给每张 OHLCV 表加 ``adj_factor``。"""
+    statements = [
+        f'ALTER TABLE "{table}" ADD COLUMN IF NOT EXISTS "adj_factor" DOUBLE'
+        for table in OHLC_TABLE_BY_FREQUENCY.values()
+    ]
+    for sql in statements:
+        if dry_run:
+            logger.info("[dry-run] %s", sql)
         else:
             db.execute_ddl(sql)
     return statements

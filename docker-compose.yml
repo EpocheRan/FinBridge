@@ -2,7 +2,7 @@ services:
   questdb:
     image: questdb/questdb:latest
     container_name: questdb-server
-    restart: always
+    restart: unless-stopped
     ports:
       - "9000:9000"  # Web Console & HTTP API
       - "9009:9009"  # InfluxDB Line Protocol (ILP)
@@ -16,6 +16,8 @@ services:
       - QDB_CAIRO_COMMIT_MODE=nosync
       - QDB_PG_USER=admin
       - QDB_PG_PASSWORD=quest
+      # 统一北京时间：交易日/「今天」的判断不能依赖容器默认的 UTC
+      - TZ=Asia/Shanghai
 
   # 一次性数据库初始化服务；完成后退出。
   db-init:
@@ -27,11 +29,12 @@ services:
     environment:
       - RUNNING_IN_DOCKER=1
       - PYTHONUNBUFFERED=1
+      - TZ=Asia/Shanghai
     depends_on:
       - questdb
     restart: "no"
     command: >
-      sh -c "pip install --no-cache-dir psycopg2-binary &&
+      sh -c "pip install --no-cache-dir psycopg2-binary==2.9.11 &&
              python scripts/init_database.py"
 
   mcp-server:
@@ -46,14 +49,26 @@ services:
       - RUNNING_IN_DOCKER=1
       - UV_PROJECT_ENVIRONMENT=/app/.venv
       - QUESTDB_HOST=questdb
+      - TZ=Asia/Shanghai
     ports:
       - "8080:8080"
+    restart: unless-stopped
     depends_on:
       db-init:
         condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import socket; socket.create_connection(('127.0.0.1', 8080), 3).close()"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
     command: >
       sh -c "pip install uv &&
-             uv sync &&
+             uv sync --frozen &&
              .venv/bin/python MCPserver.py"
 
 volumes:

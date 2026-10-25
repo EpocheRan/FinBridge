@@ -1,8 +1,6 @@
 from .base import PositionModeBase
 import logging
 import pandas as pd
-import sys
-import os
 
 # Import directly from indicator module
 from indicator import ATR, IndicatorEngine
@@ -36,7 +34,7 @@ class ATRMode(PositionModeBase):
             return 0.0
 
         try:
-            # Prepare DataFrame
+            # Prepare DataFrame（copy：不能改动调用方/缓存里的 frame）
             df = ohlcv.copy()
             df.columns = [c.lower() for c in df.columns]
 
@@ -125,13 +123,16 @@ class ATRMode(PositionModeBase):
            - 未触发加仓 (pyramid_level == 0 或 has_added 为 False)
            - 浮盈 <= 0.5 * N * ATR
            满足以上所有条件 -> 清仓。
+
+        注意：``stop_price <= 0`` 表示尚未建立止损（刚建仓且 ATR 不可得），
+        此时跳过价格止损，避免「现价 <= 0」恒成立导致误清仓。
         """
         current_price = position_info.get("current_price")
         if current_price is None:
             return 0.0
 
         # 1. 价格判断：触及止损
-        if current_price <= self.stop_price:
+        if self.stop_price and self.stop_price > 0 and current_price <= self.stop_price:
             logger.info(
                 f"Trigger Stop Loss: Current {current_price} <= Stop {self.stop_price}"
             )
@@ -147,7 +148,10 @@ class ATRMode(PositionModeBase):
         cost_price = position_info.get("cost_price", current_price)
         profit_per_share = current_price - cost_price
 
-        threshold = 0.5 * self.n_factor * self.initial_atr
+        threshold = 0.5 * self.n_factor * (self.initial_atr or 0.0)
+        if threshold <= 0:
+            # 没有 ATR 就无法判断「僵尸仓」，只保留价格止损
+            return 0.0
 
         if (
             (days_held >= self.time_stop_days)
@@ -252,7 +256,8 @@ class ATRMode(PositionModeBase):
             return {}
 
         # 1. 计算 ATR
-        # Ensure ohlcv has required columns
+        # Ensure ohlcv has required columns（copy：不能改调用方的 DataFrame）
+        ohlcv = ohlcv.copy()
         ohlcv.columns = [c.lower() for c in ohlcv.columns]
         if "close" not in ohlcv.columns:
             logger.error("calculate_purchase_advice: OHLCV missing 'close' column")

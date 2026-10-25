@@ -16,8 +16,9 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 import time
-from datetime import date, datetime, timedelta
+from datetime import date
 from pathlib import Path
 from typing import Any, Callable
 
@@ -30,7 +31,7 @@ from data_interface.common.exceptions import (
 )
 from data_interface.common.rate_limiter import SlidingWindowRateLimiter
 
-from ..normalizer import normalize_code, safe_float, to_ts_code
+from ..normalizer import to_ts_code
 
 logger = logging.getLogger("DataInterface.Tushare")
 
@@ -233,6 +234,7 @@ class TushareSource:
         start_date: str | None = None,
         end_date: str | None = None,
         period: str | None = None,
+        report_type: str | None = None,
     ) -> list[dict[str, Any]]:
         kwargs = {"ts_code": to_ts_code(code)}
         if start_date:
@@ -241,6 +243,9 @@ class TushareSource:
             kwargs["end_date"] = end_date
         if period:
             kwargs["period"] = period
+        if report_type:
+            # Tushare: 1=合并报表 2=单季合并 3=调整合并 ...
+            kwargs["report_type"] = report_type
         return self._call("income", self.pro.income, **kwargs)
 
     def fetch_balance_sheet(self, code: str, **kwargs) -> list[dict[str, Any]]:
@@ -250,6 +255,29 @@ class TushareSource:
     def fetch_cash_flow(self, code: str, **kwargs) -> list[dict[str, Any]]:
         kwargs.setdefault("ts_code", to_ts_code(code))
         return self._call("cashflow", self.pro.cashflow, **kwargs)
+
+    # ------------------------------------------------------------------ 复权因子
+    def fetch_adj_factor(
+        self,
+        code: str,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        trade_date: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """单只股票的复权因子（累计后复权）。"""
+        kwargs: dict[str, Any] = {"ts_code": to_ts_code(code)}
+        if start_date:
+            kwargs["start_date"] = start_date
+        if end_date:
+            kwargs["end_date"] = end_date
+        if trade_date:
+            kwargs["trade_date"] = trade_date
+        return self._call("adj_factor", self.pro.adj_factor, **kwargs)
+
+    def fetch_adj_factor_all(self, trade_date: str) -> list[dict[str, Any]]:
+        """某个交易日全市场复权因子（一次返回全市场）。"""
+        return self._call("adj_factor", self.pro.adj_factor, trade_date=trade_date)
 
     def fetch_fina_indicator(self, code: str, **kwargs) -> list[dict[str, Any]]:
         kwargs.setdefault("ts_code", to_ts_code(code))
@@ -299,9 +327,54 @@ class TushareSource:
         return self._call("daily_basic", self.pro.daily_basic, **kwargs)
 
     def fetch_stock_basic(self, code: str | None = None, **kwargs) -> list[dict[str, Any]]:
+        # 不显式传 fields 时，Tushare 默认不返回 list_status / delist_date，
+        # 会导致 profile 写入 list_status=NULL，进而从 A 股股票池消失。
+        kwargs.setdefault(
+            "fields",
+            "ts_code,symbol,name,area,industry,fullname,enname,market,"
+            "exchange,list_status,list_date,delist_date,is_hs",
+        )
         if code:
             kwargs["ts_code"] = to_ts_code(code)
         return self._call("stock_basic", self.pro.stock_basic, **kwargs)
+
+    def fetch_price_history(
+        self,
+        code: str,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        freq: str = "d",
+    ) -> list[dict[str, Any]]:
+        """按代码拉取股票日/周/月线（不复权）。
+
+        Tushare 的 ``stk_mins`` 需要更高积分，因此分钟线不在本方法内支持。
+        """
+        interface = {"d": "daily", "w": "weekly", "m": "monthly"}.get(freq)
+        if interface is None:
+            raise ValueError(f"Tushare 行情不支持频率: {freq}")
+        kwargs: dict[str, Any] = {"ts_code": to_ts_code(code)}
+        if start_date:
+            kwargs["start_date"] = str(start_date).replace("-", "")
+        if end_date:
+            kwargs["end_date"] = str(end_date).replace("-", "")
+        return self._call(f"price_{freq}", getattr(self.pro, interface), **kwargs)
+
+    def fetch_daily_all(self, trade_date: str) -> list[dict[str, Any]]:
+        """按交易日批量拉全市场日线（Tushare daily，一次返回全市场）。"""
+        return self._call("daily", self.pro.daily, trade_date=trade_date)
+
+    def fetch_daily_basic_all(self, trade_date: str) -> list[dict[str, Any]]:
+        """按交易日批量拉全市场每日指标（用于换手率）。"""
+        return self._call("daily_basic", self.pro.daily_basic, trade_date=trade_date)
+
+    def fetch_fund_basic_all(self, market: str = "E") -> list[dict[str, Any]]:
+        """拉取场内基金列表（ETF/LOF）。"""
+        return self._call("fund_basic", self.pro.fund_basic, market=market)
+
+    def fetch_fund_daily_all(self, trade_date: str) -> list[dict[str, Any]]:
+        """按交易日批量拉全市场 ETF/LOF 日线。"""
+        return self._call("fund_daily", self.pro.fund_daily, trade_date=trade_date)
 
     def fetch_dividend(self, code: str, **kwargs) -> list[dict[str, Any]]:
         kwargs.setdefault("ts_code", to_ts_code(code))
@@ -360,3 +433,28 @@ class TushareSource:
             }
         except Exception as exc:
             return {"ok": False, "source": "tushare", "error": str(exc)}
+
+# ---------------------------------------------------------------------------
+# 进程内共享实例
+# ---------------------------------------------------------------------------
+_shared_sources: dict[str, TushareSource] = {}
+_shared_lock = threading.Lock()
+
+
+def get_shared_tushare_source(config: dict[str, Any] | None = None) -> TushareSource:
+    """按 token 复用同一个 ``TushareSource``（同一个限流器与配额账本）。
+
+    行情旁路 (``TushareMarketSource``)、财务服务、定时任务、复权因子各自 new
+    一个 ``TushareSource`` 时会各持一套滑动窗口限流与每日配额，实际配额能被
+    放大数倍；这里统一收口。
+    """
+    from data_interface.common.config import get_config
+
+    cfg = config or get_config()
+    key = str(cfg["tushare"].get("token") or "")
+    with _shared_lock:
+        source = _shared_sources.get(key)
+        if source is None:
+            source = TushareSource(cfg)
+            _shared_sources[key] = source
+        return source

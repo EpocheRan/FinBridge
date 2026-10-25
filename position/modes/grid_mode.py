@@ -11,6 +11,7 @@
 """
 
 import logging
+import math
 
 from .base import PositionModeBase
 
@@ -63,20 +64,32 @@ class GridMode(PositionModeBase):
             lower = self.base_price - self.grid_count * step
         if upper <= 0 and step > 0:
             upper = self.base_price + self.grid_count * step
-        return float(lower), float(upper)
+        # 下界可能被算成 <= 0（价格跌破 0 不现实）：此时视为「没有下界止损」
+        if lower <= 0:
+            logger.warning(
+                "网格下界 <= 0（base=%.4f step=%.4f count=%s），将不设价格止损",
+                self.base_price,
+                step,
+                self.grid_count,
+            )
+        return float(max(lower, 0.0)), float(upper)
 
     def _level_of(self, price: float) -> int:
         """价格所在的网格层级（相对 base_price，向下取整到整格）。"""
         step = self._step()
         if step <= 0 or self.base_price <= 0:
             return self.grid_level
-        return int(round((price - self.base_price) / step))
+        # 用 floor 而非 round：round 在 ±0.5 处有银行家舍入，会让上下穿判断不对称
+        return int(math.floor((price - self.base_price) / step + 1e-9))
 
     # ------------------------------------------------------------------ #
     # a. 计算止损价
     # ------------------------------------------------------------------ #
     def calculate_stop_price(self, position_info):
         lower, _ = self._bounds()
+        if lower <= 0:
+            # 下界落到 0：不设止损（不要把 0 当成有效止损价落库）
+            return 0.0
         # 显式 stop_price 与网格下界取更高者（更贴近当前价的保护）
         stop = max(self.stop_price, lower) if self.stop_price else lower
         self.stop_price = float(stop or 0.0)
@@ -195,6 +208,7 @@ class GridMode(PositionModeBase):
         if ohlcv is None or ohlcv.empty:
             logger.error("GridMode.calculate_purchase_advice: missing OHLCV")
             return {}
+        ohlcv = ohlcv.copy()
         ohlcv.columns = [c.lower() for c in ohlcv.columns]
         if "close" not in ohlcv.columns:
             return {}
@@ -220,7 +234,11 @@ class GridMode(PositionModeBase):
         # 每格数量未指定时，按可用资金均分到所有网格
         per = self.quantity_per_grid
         if per <= 0:
-            per = int((available_cash / current_price) / total_grids)
+            try:
+                per = int((float(available_cash) / current_price) / total_grids)
+            except (TypeError, ValueError, ZeroDivisionError):
+                logger.warning("网格每格数量计算失败（cash=%s price=%s）", available_cash, current_price)
+                per = 0
         per = max(0, int(per))
 
         # 首仓建议：先建 1 格底仓（保守滚动建仓）

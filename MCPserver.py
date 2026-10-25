@@ -1,17 +1,20 @@
-"""FinBridge MCP Server.
+"""FinBridge MCP Server。
 
 职责边界：
 - 只负责组装 MCP 工具与启动服务。
 - 行情/财务逻辑在 ``data_interface``。
 - 持仓逻辑在 ``position``。
-- 不在启动时检查或创建数据库表；表由 ``scripts/init_database.py`` 或
-  Docker ``db-init`` 服务完成。
+- 不在启动时检查或创建数据库表；表由 ``scripts/init_database.py``、
+  存量库升级由 ``scripts/migrate_database.py`` 完成。
+
+所有服务通过 ``data_interface.api.runtime`` 取进程内单例，避免同一进程里
+出现多套 QuestDB 连接与多套 Tushare 限流器。
 """
 
 from __future__ import annotations
 
 import logging
-import os
+import signal
 from logging.handlers import RotatingFileHandler
 from typing import Any
 
@@ -19,9 +22,9 @@ from fastmcp import FastMCP
 
 from data_interface.api.financial_tools import register_financial_tools
 from data_interface.api.market_tools import register_market_tools
+from data_interface.api.runtime import get_position_interface
 from data_interface.common.config import get_config, project_path
-from data_interface.market.loader import MarketDataLoader
-from position import PositionAgentInterface
+from scheduled_tasks.api import register_scheduled_tools
 
 CONFIG = get_config()
 LOGGING_CONFIG = CONFIG.get("logging", {})
@@ -51,7 +54,7 @@ def setup_logging() -> None:
     root.addHandler(file_handler)
 
     console = logging.StreamHandler()
-    console.setLevel(logging.CRITICAL)
+    console.setLevel(getattr(logging, LOGGING_CONFIG.get("console_level", "ERROR").upper(), logging.ERROR))
     console.setFormatter(formatter)
     root.addHandler(console)
 
@@ -63,18 +66,21 @@ setup_logging()
 logger = logging.getLogger("MCPServer")
 
 mcp = FastMCP(name=SERVER_CONFIG.get("name", "QuantDataServer"))
-market_loader = MarketDataLoader()
-position_interface = PositionAgentInterface(data_loader=market_loader)
 
 register_market_tools(mcp)
 register_financial_tools(mcp)
+register_scheduled_tools(mcp)
 
 
 # ---------------------------------------------------------------------------
 # 持仓工具（保留原有 Agent 交互契约）
 # ---------------------------------------------------------------------------
+def _pm():
+    return get_position_interface()
+
+
 @mcp.tool()
-async def pm_create_portfolio(
+def pm_create_portfolio(
     name: str,
     initial_cash: float,
     reuse_existing: bool = None,
@@ -88,33 +94,31 @@ async def pm_create_portfolio(
         reuse_existing: true=复用相似组合；false=强制新建；不传=自动探测并返回确认提示。
         tickers: 该组合计划交易的标的（可选，用于同标的相似度检测）。
     """
-    return position_interface.create_portfolio(
-        name, initial_cash, reuse_existing, tickers
-    )
+    return _pm().create_portfolio(name, initial_cash, reuse_existing, tickers)
 
 
 @mcp.tool()
-async def pm_list_portfolios() -> dict[str, Any]:
+def pm_list_portfolios() -> dict[str, Any]:
     """List all available investment portfolios."""
-    return position_interface.list_portfolios()
+    return _pm().list_portfolios()
 
 
 @mcp.tool()
-async def pm_delete_portfolio(portfolio_id: str) -> dict[str, Any]:
+def pm_delete_portfolio(portfolio_id: str) -> dict[str, Any]:
     """Delete a portfolio and all its data."""
-    return position_interface.delete_portfolio(portfolio_id)
+    return _pm().delete_portfolio(portfolio_id)
 
 
 @mcp.tool()
-async def pm_modify_portfolio(
+def pm_modify_portfolio(
     portfolio_id: str, name: str = None, cash: float = None
 ) -> dict[str, Any]:
     """Modify portfolio name or cash balance."""
-    return position_interface.modify_portfolio(portfolio_id, name, cash)
+    return _pm().modify_portfolio(portfolio_id, name, cash)
 
 
 @mcp.tool()
-async def pm_modify_position(
+def pm_modify_position(
     pos_id: str,
     name: str = None,
     quantity: float = None,
@@ -122,38 +126,42 @@ async def pm_modify_position(
     risk_per_trade: float = None,
     mode_params: dict = None,
 ) -> dict[str, Any]:
-    """Modify position name, quantity, or risk parameters."""
+    """Modify position name, quantity, or risk parameters.
+
+    ``quantity`` 会以「调整流水」的形式落库（不是直接改字段），
+    因此后续盈亏重算不会把手改的数量抹掉。
+    """
     merged = dict(mode_params or {})
     if n_factor is not None:
         merged["n_factor"] = n_factor
     if risk_per_trade is not None:
         merged["risk_per_trade"] = risk_per_trade
-    return position_interface.modify_position(pos_id, name, quantity, merged or None)
+    return _pm().modify_position(pos_id, name, quantity, merged or None)
 
 
 @mcp.tool()
-async def pm_get_portfolio_status(portfolio_id: str) -> dict[str, Any]:
+def pm_get_portfolio_status(portfolio_id: str) -> dict[str, Any]:
     """Get the current status of the portfolio."""
-    return position_interface.get_portfolio_status(portfolio_id)
+    return _pm().get_portfolio_status(portfolio_id)
 
 
 @mcp.tool()
-async def pm_list_modes() -> dict[str, Any]:
+def pm_list_modes() -> dict[str, Any]:
     """List all available risk management and position sizing modes."""
-    return position_interface.get_available_modes()
+    return _pm().get_available_modes()
 
 
 @mcp.tool()
-async def pm_open_position(
+def pm_open_position(
     portfolio_id: str,
     ticker: str,
-    name: str,
-    mode: str,
+    name: str = None,
+    mode: str = "ATR",
     initial_atr: float = None,
     n_factor: float = None,
     risk_per_trade: float = None,
 ) -> dict[str, Any]:
-    """Open a new tracking position."""
+    """Open a new tracking position (name 缺省时用 ticker)。"""
     kwargs = {}
     if initial_atr is not None:
         kwargs["initial_atr"] = initial_atr
@@ -161,42 +169,44 @@ async def pm_open_position(
         kwargs["n_factor"] = n_factor
     if risk_per_trade is not None:
         kwargs["risk_per_trade"] = risk_per_trade
-    return position_interface.open_position(portfolio_id, ticker, name, mode, **kwargs)
+    return _pm().open_position(portfolio_id, ticker, name, mode, **kwargs)
 
 
 @mcp.tool()
-async def pm_execute_trade(
+def pm_execute_trade(
     portfolio_id: str, ticker: str, action: str, quantity: float, price: float
 ) -> dict[str, Any]:
-    """Record a buy or sell trade."""
-    return position_interface.execute_trade(
-        portfolio_id, ticker, action, quantity, price
-    )
+    """Record a buy or sell trade.
+
+    ``action`` 只接受 buy/买入、sell/卖出/close；其它值会返回错误而不是
+    被当成卖出。卖出数量不能超过当前持仓。
+    """
+    return _pm().execute_trade(portfolio_id, ticker, action, quantity, price)
 
 
 @mcp.tool()
-async def pm_close_position(
+def pm_close_position(
     portfolio_id: str, ticker: str, price: float
 ) -> dict[str, Any]:
-    """Fully close a position."""
-    return position_interface.close_position(portfolio_id, ticker, price)
+    """Fully close a position at the given price."""
+    return _pm().close_position(portfolio_id, ticker, price)
 
 
 @mcp.tool()
-async def pm_check_signals(portfolio_id: str, ticker: str) -> dict[str, Any]:
+def pm_check_signals(portfolio_id: str, ticker: str) -> dict[str, Any]:
     """Check for add/reduce signals for an existing position."""
-    return position_interface.get_trading_signals(portfolio_id, ticker)
+    return _pm().get_trading_signals(portfolio_id, ticker)
 
 
 @mcp.tool()
-async def pm_get_buying_advice(
+def pm_get_buying_advice(
     portfolio_id: str,
     ticker: str,
     initial_risk_per_trade: float = None,
     mode: str = "ATR",
 ) -> dict[str, Any]:
     """Get position sizing advice for a potential new trade."""
-    return position_interface.get_buying_advice(
+    return _pm().get_buying_advice(
         portfolio_id, ticker, initial_risk_per_trade, mode
     )
 
@@ -223,14 +233,40 @@ def manage_position_skill() -> str:
     return _load_skill_content("manage_position")
 
 
+def _resolve_transport(name: str) -> str:
+    """fastmcp 2.x/3.x 的传输名兼容：3.x 推荐 http，2.x 用 sse。"""
+    key = (name or "http").strip().lower()
+    if key in ("http", "streamable-http", "streamable_http"):
+        return "http"
+    if key in ("sse",):
+        return "sse"
+    if key in ("stdio",):
+        return "stdio"
+    logger.warning("未知 transport=%s，回退 http", name)
+    return "http"
+
+
+def _install_signal_handlers() -> None:
+    def _shutdown(signum, _frame):
+        logger.info("收到信号 %s，开始关闭", signum)
+        from data_interface.api.runtime import reset_singletons
+
+        reset_singletons()
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            signal.signal(sig, _shutdown)
+        except (ValueError, OSError):
+            pass
+
+
 if __name__ == "__main__":
-    transport = SERVER_CONFIG.get("transport", "sse")
-    logger.info("Starting MCP server: %s (%s)", SERVER_CONFIG.get("name"), transport)
+    transport = _resolve_transport(SERVER_CONFIG.get("transport", "http"))
+    host = SERVER_CONFIG.get("host", "0.0.0.0")
+    port = int(SERVER_CONFIG.get("port", 8080))
+    logger.info("Starting MCP server: %s (%s %s:%s)", SERVER_CONFIG.get("name"), transport, host, port)
+    _install_signal_handlers()
     if transport == "stdio":
         mcp.run()
     else:
-        mcp.run(
-            transport="sse",
-            host=SERVER_CONFIG.get("host", "0.0.0.0"),
-            port=int(SERVER_CONFIG.get("port", 8080)),
-        )
+        mcp.run(transport=transport, host=host, port=port)

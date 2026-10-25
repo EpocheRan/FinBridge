@@ -67,6 +67,7 @@ description: "Protocol for creating, modifying, and deleting investment portfoli
 
 ## Quality gate (required)
 - Never assume a creation or modification was successful without a follow-up "read" call.
+- Check `success`; on `success=false` read `error_details.type` / `suggestion` and fix the input.
 - Always provide the `portfolio_id` in the final confirmation.
 
 ## Examples

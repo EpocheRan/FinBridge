@@ -47,6 +47,7 @@ from scripts.schemas import (  # noqa: E402
     create_financial_tables,
     create_market_tables,
     create_position_tables,
+    create_task_tables,
 )
 
 logger = logging.getLogger("Scripts.InitDatabase")
@@ -55,6 +56,7 @@ SUB_SCRIPTS = {
     "market": create_market_tables,
     "financial": create_financial_tables,
     "position": create_position_tables,
+    "task": create_task_tables,
 }
 
 
@@ -139,8 +141,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="FinBridge QuestDB 初始化主脚本")
     parser.add_argument(
         "--only",
-        default="market,financial,position",
-        help="只运行指定子脚本，逗号分隔：market,financial,position",
+        default="market,financial,position,task",
+        help="只运行指定子脚本，逗号分隔：market,financial,position,task",
     )
     parser.add_argument("--host", default=None, help="覆盖 QuestDB host")
     parser.add_argument("--port", type=int, default=None, help="覆盖 QuestDB PG 端口")

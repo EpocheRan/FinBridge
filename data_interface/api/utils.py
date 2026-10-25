@@ -1,4 +1,15 @@
-"""MCP 响应与序列化工具。"""
+"""MCP 响应与序列化工具。
+
+统一响应信封（所有工具一致）：
+
+```json
+{"success": true,  "message": "...", "data": {...}, "warnings": ["..."]}
+{"success": false, "message": "...", "error_details": {"type": "...", "suggestion": "..."}}
+```
+
+历史上行情/财务工具把负载放在 ``result``，持仓工具放在 ``data``，Agent 需要
+分别处理；现在统一为 ``data``。
+"""
 
 from __future__ import annotations
 
@@ -20,24 +31,31 @@ def json_safe(value: Any) -> Any:
         return None
     if isinstance(value, dict):
         return {key: json_safe(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
+    if isinstance(value, (list, tuple, set)):
         return [json_safe(item) for item in value]
     try:
         import numpy as np
 
         if isinstance(value, np.generic):
-            return value.item()
+            return json_safe(value.item())
     except ImportError:
         pass
-    if not isinstance(value, (list, dict, tuple)) and pd.isna(value):
-        return None
+    # 只对标量做 isna 判断：数组/DataFrame 会抛 "truth value is ambiguous"
+    if not isinstance(value, (list, dict, tuple, set)) and not hasattr(value, "__len__"):
+        try:
+            if pd.isna(value):
+                return None
+        except (TypeError, ValueError):
+            pass
     return value
 
 
-def ok(message: str, result: Any = None) -> dict[str, Any]:
-    response = {"success": True, "message": message}
+def ok(message: str, result: Any = None, *, warnings: list[str] | None = None) -> dict[str, Any]:
+    response: dict[str, Any] = {"success": True, "message": message}
     if result is not None:
-        response["result"] = json_safe(result)
+        response["data"] = json_safe(result)
+    if warnings:
+        response["warnings"] = [str(item) for item in warnings if item]
     return response
 
 
@@ -59,6 +77,8 @@ def from_exception(exc: Exception) -> dict[str, Any]:
         error_type = payload.pop("error_type", "DataInterfaceError")
         message = payload.pop("message", str(exc))
         payload.pop("source", None)
+        # 去掉空值，避免 error_details 里全是 null
+        payload = {key: value for key, value in payload.items() if value is not None}
         return fail(
             message,
             error_type=error_type,
@@ -81,12 +101,23 @@ def _suggestion_for(error_type: str) -> str:
         return "请确认代码/报告期是否正确，或先调用 sync_financial_data 同步数据。"
     if error_type == "ConfigurationError":
         return "请检查 config.json 的 questdb / tushare / financial 配置。"
+    if error_type == "SourceUnavailableError":
+        return "数据源或数据库不可用。请确认 QuestDB 已启动、网络可达，然后重试。"
     return "请查看 logs/mcp_server.log 获取详细错误。"
 
 
-def dataframe_to_records(df: pd.DataFrame, *, ts_field: str = "ts") -> list[dict[str, Any]]:
+def dataframe_to_records(
+    df: pd.DataFrame,
+    *,
+    ts_field: str = "ts",
+    drop_columns: tuple[str, ...] = (),
+) -> list[dict[str, Any]]:
     if df is None or df.empty:
         return []
     frame = df.reset_index() if isinstance(df.index, pd.DatetimeIndex) else df.copy()
+    if ts_field not in frame.columns and "index" in frame.columns:
+        frame = frame.rename(columns={"index": ts_field})
+    if drop_columns:
+        frame = frame.drop(columns=[c for c in drop_columns if c in frame.columns], errors="ignore")
     records = frame.to_dict("records")
     return [json_safe(record) for record in records]
