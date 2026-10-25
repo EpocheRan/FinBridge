@@ -38,11 +38,19 @@ def test_questdb_has_adj_factor_for_all_stock_bars(db):
     """股票必须有复权因子；ETF/LOF 没有稳定因子源，允许 NULL。"""
     from data_interface.common.security_code import ticker_type
 
+    # 只看真实 A 股市场（market='MLCN'），排除测试夹具（market='TEST'）
     null_codes = [
         str(row[0])
-        for row in db.query('SELECT DISTINCT code FROM "ohlcv_1d" WHERE adj_factor IS NULL')
+        for row in db.query(
+            'SELECT DISTINCT code FROM "ohlcv_1d" '
+            "WHERE adj_factor IS NULL AND market = 'MLCN'"
+        )
     ]
-    stocks_without_factor = [code for code in null_codes if ticker_type(code) == "stock"]
+    stocks_without_factor = [
+        code
+        for code in null_codes
+        if ticker_type(code) == "stock" and not code.startswith("TST")
+    ]
     assert stocks_without_factor == [], f"股票缺复权因子: {stocks_without_factor[:10]}"
     total = db.query('SELECT count() FROM "ohlcv_1d"', fetch_all=False)[0]
     assert total > 0

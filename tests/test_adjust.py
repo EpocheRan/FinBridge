@@ -100,3 +100,14 @@ def test_apply_adjust_does_not_mutate_input():
 def test_to_raw_price_roundtrip():
     assert to_raw_price(5.0, 1.0, 2.0) == pytest.approx(10.0)
     assert to_raw_price(5.0, None, 2.0) == 5.0
+
+
+def test_missing_factor_row_inherits_neighbour_instead_of_raw_mix():
+    """因子个别缺失时不能用 1.0 兜底（会把复权价与不复权价混在同一序列）。"""
+    frame = _frame([10.0, 10.0, 10.0], [1.0, np.nan, 1.1])
+    result = apply_adjust(frame, ADJUST_QFQ, anchor=1.1)
+    scales = (result["close"] / frame["close"]).round(6).tolist()
+    # 第 1、2 行应同为 1.0/1.1；不能出现第 2 行 scale=1.0（不复权）
+    assert scales[0] == pytest.approx(scales[1])
+    assert scales[2] == pytest.approx(1.0)
+    assert result.attrs.get("adjust_filled_rows") == 1

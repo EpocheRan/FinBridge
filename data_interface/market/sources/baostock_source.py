@@ -11,7 +11,10 @@ import logging
 
 import pandas as pd
 
-from data_interface.common.baostock_client import BaoStockClient
+from data_interface.common.baostock_client import (
+    BaoStockClient,
+    get_shared_baostock_client,
+)
 from data_interface.common.security_code import normalize_code
 
 logger = logging.getLogger("DataInterface.BaoStockMarket")
@@ -31,7 +34,7 @@ class BaoStockMarketSource:
     @property
     def client(self) -> BaoStockClient:
         if self._client is None:
-            self._client = BaoStockClient()
+            self._client = get_shared_baostock_client()
         return self._client
 
     @staticmethod

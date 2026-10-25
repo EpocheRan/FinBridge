@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
+from typing import Sequence
 
 import pandas as pd
 
@@ -253,6 +254,7 @@ class MarketDataLoader:
         end_date: str,
         strategy: DataUpdateStrategy,
         freq: str | None = None,
+        source_priority: Sequence[str] | None = None,
     ) -> pd.DataFrame:
         questdb_fetcher = self.fetcher
         query_end = f"{end_date} 23:59"
@@ -273,14 +275,18 @@ class MarketDataLoader:
         api_df = pd.DataFrame()
         if missing_ranges:
             logger.info("发现 %s 个缺失区间", len(missing_ranges))
-            source_priority = list(
-                self.config["market"].get(
-                    "incremental_source_priority", ["baostock", "akshare"]
+            if source_priority is None:
+                priority = list(
+                    self.config["market"].get(
+                        "incremental_source_priority", ["baostock", "akshare"]
+                    )
                 )
-            )
+            else:
+                priority = list(source_priority)
             ticker_type = questdb_fetcher.get_ticker_type(stock_code)
             if freq == "1min" or is_fund_type(ticker_type):
-                source_priority = ["akshare"]
+                priority = ["akshare"]
+            source_priority = priority
             for range_start, range_end in missing_ranges:
                 partial = pd.DataFrame()
                 last_error: Exception | None = None
@@ -378,6 +384,7 @@ class MarketDataLoader:
         freq: str = "d",
         now: bool = False,
         adjust: str = DEFAULT_ADJUST,
+        source_priority: Sequence[str] | None = None,
     ) -> dict[str, pd.DataFrame]:
         freq = normalize_frequency(freq)
         mode = normalize_adjust(adjust)
@@ -392,7 +399,12 @@ class MarketDataLoader:
             if not code:
                 continue
             frame = self._incremental_update(
-                code, start_date, end_date, self.ohlc_strategy, freq
+                code,
+                start_date,
+                end_date,
+                self.ohlc_strategy,
+                freq,
+                source_priority=source_priority,
             )
             if append_realtime:
                 frame = self._append_realtime(frame, code)

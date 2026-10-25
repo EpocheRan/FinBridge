@@ -360,6 +360,27 @@ class TushareSource:
             kwargs["end_date"] = str(end_date).replace("-", "")
         return self._call(f"price_{freq}", getattr(self.pro, interface), **kwargs)
 
+    def fetch_index_daily(
+        self,
+        code: str,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """指数日线（如 000300 沪深300），用于 Beta 基准。
+
+        Tushare 的指数后缀与股票不同：沪市指数 ``.SH``（000300.SH），
+        深市指数 ``.SZ``（399006.SZ），按代码段推断。
+        """
+        normalized = str(code).split(".")[0]
+        suffix = "SZ" if normalized.startswith(("399", "899")) else "SH"
+        kwargs: dict[str, Any] = {"ts_code": f"{normalized}.{suffix}"}
+        if start_date:
+            kwargs["start_date"] = str(start_date).replace("-", "")
+        if end_date:
+            kwargs["end_date"] = str(end_date).replace("-", "")
+        return self._call("index_daily", self.pro.index_daily, **kwargs)
+
     def fetch_daily_all(self, trade_date: str) -> list[dict[str, Any]]:
         """按交易日批量拉全市场日线（Tushare daily，一次返回全市场）。"""
         return self._call("daily", self.pro.daily, trade_date=trade_date)

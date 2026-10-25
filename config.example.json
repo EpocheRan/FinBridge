@@ -56,6 +56,79 @@
             "FY": 120
         }
     },
+    "screener": {
+        "enabled": true,
+        "benchmark": {
+            "code": "000300",
+            "market": "IDX"
+        },
+        "daily": {
+            "beta_window": 252,
+            "beta_min_periods": 60,
+            "volatility_window": 20,
+            "volatility_60_window": 60,
+            "atr_window": 14,
+            "atr_method": "RMA",
+            "avg_volume_windows": [
+                5,
+                20,
+                60
+            ],
+            "high_low_window": 252,
+            "high_low_min_periods": 120,
+            "ma_windows": [
+                5,
+                10,
+                20,
+                60,
+                120,
+                250
+            ],
+            "formula_version": "daily-v1"
+        },
+        "baseline": {
+            "freq": "5m",
+            "lookback_days": 20,
+            "min_sample_days": 5,
+            "max_missing_bucket_ratio": 0.1,
+            "max_age_days": 7,
+            "formula_version": "baseline-v1"
+        },
+        "backfill": {
+            "max_lookback_bars": 260,
+            "max_sync_codes": 300,
+            "max_sync_days": 750,
+            "sync_budget_ms": 2000,
+            "code_chunk_size": 200,
+            "daily_chunk_years": 2,
+            "minute_chunk_days": 5,
+            "source_priority": [
+                "baostock",
+                "akshare",
+                "tushare"
+            ],
+            "intraday_source_priority": [
+                "baostock",
+                "akshare"
+            ],
+            "negative_cache_ttl_hours": 24,
+            "max_retries": 3,
+            "lock_ttl_seconds": 300,
+            "fetch_missing_reference": false,
+            "max_reference_fetch": 20,
+            "fetch_benchmark": false
+        },
+        "worker": {
+            "max_workers": 2,
+            "progress_interval": 50,
+            "start_on_bootstrap": false,
+            "queue_size": 100
+        },
+        "query": {
+            "default_limit": 100,
+            "max_limit": 1000
+        }
+    },
     "scheduled_tasks": {
         "daily_start_date": "2020-01-01",
         "daily_batch_days": 20,
