@@ -24,6 +24,13 @@ Tools: MCP - StockManagement (Includes Tools & Skill Prompts)
 
 3.2 行情与决策 (Analysis & Decision)
 *   **行情**：调用 `get_ohlc_data` 和 `get_ticker_basic_info`。
+*   **财务/基本面**：
+    - 公司资料与板块：`get_company_profile`、`get_board_membership`。
+    - 三大报表：`get_financial_statements`（IS/BS/CF/ALL）。
+    - 财务指标：`get_financial_indicators`。
+    - 估值：`get_valuation`。
+    - 一致预期：`get_estimates`（Tushare 2120 积分下每天仅 10 次，超限会报错并自动降级 AkShare）。
+    - 主动同步：`sync_financial_data`（按需、少量代码调用，禁止全市场循环）。
 *   **新开仓建议**：
     - 调用 `pm_get_buying_advice(portfolio_id, ticker)`。
     - 输出：ATR、建议仓位、止损价、风险敞口。

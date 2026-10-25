@@ -1,4 +1,4 @@
-import unittest
+﻿import unittest
 from unittest.mock import MagicMock, patch
 import sys
 import os
@@ -11,8 +11,8 @@ import time
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from position.manager import PositionManager
-from scripts.init_position_db import init_tables
-from utils.DataConnect import questDB
+from scripts.schemas import create_position_tables
+from data_interface.common.questdb_client import QuestDBClient
 
 
 class TestPositionQuestDB(unittest.TestCase):
@@ -20,8 +20,8 @@ class TestPositionQuestDB(unittest.TestCase):
     def setUpClass(cls):
         """确保 QuestDB 表已初始化 (如果不存在)"""
         print("\nEnsuring QuestDB tables exist...")
-        init_tables()
-        cls.db = questDB()
+        cls.db = QuestDBClient()
+        create_position_tables(cls.db)
 
     def setUp(self):
         """测试准备：使用前缀生成唯一的测试数据"""
@@ -184,3 +184,4 @@ class TestPositionQuestDB(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

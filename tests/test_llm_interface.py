@@ -1,4 +1,4 @@
-import unittest
+﻿import unittest
 from unittest.mock import MagicMock, patch
 import pandas as pd
 from datetime import datetime
@@ -23,7 +23,7 @@ class TestLLMInterface(unittest.TestCase):
         self.Session = sessionmaker(bind=self.engine)
 
         # Patch QuestDB in manager
-        self.patcher = patch("position.manager.questDB")
+        self.patcher = patch("position.manager.QuestDBClient")
         self.mock_quest_db_cls = self.patcher.start()
         self.mock_quest_db = self.mock_quest_db_cls.return_value
         self.mock_quest_db.pd_conn = self.engine
@@ -138,3 +138,4 @@ class TestLLMInterface(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

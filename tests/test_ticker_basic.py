@@ -1,4 +1,4 @@
-import sys
+﻿import sys
 import os
 import pandas as pd
 
@@ -6,11 +6,11 @@ import pandas as pd
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(project_root)
 
-from utils.DataLoader import DataLoader
+from data_interface.market.loader import MarketDataLoader
 
 
 def test_ticker_basic_info():
-    loader = DataLoader()
+    loader = MarketDataLoader()
     # Use a sample stock code
     stock_code = "002977"
     print(f"Fetching basic info for {stock_code}...")
@@ -33,3 +33,4 @@ def test_ticker_basic_info():
 
 if __name__ == "__main__":
     test_ticker_basic_info()
+

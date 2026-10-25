@@ -1,0 +1,425 @@
+"""财务数据规范字段与数据源映射。
+
+所有数据源先映射到 canonical 字段，再统一单位、正负号和校验规则。
+字段命名使用英文 snake_case，中文展示名与口径放在 ``FIELD_DEFINITIONS``。
+"""
+
+from __future__ import annotations
+
+# ---------------------------------------------------------------------------
+# 表字段（顺序即 INSERT 顺序）
+# ---------------------------------------------------------------------------
+PROFILE_COLUMNS = [
+    "ts",
+    "code",
+    "name",
+    "fullname",
+    "exchange",
+    "board",
+    "market",
+    "security_type",
+    "currency",
+    "is_st",
+    "list_status",
+    "list_date",
+    "delist_date",
+    "industry",
+    "sw_l1",
+    "sw_l2",
+    "sw_l3",
+    "area",
+    "main_business",
+    "total_share",
+    "float_share",
+    "total_mv",
+    "float_mv",
+    "source",
+    "updated_at",
+]
+
+BOARD_COLUMNS = [
+    "ts",
+    "board_id",
+    "board_type",
+    "board_name",
+    "parent_id",
+    "source",
+]
+
+STOCK_BOARD_COLUMNS = [
+    "ts",
+    "code",
+    "board_id",
+    "board_type",
+    "board_name",
+    "is_primary",
+    "effective_from",
+    "effective_to",
+    "source",
+]
+
+REPORT_META_COLUMNS = [
+    "period_end",
+    "report_id",
+    "code",
+    "statement_type",
+    "period_type",
+    "report_type",
+    "fiscal_year",
+    "publish_date",
+    "currency",
+    "unit_scale",
+    "source",
+    "source_version",
+    "is_restated",
+    "quality_status",
+    "ingested_at",
+]
+
+INCOME_COLUMNS = [
+    "period_end",
+    "report_id",
+    "code",
+    "publish_date",
+    "period_type",
+    "report_type",
+    "fiscal_year",
+    "total_revenue",
+    "revenue",
+    "cost_of_revenue",
+    "gross_profit",
+    "research_and_development_expense",
+    "selling_expense",
+    "general_and_admin_expense",
+    "selling_general_admin_expense",
+    "finance_expense",
+    "interest_expense",
+    "depreciation_and_amortization",
+    "operating_profit",
+    "ebit",
+    "ebitda",
+    "pretax_profit",
+    "income_tax",
+    "net_income",
+    "net_income_attributable_to_parent",
+    "minority_interest",
+    "continuing_operations_net_income",
+    "discontinued_operations_net_income",
+    "basic_eps",
+    "diluted_eps",
+    "dividend_per_share",
+    "source",
+    "quality_status",
+    "ingested_at",
+]
+
+BALANCE_COLUMNS = [
+    "period_end",
+    "report_id",
+    "code",
+    "publish_date",
+    "period_type",
+    "report_type",
+    "fiscal_year",
+    "cash_and_cash_equivalents",
+    "short_term_investments",
+    "cash_and_short_term_investments",
+    "accounts_receivable",
+    "inventory",
+    "total_current_assets",
+    "goodwill",
+    "intangible_assets",
+    "fixed_assets",
+    "total_non_current_assets",
+    "total_assets",
+    "short_term_debt",
+    "current_portion_of_long_term_debt",
+    "accounts_payable",
+    "total_current_liabilities",
+    "long_term_debt",
+    "bonds_payable",
+    "total_non_current_liabilities",
+    "total_liabilities",
+    "total_debt",
+    "net_debt",
+    "total_equity",
+    "equity_attributable_to_parent",
+    "minority_equity",
+    "retained_earnings",
+    "source",
+    "quality_status",
+    "ingested_at",
+]
+
+CASH_FLOW_COLUMNS = [
+    "period_end",
+    "report_id",
+    "code",
+    "publish_date",
+    "period_type",
+    "report_type",
+    "fiscal_year",
+    "operating_cash_flow",
+    "investing_cash_flow",
+    "financing_cash_flow",
+    "capital_expenditure",
+    "free_cash_flow",
+    "depreciation_and_amortization",
+    "change_in_working_capital",
+    "dividends_paid",
+    "net_change_in_cash",
+    "cash_at_beginning",
+    "cash_at_end",
+    "source",
+    "quality_status",
+    "ingested_at",
+]
+
+ESTIMATE_COLUMNS = [
+    "as_of",
+    "code",
+    "metric",
+    "fiscal_year",
+    "fiscal_period",
+    "horizon",
+    "value_mean",
+    "value_median",
+    "value_high",
+    "value_low",
+    "analyst_count",
+    "unit",
+    "source",
+    "source_updated_at",
+    "ingested_at",
+]
+
+VALUATION_COLUMNS = [
+    "ts",
+    "code",
+    "close",
+    "total_share",
+    "market_cap",
+    "float_market_cap",
+    "enterprise_value",
+    "pe_ttm",
+    "pb_mrq",
+    "ps_ttm",
+    "pcf_ttm",
+    "pfcf",
+    "ev_ebitda",
+    "ev_ebit",
+    "ev_sales",
+    "ev_gross_profit",
+    "ev_fcf",
+    "p_nwc",
+    "earnings_yield",
+    "dividend_yield",
+    "market_cap_change_pct",
+    "source",
+    "formula_version",
+    "ingested_at",
+]
+
+SYNC_STATE_COLUMNS = [
+    "updated_at",
+    "code",
+    "dataset",
+    "last_period_end",
+    "last_publish_date",
+    "last_success_at",
+    "status",
+    "message",
+]
+
+RAW_REPORT_COLUMNS = [
+    "fetched_at",
+    "report_id",
+    "code",
+    "statement_type",
+    "period_end",
+    "source",
+    "payload",
+]
+
+FIELD_DICT_COLUMNS = [
+    "updated_at",
+    "canonical_name",
+    "display_cn",
+    "statement_type",
+    "data_type",
+    "unit",
+    "sign_convention",
+    "formula",
+    "aliases",
+    "description",
+]
+
+# ---------------------------------------------------------------------------
+# Tushare -> canonical 映射
+# ---------------------------------------------------------------------------
+TUSHARE_INCOME_MAP = {
+    "total_revenue": "total_revenue",
+    "revenue": "revenue",
+    "oper_cost": "cost_of_revenue",
+    "rd_exp": "research_and_development_expense",
+    "sell_exp": "selling_expense",
+    "admin_exp": "general_and_admin_expense",
+    "fin_exp": "finance_expense",
+    "fin_exp_int_exp": "interest_expense",
+    "operate_profit": "operating_profit",
+    "ebit": "ebit",
+    "ebitda": "ebitda",
+    "total_profit": "pretax_profit",
+    "income_tax": "income_tax",
+    "n_income": "net_income",
+    "n_income_attr_p": "net_income_attributable_to_parent",
+    "minority_gain": "minority_interest",
+    "continued_net_profit": "continuing_operations_net_income",
+    "end_net_profit": "discontinued_operations_net_income",
+    "basic_eps": "basic_eps",
+    "diluted_eps": "diluted_eps",
+}
+
+TUSHARE_BALANCE_MAP = {
+    "money_cap": "cash_and_cash_equivalents",
+    "trad_asset": "short_term_investments",
+    "accounts_receiv": "accounts_receivable",
+    "inventories": "inventory",
+    "total_cur_assets": "total_current_assets",
+    "goodwill": "goodwill",
+    "intan_assets": "intangible_assets",
+    "fix_assets": "fixed_assets",
+    "total_nca": "total_non_current_assets",
+    "total_assets": "total_assets",
+    "st_borr": "short_term_debt",
+    "non_cur_liab_due_1y": "current_portion_of_long_term_debt",
+    "acct_payable": "accounts_payable",
+    "total_cur_liab": "total_current_liabilities",
+    "lt_borr": "long_term_debt",
+    "bond_payable": "bonds_payable",
+    "total_ncl": "total_non_current_liabilities",
+    "total_liab": "total_liabilities",
+    "total_hldr_eqy_inc_min_int": "total_equity",
+    "total_hldr_eqy_exc_min_int": "equity_attributable_to_parent",
+    "minority_int": "minority_equity",
+    "undistr_porfit": "retained_earnings",
+}
+
+TUSHARE_CASH_FLOW_MAP = {
+    "n_cashflow_act": "operating_cash_flow",
+    "n_cashflow_inv_act": "investing_cash_flow",
+    "n_cash_flows_fnc_act": "financing_cash_flow",
+    "c_pay_acq_const_fiolta": "capital_expenditure",
+    "free_cashflow": "free_cash_flow",
+    "n_incr_cash_cash_equ": "net_change_in_cash",
+    "c_cash_equ_beg_period": "cash_at_beginning",
+    "c_cash_equ_end_period": "cash_at_end",
+    "c_pay_dist_dpcp_int_exp": "dividends_paid",
+}
+
+TUSHARE_FINA_INDICATOR_MAP = {
+    "ebit": "ebit",
+    "ebitda": "ebitda",
+    "daa": "depreciation_and_amortization",
+    "netdebt": "net_debt",
+    "interestdebt": "total_debt",
+    "fcff": "free_cash_flow",
+}
+
+STATEMENT_TYPE_TO_TABLE = {
+    "IS": "fin_income_statement",
+    "BS": "fin_balance_sheet",
+    "CF": "fin_cash_flow",
+}
+
+STATEMENT_COLUMNS = {
+    "IS": INCOME_COLUMNS,
+    "BS": BALANCE_COLUMNS,
+    "CF": CASH_FLOW_COLUMNS,
+}
+
+STATEMENT_MAP = {
+    "IS": TUSHARE_INCOME_MAP,
+    "BS": TUSHARE_BALANCE_MAP,
+    "CF": TUSHARE_CASH_FLOW_MAP,
+}
+
+REPORT_TYPE_MAP = {
+    "1": "consolidated",
+    "2": "single_quarter",
+    "3": "adjusted_single_quarter",
+    "4": "adjusted_consolidated",
+    "5": "pre_adjust_consolidated",
+    "6": "parent",
+    "7": "parent_single_quarter",
+    "8": "parent_adjusted_single_quarter",
+    "9": "parent_adjusted",
+    "10": "parent_pre_adjust",
+    "11": "parent_pre_adjust_consolidated",
+    "12": "parent_pre_adjust",
+}
+
+# ---------------------------------------------------------------------------
+# 字段字典（用于初始化 dim_fin_field）
+# ---------------------------------------------------------------------------
+FIELD_DEFINITIONS: list[dict] = [
+    # 通用
+    {"canonical_name": "period_end", "display_cn": "报告期", "statement_type": "COMMON", "data_type": "TIMESTAMP", "unit": "DATE", "sign_convention": "positive", "formula": "", "description": "财报统计截止日"},
+    {"canonical_name": "publish_date", "display_cn": "披露日", "statement_type": "COMMON", "data_type": "TIMESTAMP", "unit": "DATE", "sign_convention": "positive", "formula": "", "description": "实际公告日，用于 Point-in-Time 查询"},
+    {"canonical_name": "report_type", "display_cn": "报表类型", "statement_type": "COMMON", "data_type": "SYMBOL", "unit": "ENUM", "sign_convention": "positive", "formula": "", "description": "合并/母公司/单季/调整"},
+    {"canonical_name": "period_type", "display_cn": "报告期类型", "statement_type": "COMMON", "data_type": "SYMBOL", "unit": "ENUM", "sign_convention": "positive", "formula": "", "description": "Q1/H1/Q3/FY"},
+    # 利润表
+    {"canonical_name": "total_revenue", "display_cn": "营业总收入", "statement_type": "IS", "data_type": "DOUBLE", "unit": "CNY", "sign_convention": "positive", "formula": "", "description": "营业总收入"},
+    {"canonical_name": "revenue", "display_cn": "营业收入", "statement_type": "IS", "data_type": "DOUBLE", "unit": "CNY", "sign_convention": "positive", "formula": "", "description": "营业收入"},
+    {"canonical_name": "cost_of_revenue", "display_cn": "营业成本", "statement_type": "IS", "data_type": "DOUBLE", "unit": "CNY", "sign_convention": "positive", "formula": "", "description": "营业成本（销售成本）"},
+    {"canonical_name": "gross_profit", "display_cn": "毛利润", "statement_type": "IS", "data_type": "DOUBLE", "unit": "CNY", "sign_convention": "positive", "formula": "revenue - cost_of_revenue", "description": "营业收入减营业成本"},
+    {"canonical_name": "research_and_development_expense", "display_cn": "研发费用", "statement_type": "IS", "data_type": "DOUBLE", "unit": "CNY", "sign_convention": "positive", "formula": "", "description": "研发费用"},
+    {"canonical_name": "selling_expense", "display_cn": "销售费用", "statement_type": "IS", "data_type": "DOUBLE", "unit": "CNY", "sign_convention": "positive", "formula": "", "description": "销售费用"},
+    {"canonical_name": "general_and_admin_expense", "display_cn": "管理费用", "statement_type": "IS", "data_type": "DOUBLE", "unit": "CNY", "sign_convention": "positive", "formula": "", "description": "管理费用"},
+    {"canonical_name": "selling_general_admin_expense", "display_cn": "销售及管理费用", "statement_type": "IS", "data_type": "DOUBLE", "unit": "CNY", "sign_convention": "positive", "formula": "selling_expense + general_and_admin_expense", "description": "销售费用+管理费用"},
+    {"canonical_name": "operating_profit", "display_cn": "营业利润", "statement_type": "IS", "data_type": "DOUBLE", "unit": "CNY", "sign_convention": "positive", "formula": "", "description": "营业利润"},
+    {"canonical_name": "ebit", "display_cn": "息税前利润", "statement_type": "IS", "data_type": "DOUBLE", "unit": "CNY", "sign_convention": "positive", "formula": "pretax_profit + interest_expense", "description": "EBIT"},
+    {"canonical_name": "ebitda", "display_cn": "息税折旧摊销前利润", "statement_type": "IS", "data_type": "DOUBLE", "unit": "CNY", "sign_convention": "positive", "formula": "ebit + depreciation_and_amortization", "description": "EBITDA"},
+    {"canonical_name": "net_income", "display_cn": "净利润", "statement_type": "IS", "data_type": "DOUBLE", "unit": "CNY", "sign_convention": "positive", "formula": "", "description": "含少数股东损益"},
+    {"canonical_name": "net_income_attributable_to_parent", "display_cn": "归母净利润", "statement_type": "IS", "data_type": "DOUBLE", "unit": "CNY", "sign_convention": "positive", "formula": "", "description": "不含少数股东损益"},
+    {"canonical_name": "basic_eps", "display_cn": "基本每股收益", "statement_type": "IS", "data_type": "DOUBLE", "unit": "CNY/SHARE", "sign_convention": "positive", "formula": "", "description": "基本 EPS"},
+    {"canonical_name": "diluted_eps", "display_cn": "稀释每股收益", "statement_type": "IS", "data_type": "DOUBLE", "unit": "CNY/SHARE", "sign_convention": "positive", "formula": "", "description": "稀释 EPS"},
+    # 资产负债表
+    {"canonical_name": "cash_and_cash_equivalents", "display_cn": "现金及现金等价物", "statement_type": "BS", "data_type": "DOUBLE", "unit": "CNY", "sign_convention": "positive", "formula": "", "description": "货币资金"},
+    {"canonical_name": "short_term_investments", "display_cn": "短期投资", "statement_type": "BS", "data_type": "DOUBLE", "unit": "CNY", "sign_convention": "positive", "formula": "", "description": "交易性金融资产等"},
+    {"canonical_name": "cash_and_short_term_investments", "display_cn": "现金及短期投资", "statement_type": "BS", "data_type": "DOUBLE", "unit": "CNY", "sign_convention": "positive", "formula": "cash_and_cash_equivalents + short_term_investments", "description": "现金+短期投资"},
+    {"canonical_name": "total_current_assets", "display_cn": "流动资产合计", "statement_type": "BS", "data_type": "DOUBLE", "unit": "CNY", "sign_convention": "positive", "formula": "", "description": "流动资产合计"},
+    {"canonical_name": "goodwill", "display_cn": "商誉", "statement_type": "BS", "data_type": "DOUBLE", "unit": "CNY", "sign_convention": "positive", "formula": "", "description": "商誉净值"},
+    {"canonical_name": "total_assets", "display_cn": "资产总计", "statement_type": "BS", "data_type": "DOUBLE", "unit": "CNY", "sign_convention": "positive", "formula": "", "description": "资产总计"},
+    {"canonical_name": "short_term_debt", "display_cn": "短期债务", "statement_type": "BS", "data_type": "DOUBLE", "unit": "CNY", "sign_convention": "positive", "formula": "short_term_debt + current_portion_of_long_term_debt", "description": "短期借款+一年内到期非流动负债"},
+    {"canonical_name": "long_term_debt", "display_cn": "长期债务", "statement_type": "BS", "data_type": "DOUBLE", "unit": "CNY", "sign_convention": "positive", "formula": "long_term_debt + bonds_payable", "description": "长期借款+应付债券"},
+    {"canonical_name": "total_debt", "display_cn": "总债务", "statement_type": "BS", "data_type": "DOUBLE", "unit": "CNY", "sign_convention": "positive", "formula": "short_term_debt + long_term_debt", "description": "有息债务合计"},
+    {"canonical_name": "net_debt", "display_cn": "净债务", "statement_type": "BS", "data_type": "DOUBLE", "unit": "CNY", "sign_convention": "positive", "formula": "total_debt - cash_and_cash_equivalents", "description": "总债务-现金"},
+    {"canonical_name": "total_liabilities", "display_cn": "负债合计", "statement_type": "BS", "data_type": "DOUBLE", "unit": "CNY", "sign_convention": "positive", "formula": "", "description": "负债合计"},
+    {"canonical_name": "total_equity", "display_cn": "权益总额", "statement_type": "BS", "data_type": "DOUBLE", "unit": "CNY", "sign_convention": "positive", "formula": "", "description": "含少数股东权益"},
+    # 现金流量表
+    {"canonical_name": "operating_cash_flow", "display_cn": "经营活动现金流量净额", "statement_type": "CF", "data_type": "DOUBLE", "unit": "CNY", "sign_convention": "signed", "formula": "", "description": "OCF"},
+    {"canonical_name": "investing_cash_flow", "display_cn": "投资活动现金流量净额", "statement_type": "CF", "data_type": "DOUBLE", "unit": "CNY", "sign_convention": "signed", "formula": "", "description": "ICF"},
+    {"canonical_name": "financing_cash_flow", "display_cn": "筹资活动现金流量净额", "statement_type": "CF", "data_type": "DOUBLE", "unit": "CNY", "sign_convention": "signed", "formula": "", "description": "FCF(融资)"},
+    {"canonical_name": "capital_expenditure", "display_cn": "资本支出", "statement_type": "CF", "data_type": "DOUBLE", "unit": "CNY", "sign_convention": "positive", "formula": "", "description": "购建固定资产等支付的现金"},
+    {"canonical_name": "free_cash_flow", "display_cn": "自由现金流", "statement_type": "CF", "data_type": "DOUBLE", "unit": "CNY", "sign_convention": "signed", "formula": "operating_cash_flow - capital_expenditure", "description": "FCF"},
+    # 估值
+    {"canonical_name": "market_cap", "display_cn": "总市值", "statement_type": "VALUATION", "data_type": "DOUBLE", "unit": "CNY", "sign_convention": "positive", "formula": "close * total_share", "description": "总市值"},
+    {"canonical_name": "enterprise_value", "display_cn": "企业价值", "statement_type": "VALUATION", "data_type": "DOUBLE", "unit": "CNY", "sign_convention": "positive", "formula": "market_cap + total_debt - cash_and_cash_equivalents", "description": "EV"},
+    {"canonical_name": "pe_ttm", "display_cn": "市盈率(TTM)", "statement_type": "VALUATION", "data_type": "DOUBLE", "unit": "RATIO", "sign_convention": "positive", "formula": "market_cap / net_income_ttm", "description": "PE TTM"},
+    {"canonical_name": "pb_mrq", "display_cn": "市净率", "statement_type": "VALUATION", "data_type": "DOUBLE", "unit": "RATIO", "sign_convention": "positive", "formula": "market_cap / total_equity_mrq", "description": "PB MRQ"},
+    {"canonical_name": "ps_ttm", "display_cn": "市销率(TTM)", "statement_type": "VALUATION", "data_type": "DOUBLE", "unit": "RATIO", "sign_convention": "positive", "formula": "market_cap / revenue_ttm", "description": "PS TTM"},
+    {"canonical_name": "pcf_ttm", "display_cn": "价格现金比", "statement_type": "VALUATION", "data_type": "DOUBLE", "unit": "RATIO", "sign_convention": "positive", "formula": "market_cap / operating_cash_flow_ttm", "description": "P/CF"},
+    {"canonical_name": "pfcf", "display_cn": "价格自由现金流比", "statement_type": "VALUATION", "data_type": "DOUBLE", "unit": "RATIO", "sign_convention": "positive", "formula": "market_cap / free_cash_flow_ttm", "description": "P/FCF"},
+    {"canonical_name": "ev_ebitda", "display_cn": "企业价值/EBITDA", "statement_type": "VALUATION", "data_type": "DOUBLE", "unit": "RATIO", "sign_convention": "positive", "formula": "enterprise_value / ebitda_ttm", "description": "EV/EBITDA"},
+    {"canonical_name": "ev_ebit", "display_cn": "企业价值/EBIT", "statement_type": "VALUATION", "data_type": "DOUBLE", "unit": "RATIO", "sign_convention": "positive", "formula": "enterprise_value / ebit_ttm", "description": "EV/EBIT"},
+    {"canonical_name": "ev_sales", "display_cn": "企业价值/营业收入", "statement_type": "VALUATION", "data_type": "DOUBLE", "unit": "RATIO", "sign_convention": "positive", "formula": "enterprise_value / revenue_ttm", "description": "EV/Sales"},
+    {"canonical_name": "ev_gross_profit", "display_cn": "企业价值/毛利润", "statement_type": "VALUATION", "data_type": "DOUBLE", "unit": "RATIO", "sign_convention": "positive", "formula": "enterprise_value / gross_profit_ttm", "description": "EV/Gross Profit"},
+    {"canonical_name": "ev_fcf", "display_cn": "企业价值/自由现金流", "statement_type": "VALUATION", "data_type": "DOUBLE", "unit": "RATIO", "sign_convention": "positive", "formula": "enterprise_value / free_cash_flow_ttm", "description": "EV/FCF"},
+    {"canonical_name": "p_nwc", "display_cn": "净营运资本价格比", "statement_type": "VALUATION", "data_type": "DOUBLE", "unit": "RATIO", "sign_convention": "positive", "formula": "market_cap / (total_current_assets - total_current_liabilities)", "description": "P/NWC"},
+    {"canonical_name": "earnings_yield", "display_cn": "收益率", "statement_type": "VALUATION", "data_type": "DOUBLE", "unit": "RATIO", "sign_convention": "positive", "formula": "net_income_ttm / market_cap", "description": "盈利收益率"},
+    # 一致预期
+    {"canonical_name": "revenue", "display_cn": "营业收入预估", "statement_type": "ESTIMATE", "data_type": "DOUBLE", "unit": "CNY", "sign_convention": "positive", "formula": "", "description": "卖方一致预期营业收入"},
+    {"canonical_name": "net_income", "display_cn": "净利润预估", "statement_type": "ESTIMATE", "data_type": "DOUBLE", "unit": "CNY", "sign_convention": "positive", "formula": "", "description": "卖方一致预期净利润"},
+    {"canonical_name": "eps", "display_cn": "每股收益预估", "statement_type": "ESTIMATE", "data_type": "DOUBLE", "unit": "CNY/SHARE", "sign_convention": "positive", "formula": "", "description": "卖方一致预期 EPS"},
+]

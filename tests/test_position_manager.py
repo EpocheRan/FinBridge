@@ -1,4 +1,4 @@
-import unittest
+﻿import unittest
 from unittest.mock import MagicMock, patch
 import sys
 import os
@@ -10,7 +10,7 @@ import json
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from position.manager import PositionManager
-from position.schema import Base, ProfolioModel, PositionModel, TradeRecordModel
+from position.schema import Base, PortfolioModel, PositionModel, TradeRecordModel
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
@@ -23,7 +23,7 @@ class TestPositionManager(unittest.TestCase):
         self.Session = sessionmaker(bind=self.engine)
 
         # Patch the PositionManager to use our test engine
-        self.patcher = patch("position.manager.questDB")
+        self.patcher = patch("position.manager.QuestDBClient")
         self.mock_quest_db_cls = self.patcher.start()
         self.mock_quest_db = self.mock_quest_db_cls.return_value
         self.mock_quest_db.pd_conn = self.engine
@@ -60,7 +60,7 @@ class TestPositionManager(unittest.TestCase):
 
         # Verify Modify (History check)
         session = self.Session()
-        all_records = session.query(ProfolioModel).filter_by(profolio_id=pid).all()
+        all_records = session.query(PortfolioModel).filter_by(portfolio_id=pid).all()
         self.assertEqual(len(all_records), 2)  # Original + Modified
 
         latest = self.manager.list__profolio()[0]
@@ -310,7 +310,7 @@ class TestPositionManager(unittest.TestCase):
         with self.engine.connect() as conn:
             # Query profolios
             result = conn.execute(
-                text("SELECT name, cash FROM profolios WHERE profolio_id = :pid"),
+                text("SELECT name, cash FROM portfolios WHERE portfolio_id = :pid"),
                 {"pid": pid},
             )
             row = result.fetchone()
@@ -335,3 +335,4 @@ class TestPositionManager(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

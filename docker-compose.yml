@@ -1,7 +1,4 @@
-version: '3.8'
-
 services:
-  # QuestDB 数据库服务
   questdb:
     image: questdb/questdb:latest
     container_name: questdb-server
@@ -10,38 +7,55 @@ services:
       - "9000:9000"  # Web Console & HTTP API
       - "9009:9009"  # InfluxDB Line Protocol (ILP)
       - "8812:8812"  # PostgreSQL Wire Protocol
-    shm_size: 1g  # 增加共享内存到1GB
+    shm_size: 1g
     volumes:
       - questdb_data:/var/lib/questdb
-      # - "D:/stockData:/var/lib/questdb"
     environment:
-      - QDB_CAIRO_WAL_ENABLED_DEFAULT=false  # 禁用新表的WAL（position 表写入同步可见）
-      - QDB_CAIRO_COMMIT_MODE=nosync  # 不做每次 fsync，避免 UPDATE 阻塞（非 WAL 表已即时可见）
+      # 行情/财务表显式声明 WAL；持仓表保持非 WAL，支持原地 UPDATE
+      - QDB_CAIRO_WAL_ENABLED_DEFAULT=false
+      - QDB_CAIRO_COMMIT_MODE=nosync
       - QDB_PG_USER=admin
       - QDB_PG_PASSWORD=quest
 
+  # 一次性数据库初始化服务；完成后退出。
+  db-init:
+    image: python:3.12-slim
+    container_name: mcp-db-init
+    working_dir: /app
+    volumes:
+      - .:/app
+    environment:
+      - RUNNING_IN_DOCKER=1
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      - questdb
+    restart: "no"
+    command: >
+      sh -c "pip install --no-cache-dir psycopg2-binary &&
+             python scripts/init_database.py"
 
-
-  # 你的 Python MCP Server
   mcp-server:
     image: python:3.12-slim
     container_name: mcp-app
     working_dir: /app
     volumes:
-      - .:/app 
-      - /app/.venv
+      - .:/app
+      # 依赖持久化，避免每次重建容器都重新下载
+      - mcp_venv:/app/.venv
     environment:
+      - RUNNING_IN_DOCKER=1
       - UV_PROJECT_ENVIRONMENT=/app/.venv
-      - QUESTDB_HOST=questdb 
+      - QUESTDB_HOST=questdb
     ports:
       - "8080:8080"
     depends_on:
-      - questdb
+      db-init:
+        condition: service_completed_successfully
     command: >
-      sh -c "pip install uv && 
-             uv sync && 
+      sh -c "pip install uv &&
+             uv sync &&
              .venv/bin/python MCPserver.py"
-
 
 volumes:
   questdb_data:
+  mcp_venv:

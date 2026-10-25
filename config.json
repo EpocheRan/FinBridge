@@ -1,9 +1,64 @@
 {
     "questdb": {
-                "host": "questdb",
-                "port": 8812,
-                "user": "admin",
-                "password": "quest",
-                "database": "stocks"
-            }
+        "host": "questdb",
+        "port": 8812,
+        "user": "admin",
+        "password": "quest",
+        "database": "stocks",
+        "rest_port": 9000,
+        "connect_retries": 30,
+        "connect_retry_interval_seconds": 2.0
+    },
+    "tushare": {
+        "enabled": true,
+        "token": "dca55dbc4fc49150d6b03f3441ba515262fccfbd38afe387aaafeb42",
+        "points": 2120,
+        "requests_per_minute": 200,
+        "daily_request_limit_per_api": 100000,
+        "max_retries": 3,
+        "retry_backoff_seconds": 2.0,
+        "report_rc_daily_limit": 10,
+        "quota_state_file": "data/runtime/tushare_quota.json"
+    },
+    "market": {
+        "default_source": "questdb",
+        "realtime_source": "tencent",
+        "request_timeout_seconds": 8,
+        "incremental_source_priority": [
+            "baostock",
+            "akshare"
+        ],
+        "default_ohlc_frequency": "d"
+    },
+    "financial": {
+        "source_priority": [
+            "tushare",
+            "akshare",
+            "baostock"
+        ],
+        "statement_start_year": 2000,
+        "valuation_start_year": 2020,
+        "estimate_enabled": true,
+        "estimate_source_priority": [
+            "tushare_report_rc",
+            "akshare_profit_forecast"
+        ],
+        "valuation_source_priority": [
+            "tushare_daily_basic",
+            "akshare_indicator"
+        ]
+    },
+    "server": {
+        "name": "QuantDataServer",
+        "transport": "sse",
+        "host": "0.0.0.0",
+        "port": 8080
+    },
+    "logging": {
+        "level": "INFO",
+        "directory": "logs",
+        "file": "mcp_server.log",
+        "max_bytes": 10485760,
+        "backup_count": 7
+    }
 }

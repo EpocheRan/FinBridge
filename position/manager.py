@@ -3,10 +3,10 @@ import uuid
 import json
 import time
 from datetime import datetime
-from sqlalchemy import create_engine, desc, text
+from sqlalchemy import desc
 from sqlalchemy.orm import sessionmaker
-from .schema import Base, PortfolioModel, PositionModel, TradeRecordModel, create_tables
-from utils.DataConnect import questDB
+from .schema import PortfolioModel, PositionModel, TradeRecordModel
+from data_interface.common.questdb_client import QuestDBClient
 from .modes import create_mode
 
 # Setup logging
@@ -20,7 +20,7 @@ class PositionManager:
     def __init__(self, data_loader=None):
         """Initialize the Position Manager with database connection."""
         self.data_loader = data_loader
-        self.db = questDB()
+        self.db = QuestDBClient()
         self.engine = self.db.pd_conn
         self.Session = sessionmaker(bind=self.engine)
         self._last_refresh = {}  # {portfolio_id: timestamp} 刷新缓存

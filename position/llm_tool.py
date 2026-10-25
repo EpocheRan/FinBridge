@@ -197,10 +197,10 @@ class PositionAgentInterface:
             if len(pos_id) > 8 and "-" in pos_id:
                 # 完整 UUID 格式，尝试通过模糊匹配查找
                 # 使用前缀匹配
-                from utils.DataConnect import questDB
+                from data_interface.common.questdb_client import QuestDBClient
                 from sqlalchemy import text
 
-                db = questDB()
+                db = QuestDBClient()
                 search_pattern = pos_id[:8] + "%"
                 with db.pd_conn.connect() as conn:
                     result = conn.execute(

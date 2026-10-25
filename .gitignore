@@ -1,5 +1,8 @@
 utils/__pycache__/*
-*.log
+__pycache__/
 *.pyc
+*.log
 .venv
+.pytest_cache/
+data/runtime/
 /questdb_data
