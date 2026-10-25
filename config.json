@@ -11,8 +11,8 @@
     },
     "tushare": {
         "enabled": true,
-        "token": "dca55dbc4fc49150d6b03f3441ba515262fccfbd38afe387aaafeb42",
-        "points": 2120,
+        "token": "TYPE_YOUR_TOKEN_HERE",
+        "points": 2000,
         "requests_per_minute": 200,
         "daily_request_limit_per_api": 100000,
         "max_retries": 3,
