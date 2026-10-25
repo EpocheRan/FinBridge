@@ -1,0 +1,168 @@
+"""纯向量化因子函数。
+
+本模块只依赖 pandas/numpy，不感知数据库、网络、配置文件和 Backtrader。
+所有函数返回与输入索引对齐的 Series/DataFrame。
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+
+
+def _series(value) -> pd.Series:
+    if isinstance(value, pd.Series):
+        return value.astype("float64")
+    return pd.Series(value, dtype="float64")
+
+
+def _clean(series: pd.Series) -> pd.Series:
+    return series.replace([np.inf, -np.inf], np.nan)
+
+
+def pct_change(close, periods: int = 1) -> pd.Series:
+    series = _series(close)
+    return _clean(series.div(series.shift(periods)).sub(1.0))
+
+
+def gap_pct(open_price, prev_close) -> pd.Series:
+    open_series = _series(open_price)
+    prev = _series(prev_close)
+    return _clean(open_series.div(prev).sub(1.0))
+
+
+def intraday_pct(close, open_price) -> pd.Series:
+    return _clean(_series(close).div(_series(open_price)).sub(1.0))
+
+
+def range_pct(high, low, prev_close) -> pd.Series:
+    high_series = _series(high)
+    low_series = _series(low)
+    prev = _series(prev_close)
+    return _clean(high_series.sub(low_series).div(prev))
+
+
+def rolling_mean(series, window: int, min_periods: int | None = None) -> pd.Series:
+    return _series(series).rolling(
+        window, min_periods=min_periods or window
+    ).mean()
+
+
+def prior_mean(series, window: int, min_periods: int | None = None) -> pd.Series:
+    """前 N 日均值，不包含当日。"""
+    return rolling_mean(_series(series).shift(1), window, min_periods)
+
+
+def rolling_std(series, window: int, min_periods: int | None = None) -> pd.Series:
+    return _series(series).rolling(
+        window, min_periods=min_periods or window
+    ).std(ddof=1)
+
+
+def atr_wilder(
+    high, low, close, window: int = 14, min_periods: int | None = None
+) -> pd.Series:
+    """标准 Wilder ATR（RMA），首值用前 N 个 TR 的简单均值。"""
+    high_series = _series(high)
+    low_series = _series(low)
+    close_series = _series(close)
+    prev_close = close_series.shift(1)
+
+    true_range = pd.concat(
+        [
+            high_series.sub(low_series),
+            high_series.sub(prev_close).abs(),
+            low_series.sub(prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1, skipna=True)
+
+    values = true_range.to_numpy(dtype="float64", copy=False)
+    result = np.full(len(values), np.nan, dtype="float64")
+    period = max(1, int(window))
+    if len(values) < period:
+        return pd.Series(result, index=true_range.index)
+
+    first = values[:period]
+    first_valid = first[~np.isnan(first)]
+    if len(first_valid) == 0:
+        return pd.Series(result, index=true_range.index)
+    result[period - 1] = float(first_valid.mean())
+
+    for index in range(period, len(values)):
+        current = values[index]
+        previous = result[index - 1]
+        if np.isnan(current):
+            result[index] = previous
+        elif np.isnan(previous):
+            result[index] = current
+        else:
+            result[index] = (previous * (period - 1) + current) / period
+
+    return pd.Series(result, index=true_range.index)
+
+
+def atr_pct(atr, close) -> pd.Series:
+    return _clean(_series(atr).div(_series(close)))
+
+
+def realized_volatility(
+    returns,
+    window: int = 20,
+    *,
+    annualize: int = 252,
+    min_periods: int | None = None,
+) -> pd.Series:
+    """年化波动率，返回小数（0.25 = 25%）。"""
+    value = rolling_std(returns, window, min_periods)
+    return _clean(value * np.sqrt(annualize))
+
+
+def rolling_beta(
+    stock_returns,
+    benchmark_returns,
+    window: int = 252,
+    min_periods: int = 60,
+) -> pd.Series:
+    stock = _series(stock_returns)
+    bench = _series(benchmark_returns)
+    stock, bench = stock.align(bench, join="inner")
+    if stock.empty:
+        return pd.Series(dtype="float64")
+    covariance = stock.rolling(window, min_periods=min_periods).cov(bench)
+    variance = bench.rolling(window, min_periods=min_periods).var(ddof=1)
+    return _clean(covariance.div(variance))
+
+
+def rolling_corr(
+    stock_returns,
+    benchmark_returns,
+    window: int = 252,
+    min_periods: int = 60,
+) -> pd.Series:
+    stock = _series(stock_returns)
+    bench = _series(benchmark_returns)
+    stock, bench = stock.align(bench, join="inner")
+    if stock.empty:
+        return pd.Series(dtype="float64")
+    return _clean(stock.rolling(window, min_periods=min_periods).corr(bench))
+
+
+def rolling_high(series, window: int, min_periods: int | None = None) -> pd.Series:
+    return _series(series).rolling(
+        window, min_periods=min_periods or window
+    ).max()
+
+
+def rolling_low(series, window: int, min_periods: int | None = None) -> pd.Series:
+    return _series(series).rolling(
+        window, min_periods=min_periods or window
+    ).min()
+
+
+def volume_stats(volume, windows: tuple[int, ...] = (5, 20, 60)) -> dict[int, pd.Series]:
+    return {window: prior_mean(volume, window) for window in windows}
+
+
+def market_cap(close, shares) -> pd.Series:
+    return _clean(_series(close).mul(_series(shares)))

@@ -21,7 +21,7 @@ import time
 from collections.abc import Iterable
 from datetime import datetime, timedelta
 
-from .baostock_client import BaoStockClient
+from .baostock_client import BaoStockClient, get_shared_baostock_client
 from .exceptions import SourceUnavailableError
 from .questdb_client import QuestDBClient
 from .timeutil import (
@@ -55,7 +55,7 @@ class TradingCalendar:
     @property
     def baostock(self) -> BaoStockClient:
         if self._baostock is None:
-            self._baostock = BaoStockClient()
+            self._baostock = get_shared_baostock_client()
         return self._baostock
 
     # ------------------------------------------------------------------ 元数据

@@ -223,3 +223,17 @@ def test_concept_board_ohlc_uses_named_columns():
     frame = _source_with(fake).fetch_concept_board_ohlc("测试板块", "2024-01-01", "2024-01-05")
     assert list(frame.columns) == ["name", "open", "high", "low", "close", "volume", "amount"]
     assert frame["close"].iloc[0] == pytest.approx(101.0)
+
+
+def test_attach_adj_factor_fills_within_each_code():
+    from data_interface.market.adj_factors import attach_adj_factor
+
+    index = pd.to_datetime(["2024-01-05", "2024-01-08", "2024-01-05", "2024-01-08"])
+    frame = pd.DataFrame(
+        {"code": ["600519", "600519", "000001", "000001"], "close": [1.0, 2.0, 3.0, 4.0]},
+        index=index,
+    )
+    factors = pd.Series({"2024-01-05": 1.1}, dtype="float64")
+    result = attach_adj_factor(frame, factors)
+    # 01-05 缺失的行按 code 分组向后填充，不会被填成 NaN
+    assert result["adj_factor"].tolist() == pytest.approx([1.1, 1.1, 1.1, 1.1])

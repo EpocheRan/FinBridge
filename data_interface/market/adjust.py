@@ -126,13 +126,18 @@ def apply_adjust(
     anchor = float(anchor)
     result.attrs["adjust_anchor"] = anchor
 
+    # 因子是「分段常数、只在除权日跳变」的，个别行缺失时用相邻因子前/后填充，
+    # 绝不能用 1.0 兜底——那会让同一根序列里混着前复权价和不复权价，
+    # 区间收益/均线/52 周高低会整体失真。
+    original_missing = int(factors.isna().sum())
+    factors = factors.ffill().bfill()
+
     if mode == ADJUST_QFQ:
         scale = factors / anchor
     else:  # hfq
         scale = factors
 
-    # 因子缺失的行保持原值（不要用 NaN 污染整列）
-    scale = scale.where(factors.notna(), 1.0).astype("float64")
+    scale = scale.astype("float64")
     for column in _PRICE_COLUMNS:
         if column in result.columns:
             result[column] = (
@@ -140,6 +145,7 @@ def apply_adjust(
             ).round(4)
 
     result.attrs["adjust_fallback"] = None
+    result.attrs["adjust_filled_rows"] = int(original_missing)
     return result
 
 

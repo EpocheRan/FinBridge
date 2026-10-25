@@ -190,7 +190,14 @@ def attach_adj_factor(frame: pd.DataFrame, factors: pd.Series | None) -> pd.Data
 
     day_keys = pd.Series(result.index.strftime("%Y-%m-%d"), index=result.index)
     # 非交易日（周末/节假日时间戳）沿用最近一个有因子的交易日
-    mapped = day_keys.map(factors).ffill()
+    mapped = day_keys.map(factors)
+    # 一批里可能有多只股票：按 code 分组前/后填充，避免跨股票串因子
+    if "code" in result.columns:
+        mapped = mapped.groupby(result["code"].astype(str)).transform(
+            lambda item: item.ffill().bfill()
+        )
+    else:
+        mapped = mapped.ffill().bfill()
 
     if "adj_factor" in result.columns:
         existing = pd.to_numeric(result["adj_factor"], errors="coerce")
