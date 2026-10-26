@@ -1,6 +1,6 @@
 """纯向量化因子函数。
 
-本模块只依赖 pandas/numpy，不感知数据库、网络、配置文件和 Backtrader。
+本模块只依赖 pandas/numpy，不感知数据库、网络、配置文件和外部回测框架。
 所有函数返回与输入索引对齐的 Series/DataFrame。
 """
 

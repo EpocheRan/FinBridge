@@ -79,7 +79,7 @@ python -m screener status
 
 ## 依赖规则
 
-- `domain` 不 import `data_interface`、`psycopg2`、`requests`、`backtrader`。
+- `domain` 不 import `data_interface`、`psycopg2`、`requests`，也不依赖外部回测框架。
 - `application` 不 import `screener.infrastructure`，只依赖 `ports`。
 - `infrastructure` 可以 import `data_interface`。
 - `bootstrap` 是唯一装配具体实现的地方。

@@ -1,3 +1,5 @@
+name: finbridge
+
 services:
   questdb:
     image: questdb/questdb:latest
