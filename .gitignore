@@ -2,14 +2,16 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+pytest-of-*/
 .venv/
 *.egg-info/
+/output/
 
 # --- 本地密钥/运行数据（绝对不要提交）---
 config.json
 config.local.json
-data/
-logs/
+/data/
+/logs/
 *.log
 
 # --- 数据库/容器 ---

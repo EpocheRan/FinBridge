@@ -1915,7 +1915,6 @@ dependencies = [
     { name = "akshare" },
     { name = "baostock" },
     { name = "fastmcp" },
-    { name = "lib-pybroker" },
     { name = "numpy" },
     { name = "pandas" },
     { name = "psycopg2-binary" },
@@ -1925,6 +1924,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+backtest = [
+    { name = "lib-pybroker" },
+]
 dev = [
     { name = "pytest" },
 ]
@@ -1939,7 +1941,7 @@ requires-dist = [
     { name = "akshare", specifier = ">=1.19.1" },
     { name = "baostock", specifier = ">=0.9.4" },
     { name = "fastmcp", specifier = ">=3.0.0b1,<4.0.0" },
-    { name = "lib-pybroker", specifier = ">=2.0.2" },
+    { name = "lib-pybroker", marker = "extra == 'backtest'", specifier = ">=2.0.2,<2.1" },
     { name = "numpy", specifier = ">=2.0,<2.5" },
     { name = "pandas", specifier = ">=2.2.2,<3.0" },
     { name = "psycopg2-binary", specifier = ">=2.9.11" },
@@ -1948,7 +1950,7 @@ requires-dist = [
     { name = "sqlalchemy", specifier = ">=2.0.46" },
     { name = "tushare", specifier = ">=1.4.0" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["dev", "backtest"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=8.0" }]

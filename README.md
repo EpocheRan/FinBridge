@@ -46,9 +46,13 @@ FinBridge 把量化系统拆成四条链路：
 | 因子筛股 | `screener/` | 日频筛选因子、分时量能基线、构建状态、停牌处理 |
 | 持仓 | `position/` | 组合账本、ATR/GRID 仓位、交易与盈亏 |
 | 技术指标 | `indicator/` | 纯 pandas/numpy 的单标的指标（ATR 等） |
-| 回测 | `backtest/` | PyBroker 数据源适配；策略/输出按 PyBroker 接口扩展 |
+| 因子库 | `factors/` | 因子声明、时序/横截面算子、date×symbol 面板 |
+| 策略 | `strategies/` | 单股/横截面策略基类与示例（`strategies/models/`） |
+| 回测 | `backtest/` | PyBroker 单股引擎、自建账本、A 股规则、CLI、输出 |
 | 定时同步 | `scheduled_tasks/` | 全 A 股日线/财务分批同步（心跳驱动） |
 | MCP 入口 | `MCPserver.py` | 只组装工具与启动服务 |
+
+> 回测用法、策略/因子写法与当前限制见 [`backtest/README.md`](backtest/README.md)。
 
 **数据源**：Tushare Pro（财务与复权因子主源，至少 2000 积分）、AkShare、BaoStock、腾讯实时行情。
 
@@ -502,7 +506,9 @@ FinBridge/
 ├── scheduled_tasks/                # 心跳式批量同步
 ├── position/                       # 组合/持仓/交易 + ATR/GRID
 ├── indicator/                      # 纯 pandas/numpy 指标（ATR 等）
-├── backtest/                       # PyBroker 数据源/策略/输出适配
+├── factors/                        # 因子库：声明/算子/面板
+├── strategies/                     # 策略基类 + models/ 一文件一策略
+├── backtest/                       # PyBroker 单股引擎、账本、CLI、输出
 ├── scripts/
 │   ├── init_database.py            # 建表
 │   ├── migrate_database.py         # 存量库迁移
