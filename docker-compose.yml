@@ -69,8 +69,11 @@ services:
       retries: 3
       start_period: 120s
     command: >
-      sh -c "pip install uv &&
-             uv sync --frozen &&
+      sh -c "if [ ! -x .venv/bin/python ] ||
+                   ! .venv/bin/python -c 'import fastmcp, pybroker' >/dev/null 2>&1;
+             then
+               pip install uv && uv sync --frozen --extra backtest;
+             fi;
              .venv/bin/python MCPserver.py"
 
 volumes:
