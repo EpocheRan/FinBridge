@@ -45,7 +45,8 @@ FinBridge 把量化系统拆成四条链路：
 | 数据接口 | `data_interface/` | 行情、财务、交易日历、QuestDB、复权、限流、异常 |
 | 因子筛股 | `screener/` | 日频筛选因子、分时量能基线、构建状态、停牌处理 |
 | 持仓 | `position/` | 组合账本、ATR/GRID 仓位、交易与盈亏 |
-| 技术指标 | `indicator/` | Backtrader 单标的指标封装 |
+| 技术指标 | `indicator/` | 纯 pandas/numpy 的单标的指标（ATR 等） |
+| 回测 | `backtest/` | PyBroker 数据源适配；策略/输出按 PyBroker 接口扩展 |
 | 定时同步 | `scheduled_tasks/` | 全 A 股日线/财务分批同步（心跳驱动） |
 | MCP 入口 | `MCPserver.py` | 只组装工具与启动服务 |
 
@@ -276,7 +277,7 @@ infrastructure
 
 依赖规则：
 
-- `domain` 不 import `data_interface`、`requests`、`psycopg2`、`backtrader`；
+- `domain` 不 import `data_interface`、`requests`、`psycopg2` 等基础设施，也不依赖外部回测框架；
 - `application` 只依赖 `ports`，不直接 import infrastructure；
 - `infrastructure` 实现端口，可以复用 `data_interface`；
 - `bootstrap.py` 是唯一装配具体实现的地方。
@@ -500,7 +501,8 @@ FinBridge/
 │   └── interface/                  # MCP tools / CLI / worker_main
 ├── scheduled_tasks/                # 心跳式批量同步
 ├── position/                       # 组合/持仓/交易 + ATR/GRID
-├── indicator/                      # Backtrader 指标
+├── indicator/                      # 纯 pandas/numpy 指标（ATR 等）
+├── backtest/                       # PyBroker 数据源/策略/输出适配
 ├── scripts/
 │   ├── init_database.py            # 建表
 │   ├── migrate_database.py         # 存量库迁移
