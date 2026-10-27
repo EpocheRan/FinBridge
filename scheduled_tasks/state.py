@@ -43,6 +43,22 @@ class TaskStateRepository:
             time.sleep(0.2)
         return None
 
+    def list_latest(self, task_name: str) -> dict[str, dict[str, Any]]:
+        """一次取回某任务下所有 dataset 的最新状态。"""
+        rows = self.db.query(
+            'SELECT * FROM "scheduled_task_state" '
+            "WHERE task_name = %s "
+            "LATEST ON updated_at PARTITION BY task_name, dataset",
+            (task_name,),
+        )
+        result: dict[str, dict[str, Any]] = {}
+        for row in rows or []:
+            item = dict(zip(_COLUMNS, row))
+            dataset = item.get("dataset")
+            if dataset:
+                result[str(dataset)] = item
+        return result
+
     def save(
         self,
         task_name: str,
