@@ -8,7 +8,7 @@ from typing import Sequence
 
 import pandas as pd
 
-from backtest.domain.models import DataBundle, TradingCalendar, Universe
+from backtest.domain.models import DataBundle, SecurityStatus, TradingCalendar, Universe
 from backtest.domain.errors import DataError
 
 from .snapshot import make_snapshot
@@ -34,8 +34,15 @@ def _calendar(frame: pd.DataFrame) -> TradingCalendar:
 class MemoryDataSource:
     name = "memory"
 
-    def __init__(self, frame: pd.DataFrame):
+    def __init__(
+        self,
+        frame: pd.DataFrame,
+        benchmark: pd.DataFrame | None = None,
+        security_status: SecurityStatus | None = None,
+    ):
         self.frame = _normalize_frame(frame)
+        self.benchmark = None if benchmark is None else benchmark.copy()
+        self.security_status = security_status
 
     def load(
         self,
@@ -66,4 +73,31 @@ class MemoryDataSource:
             calendar=_calendar(data),
             snapshot=make_snapshot(self.name, data),
             universe=universe,
+            security_status=self.security_status,
         )
+
+    def load_benchmark(
+        self, code: str, start: date, end: date, *, freq: str = "d"
+    ) -> pd.Series | None:
+        if self.benchmark is None or self.benchmark.empty:
+            return None
+        frame = self.benchmark.copy()
+        if "date" not in frame.columns:
+            frame = frame.reset_index().rename(columns={frame.columns[0]: "date"})
+        frame["date"] = pd.to_datetime(frame["date"], errors="coerce").dt.normalize()
+        if "symbol" in frame.columns:
+            frame = frame[frame["symbol"].astype(str) == str(code)]
+        elif "code" in frame.columns:
+            frame = frame[frame["code"].astype(str) == str(code)]
+        frame = frame[
+            (frame["date"] >= pd.Timestamp(start).normalize())
+            & (frame["date"] <= pd.Timestamp(end).normalize())
+        ]
+        if frame.empty or "close" not in frame.columns:
+            return None
+        frame = frame.dropna(subset=["date"]).sort_values("date").drop_duplicates("date")
+        return pd.Series(
+            pd.to_numeric(frame["close"], errors="coerce").to_numpy(),
+            index=pd.DatetimeIndex(frame["date"]),
+            name=str(code),
+        ).dropna()

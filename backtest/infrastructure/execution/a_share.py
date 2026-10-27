@@ -20,13 +20,14 @@ def round_lot(shares: float, lot: int = 100) -> int:
 def limit_pct(code: str, *, is_st: bool = False, new_listing: bool = False) -> float | None:
     if new_listing:
         return None
-    if is_st:
-        return 0.05
     board = board_of(code)
     if board == "BSE":
         return 0.30
     if board in ("GEM", "STAR"):
+        # 注册制后创业板/科创板 ST 仍为 20%，不能套用主板的 5%。
         return 0.20
+    if is_st:
+        return 0.05
     return 0.10
 
 
@@ -109,19 +110,41 @@ class TPlusOneLedger:
         self._last_date = dt
 
     def available(self, symbol: str) -> float:
+        """已解禁（昨日及以前买入）的股数。"""
         if not self.enabled:
             return float("inf")
         return float(self._available.get(symbol, 0.0))
 
+    def sellable(self, symbol: str) -> float:
+        """可用于**下一根 bar 卖出**的股数。
+
+        卖单在下一根 bar 成交，所以今日成交的买入也满足 T+1
+        （今日买入、次日卖出）。真正的“今日已解禁”仍看 ``available()``。
+        """
+        if not self.enabled:
+            return float("inf")
+        return float(self._available.get(symbol, 0.0)) + float(
+            self._today_bought.get(symbol, 0.0)
+        )
+
     def on_buy(self, symbol: str, shares: float) -> None:
+        """买入**成交**时调用（不是下单时）。"""
         if not self.enabled:
             return
         self._today_bought[symbol] = self._today_bought.get(symbol, 0.0) + float(shares)
 
     def on_sell(self, symbol: str, shares: float) -> None:
+        """卖出**成交**时调用：先扣已解禁，再扣今日买入。"""
         if not self.enabled:
             return
-        self._available[symbol] = max(0.0, self._available.get(symbol, 0.0) - float(shares))
+        remaining = float(shares)
+        available = float(self._available.get(symbol, 0.0))
+        taken = min(available, remaining)
+        self._available[symbol] = max(0.0, available - taken)
+        remaining -= taken
+        if remaining > 0:
+            today = float(self._today_bought.get(symbol, 0.0))
+            self._today_bought[symbol] = max(0.0, today - min(today, remaining))
 
 
 class FeeModel:

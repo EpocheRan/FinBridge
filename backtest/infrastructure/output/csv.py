@@ -59,7 +59,11 @@ class CsvOutput:
             "selections": result.selections,
             "rejected": result.execution_report.rejected,
             "unfilled": result.execution_report.unfilled,
-            "corporate_actions": result.execution_report.corporate_actions,
+            "corporate_actions": (
+                result.corporate_actions
+                if result.corporate_actions is not None
+                else result.execution_report.corporate_actions
+            ),
         }
         for name, frame in tables.items():
             path = run_dir / f"{name}.csv"

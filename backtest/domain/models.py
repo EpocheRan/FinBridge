@@ -5,12 +5,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from datetime import date
 from pathlib import Path
 from typing import Any, Literal, Mapping, Sequence
 
 import pandas as pd
+
+from .errors import ConfigError
 
 Mode = Literal["single", "cross"]
 FillMode = Literal["next_open", "close"]
@@ -75,11 +77,62 @@ class Universe:
 
 
 @dataclass(frozen=True)
+class SecurityStatus:
+    """证券状态（ST / 上市日）。
+
+    ``st_by_date`` 是 date × symbol 的 point-in-time 矩阵；没有历史 ST 数据时
+    退回 ``current_st`` 并标记 ``approximation=True``。
+    """
+
+    current_st: Mapping[str, bool] = field(default_factory=dict)
+    list_dates: Mapping[str, date] = field(default_factory=dict)
+    delist_dates: Mapping[str, date] = field(default_factory=dict)
+    st_by_date: pd.DataFrame | None = None
+    approximation: bool = False
+
+    def is_st(self, symbol: str, day: date | pd.Timestamp) -> bool:
+        key = pd.Timestamp(day).normalize()
+        if self.st_by_date is not None and not self.st_by_date.empty:
+            frame = self.st_by_date
+            if symbol in frame.columns:
+                history = frame[symbol].dropna()
+                history = history[history.index <= key]
+                if not history.empty:
+                    return bool(history.iloc[-1])
+        return bool(self.current_st.get(str(symbol), False))
+
+    def is_new_listing(
+        self,
+        symbol: str,
+        day: date | pd.Timestamp,
+        calendar: TradingCalendar | Sequence[pd.Timestamp] | None = None,
+        no_limit_days: int = 5,
+    ) -> bool:
+        list_date = self.list_dates.get(str(symbol))
+        if list_date is None:
+            return False
+        key = pd.Timestamp(day).normalize()
+        start = pd.Timestamp(list_date).normalize()
+        if key < start:
+            return False
+        dates = (
+            calendar.dates
+            if isinstance(calendar, TradingCalendar)
+            else tuple(calendar or ())
+        )
+        if dates:
+            count = sum(1 for item in dates if start <= pd.Timestamp(item).normalize() <= key)
+            return count <= int(no_limit_days)
+        return (key - start).days <= int(no_limit_days) * 2
+
+
+@dataclass(frozen=True)
 class DataBundle:
     frame: pd.DataFrame
     calendar: TradingCalendar
     snapshot: DataSnapshot
     universe: Universe
+    security_status: SecurityStatus | None = None
 
 
 @dataclass(frozen=True)
@@ -100,19 +153,24 @@ class ExecutionRules:
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any] | None) -> "ExecutionRules":
         payload = dict(payload or {})
+        allowed = {item.name for item in fields(cls)} - {"stamp_tax_schedule"}
+        unknown = sorted(set(payload) - allowed - {"stamp_tax_schedule"})
+        if unknown:
+            raise ConfigError(f"rules 配置包含未知字段: {unknown}")
         schedule = payload.pop("stamp_tax_schedule", None)
-        rules = cls(**payload)
+        kwargs = dict(payload)
         if schedule:
-            rules = cls(
-                **{
-                    **payload,
-                    "stamp_tax_schedule": tuple(
-                        (str(item["effective_from"]), float(item["rate"]))
-                        for item in schedule
-                    ),
-                }
-            )
-        return rules
+            try:
+                kwargs["stamp_tax_schedule"] = tuple(
+                    (str(item["effective_from"]), float(item["rate"]))
+                    for item in schedule
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ConfigError(
+                    "stamp_tax_schedule 格式应为 "
+                    '[{"effective_from": "YYYY-MM-DD", "rate": 0.001}]'
+                ) from exc
+        return cls(**kwargs)
 
 
 @dataclass(frozen=True)
@@ -132,12 +190,18 @@ class RunSpec:
     rebalance: str = "weekly"
     max_gross_exposure: float = 0.98
     allow_short: bool = False
+    risk_free_rate: float = 0.0
     corporate_actions: CorporateActionMode = "off"
     metrics_source: MetricsSource = "ledger"
     outputs: tuple[str, ...] = ("console",)
     data_source: str = "questdb"
     seed: int = 0
     rules: ExecutionRules = field(default_factory=ExecutionRules)
+    top_n: int | None = None
+    buffer: int = 0
+    every_n_bars: int = 1
+    weighting: str = "equal"
+    universe: str = "explicit"
 
 
 @dataclass

@@ -58,6 +58,7 @@ class CrossSectionStrategy(BaseStrategy):
     top_n: ClassVar[int] = 30
     buffer: ClassVar[int] = 15
     rebalance: ClassVar[Rebalance] = Rebalance.WEEKLY
+    every_n_bars: ClassVar[int] = 1
     weighting: ClassVar[Any] = None
 
     def validate(self) -> None:

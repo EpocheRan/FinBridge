@@ -38,6 +38,25 @@ def _ensure_project_root() -> None:
         sys.path.insert(0, root)
 
 
+def _accepts_params(candidate) -> bool:
+    """判断策略类/工厂是否能接收 ``params=``。
+
+    不能用 ``try/except TypeError`` 兜底：``__init__`` 内部抛出的 TypeError
+    会被误当成“签名不兼容”，导致参数被静默丢弃。
+    """
+    try:
+        signature = inspect.signature(candidate)
+    except (TypeError, ValueError):
+        return False
+    parameters = signature.parameters
+    if "params" in parameters:
+        return True
+    return any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters.values()
+    )
+
+
 def load_strategy(path: str | Path, params: Mapping[str, Any] | None = None) -> LoadedStrategy:
     _ensure_project_root()
     source_path = Path(path)
@@ -63,24 +82,25 @@ def load_strategy(path: str | Path, params: Mapping[str, Any] | None = None) -> 
         raise StrategyLoadError(
             f"{source_path.name} 缺少模块级 STRATEGY（必须是类或 create_strategy 工厂）"
         )
+    if not (inspect.isclass(candidate) or callable(candidate)):
+        raise StrategyLoadError(
+            f"{source_path.name}: STRATEGY 必须是类/工厂，不能是实例"
+        )
+
     try:
-        if inspect.isclass(candidate):
-            strategy = candidate(params=params)
-        elif callable(candidate):
+        if _accepts_params(candidate):
             strategy = candidate(params=params)
         else:
-            raise StrategyLoadError(
-                f"{source_path.name}: STRATEGY 必须是类/工厂，不能是实例"
-            )
+            strategy = candidate()
+            if params:
+                strategy.params = {**getattr(strategy, "params", {}), **dict(params)}
+                strategy.validate()
     except StrategyLoadError:
         raise
-    except TypeError:
-        # 兼容 create_strategy() 不接受 params 的写法
-        strategy = candidate()
-        if params:
-            strategy.params = {**getattr(strategy, "params", {}), **dict(params)}
     except Exception as exc:
-        raise StrategyLoadError(f"{source_path.name}: 策略实例化失败: {exc}") from exc
+        raise StrategyLoadError(
+            f"{source_path.name}: 策略实例化失败: {type(exc).__name__}: {exc}"
+        ) from exc
 
     if not isinstance(strategy, BaseStrategy):
         raise StrategyLoadError(

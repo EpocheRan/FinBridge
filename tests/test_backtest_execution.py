@@ -1,7 +1,9 @@
 import pandas as pd
 import pytest
 
-from backtest.domain.models import ExecutionRules
+from datetime import date
+
+from backtest.domain.models import ExecutionRules, SecurityStatus, TradingCalendar
 from backtest.infrastructure.execution.a_share import (
     FeeModel,
     TPlusOneLedger,
@@ -28,6 +30,9 @@ def test_limit_prices_by_board():
     assert limit_prices(100, "688001") == (80.0, 120.0)
     assert limit_prices(100, "430047") == (70.0, 130.0)
     assert limit_prices(100, "600519", is_st=True) == (95.0, 105.0)
+    assert limit_prices(100, "300750", is_st=True) == (80.0, 120.0)
+    assert limit_prices(100, "688001", is_st=True) == (80.0, 120.0)
+    assert limit_prices(100, "430047", is_st=True) == (70.0, 130.0)
     assert limit_prices(100, "600519", new_listing=True) == (None, None)
 
 
@@ -61,6 +66,46 @@ def test_t_plus_one_available_shares():
     assert ledger.available("600519") == 100
     ledger.on_sell("600519", 40)
     assert ledger.available("600519") == 60
+
+
+def test_sellable_includes_today_fills_and_on_sell_consumes_them():
+    """卖单次日成交，所以当日成交的买入也满足 T+1；台账要区分 available/sellable。"""
+    ledger = TPlusOneLedger(enabled=True)
+    day1 = pd.Timestamp("2024-01-02").date()
+    day2 = pd.Timestamp("2024-01-03").date()
+    ledger.start_day(day1)
+    ledger.on_buy("600519", 100)
+    assert ledger.available("600519") == 0
+    assert ledger.sellable("600519") == 100
+
+    ledger.on_sell("600519", 40)
+    assert ledger.available("600519") == 0
+    assert ledger.sellable("600519") == 60
+
+    ledger.start_day(day2)
+    assert ledger.available("600519") == 60
+    assert ledger.sellable("600519") == 60
+
+
+def test_t_plus_one_disabled_returns_infinite_sellable():
+    ledger = TPlusOneLedger(enabled=False)
+    assert ledger.available("600519") == float("inf")
+    assert ledger.sellable("600519") == float("inf")
+
+
+def test_security_status_st_and_new_listing():
+    dates = TradingCalendar(tuple(pd.bdate_range("2024-01-02", periods=8)))
+    status = SecurityStatus(
+        current_st={"AAA": True},
+        list_dates={"BBB": date(2024, 1, 2)},
+        approximation=True,
+    )
+    assert status.is_st("AAA", dates.dates[0]) is True
+    assert status.is_st("BBB", dates.dates[0]) is False
+    assert status.is_new_listing("BBB", dates.dates[0], dates, 5) is True
+    assert status.is_new_listing("BBB", dates.dates[4], dates, 5) is True
+    assert status.is_new_listing("BBB", dates.dates[5], dates, 5) is False
+    assert status.is_new_listing("AAA", dates.dates[0], dates, 5) is False
 
 
 def test_fee_model_stamp_tax_schedule():

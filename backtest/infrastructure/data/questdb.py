@@ -6,18 +6,21 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from datetime import date
 from typing import Any, Sequence
 
 import pandas as pd
 
 from backtest.domain.errors import DataError
-from backtest.domain.models import DataBundle, TradingCalendar, Universe
+from backtest.domain.models import DataBundle, SecurityStatus, TradingCalendar, Universe
 from data_interface.common.config import get_config
 from data_interface.common.questdb_client import QuestDBClient
 from data_interface.market.constants import normalize_frequency, ohlc_table_name
 
 from .snapshot import make_snapshot
+
+logger = logging.getLogger("Backtest.QuestDB")
 
 
 def _calendar(frame: pd.DataFrame) -> TradingCalendar:
@@ -36,8 +39,46 @@ class QuestDBDataSource:
         read_only: bool = True,
     ):
         self.config = config or get_config()
-        self.db = db or QuestDBClient(self.config)
+        # 数据源构造不连接数据库：横截面/配置错误应在 load 之前失败，
+        # 而不是先连一遍 QuestDB 再抛 BacktestError。
+        self.db = db or QuestDBClient(self.config, connect=False)
         self.read_only = read_only
+
+    def _load_security_status(self, codes: Sequence[str], end: date) -> SecurityStatus:
+        placeholders = ",".join(["%s"] * len(codes))
+        sql = (
+            "SELECT code, last(is_st) AS is_st, last(list_date) AS list_date, "
+            "last(delist_date) AS delist_date FROM stock_basic_info "
+            f"WHERE code IN ({placeholders}) GROUP BY code"
+        )
+        try:
+            frame = self.db.query_dataframe(sql, list(codes))
+        except Exception as exc:
+            logger.warning("证券状态读取失败（按近似处理）: %s", exc)
+            return SecurityStatus(approximation=True)
+        if frame is None or frame.empty:
+            return SecurityStatus(approximation=True)
+        current_st: dict[str, bool] = {}
+        list_dates: dict[str, date] = {}
+        delist_dates: dict[str, date] = {}
+        for _, row in frame.iterrows():
+            code = str(row.get("code"))
+            value = row.get("is_st")
+            current_st[code] = bool(value) if pd.notna(value) else False
+            for column, target in (
+                ("list_date", list_dates),
+                ("delist_date", delist_dates),
+            ):
+                raw = row.get(column)
+                if pd.notna(raw):
+                    target[code] = pd.Timestamp(raw).date()
+        # stock_basic_info 只有当前 is_st；历史 ST 需要 namechange 明细，暂标记近似。
+        return SecurityStatus(
+            current_st=current_st,
+            list_dates=list_dates,
+            delist_dates=delist_dates,
+            approximation=True,
+        )
 
     def load(
         self,
@@ -111,4 +152,36 @@ class QuestDBDataSource:
             calendar=_calendar(frame),
             snapshot=make_snapshot(self.name, frame),
             universe=universe,
+            security_status=self._load_security_status(codes, end),
         )
+
+    def load_benchmark(
+        self, code: str, start: date, end: date, *, freq: str = "d"
+    ) -> pd.Series | None:
+        if normalize_frequency(freq) != "d":
+            return None
+        sql = (
+            "SELECT ts, close FROM ohlcv_1d "
+            "WHERE market = 'IDX' AND code = %s AND ts >= %s AND ts <= %s "
+            "ORDER BY ts"
+        )
+        params = [
+            str(code),
+            pd.Timestamp(start).normalize().to_pydatetime(),
+            pd.Timestamp(end).normalize().to_pydatetime(),
+        ]
+        try:
+            frame = self.db.query_dataframe(sql, params)
+        except Exception:
+            return None
+        if frame is None or frame.empty:
+            return None
+        if "ts" not in frame.columns:
+            frame = frame.reset_index()
+        frame["date"] = pd.to_datetime(frame["ts"], errors="coerce").dt.normalize()
+        frame = frame.dropna(subset=["date"]).sort_values("date").drop_duplicates("date")
+        return pd.Series(
+            pd.to_numeric(frame["close"], errors="coerce").to_numpy(),
+            index=pd.DatetimeIndex(frame["date"]),
+            name=str(code),
+        ).dropna()

@@ -79,3 +79,12 @@ def test_stored_requires_future_source_implementation():
     end = frame["date"].max().date()
     with pytest.raises(FactorError):
         build_panel(frame, [F.stored("pct_chg", unit="pct")], start, end)
+
+
+def test_stored_columns_exist_in_screener_daily():
+    """stored 元数据列名必须与 screener_daily 对得上（防止 20d/52w 这类笔误）。"""
+    from factors.stored import SCREENER_DAILY_COLUMNS
+    from screener.domain.factor_engine import DAILY_COLUMNS
+
+    missing = set(SCREENER_DAILY_COLUMNS) - set(DAILY_COLUMNS)
+    assert not missing, f"stored 中不存在的 screener_daily 列: {sorted(missing)}"

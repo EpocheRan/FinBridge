@@ -33,6 +33,8 @@ class EngineRequest:
     rules: ExecutionRules
     benchmark: pd.Series | None = None
     seed: int = 0
+    cross_plan: Any | None = None
+    corporate_actions: pd.DataFrame | None = None
 
 
 class DataSourcePort(Protocol):

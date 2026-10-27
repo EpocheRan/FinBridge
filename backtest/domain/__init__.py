@@ -18,6 +18,7 @@ from .models import (
     Mode,
     OutputArtifact,
     RunSpec,
+    SecurityStatus,
     TradingCalendar,
     Universe,
 )
@@ -39,6 +40,7 @@ __all__ = [
     "Mode",
     "OutputArtifact",
     "RunSpec",
+    "SecurityStatus",
     "StrategyLoadError",
     "TradingCalendar",
     "Universe",

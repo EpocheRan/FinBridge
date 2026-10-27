@@ -122,13 +122,13 @@ backtest/                         # 只做「取数 -> 因子装配 -> 撮合 ->
 │   ├── data/                     # questdb / parquet / memory / composite
 │   ├── factors/                  # questdb_store.py / computed.py / auto.py
 │   ├── engine/pybroker_engine.py # 唯一 import pybroker 的地方
-│   ├── execution/                # a_share.py / lots.py / corporate_actions.py / sizing.py
+│   ├── execution/                # a_share.py / lots.py / ledger.py / sizing.py
 │   └── output/                   # console / csv / html / questdb / composite
 ├── research/                     # IC / RankIC / 分层 / 换手 / 衰减（不撮合）
 ├── config.py                     # BacktestSettings.from_dict
 ├── bootstrap.py                  # composition root
 ├── cli.py
-└── __main__.py                   # python -m backtest run/list/validate/research
+└── __main__.py                   # python -m backtest run/list/validate/research/optimize
 
 indicator/                        # 纯 pandas/numpy 指标（ATR 等），被 factors/ops.py 复用
 screener/                         # 已有因子计算与 screener_daily 落库
@@ -197,7 +197,8 @@ PyBroker 的 `result.metrics_df` 只写进 `metrics_pybroker` 作对照，不参
 - 近似无法区分“现金分红”和“送转股”，会把股本变化当成现金收益，送转比例大的票偏差明显；
 - 因此必须 `meta["corporate_action_approximation"] = true`，并在 `corporate_actions`
   表里逐笔记录 `ratio`，便于事后用真实明细校验；
-- MVP 阶段先**不实现**公司行为，只在 `meta` 里声明“未计入分红，长期收益偏保守”。
+- 当前实现支持 `corporate_actions="approx"`（见 `backtest/application/corporate_actions.py`）；
+  `off` 则不计公司行为；真实分红/送转明细仍留待后续。
 
 > 只用复权价做信号、却用不复权价算 PnL，是长期回测最常见的收益低估来源。
 > v2.1 的处理是“自建账本 + 近似 + 显式标记”，精确分红/送转留到拿到明细数据之后。
@@ -580,7 +581,9 @@ assert_frame_equal(full.loc[:dt], truncated, check_exact=False)
 - `STRATEGY` 必须是**类**或 `create_strategy()` 工厂，不能是实例。
 - loader 每次 run 实例化：`strategy = STRATEGY(params=merged_params)`。
 - `params` 用 dataclass/pydantic 校验；CLI 覆盖时创建新副本，不修改类属性。
-- `hyperparams()` 返回 PyBroker `Hyperparam` 列表；没有则 `--optimize` 报错并提示。
+- 当前优化由 `backtest/application/optimize.py` 做**完整回测网格搜索**；每个 trial
+  重新实例化策略并重建因子面板，因此参数可以影响因子（`hyperparams()` 仍保留为
+  后续 PyBroker 原生 optimize 的入口）。
 
 ### 6.2 单股
 
@@ -666,6 +669,12 @@ strategy.set_after_exec(rebalance_fn)      # 组合层：按目标权重下 buy/
 原因：PyBroker 的止损只能随**新开仓单**设置（`_get_stops()` 在 `buy_shares/sell_shares`
 为空时抛 `ValueError`，见 §9.1）。若为了横截面方便只写 `add_execution(None, symbols)`，
 `on_bar` 里的止损/追踪止损就没有落点。
+
+> **实现（v3 横截面 MVP）**：`backtest/application/cross_section.py` 先向量化算
+> targets / 每日 ranks / 候选集；engine 只把候选集交给 PyBroker。`risk_fn` 仅对
+> **持仓**调用 `strategy.on_bar`（未持仓由 after_exec 开仓），横截面不使用 PyBroker
+> 止损（`meta["stops"]="strategy_managed"`）。universe 目前只支持 `explicit`；
+> 全 A 需要先做流动性/规模预筛或分块执行（见 §16 规模风险）。
 
 `rebalance` 的日期门控优先用 PyBroker 的 interval（`add_execution(..., intervals=["weekly"])`
 + `ctx.interval("weekly")` 的 bar 数变化），比手写“周一/月初”判断更稳；`EVERY_N_BARS`
@@ -808,8 +817,8 @@ v2.1 的做法：
 - 该近似**无法区分**现金分红与送转股（都会表现为 factor 跳变），送转比例大的票偏差明显；
 - 必须写 `meta["corporate_action_approximation"] = true`，并在 `corporate_actions`
   表中逐笔记录 `date / symbol / f_prev / f_new / ratio`；
-- MVP 阶段可整体关闭（`corporate_actions="off"`），此时在 `meta` 声明
-  “未计入分红，长期收益偏保守”，并在报告里提示。
+- 当前支持 `corporate_actions="approx"` 或 `"off"`；`"approx"` 时按上述方式调整，
+  `"off"` 时在 `meta` 声明“未计入分红，长期收益偏保守”。
 
 精确处理（现金分红按公告日、送转按除权日调整股本）留到拿到分红明细数据之后，
 不在 v2.1 范围内。
@@ -845,8 +854,8 @@ class ExecutionReport:
 | 自定义权重（rotation） | `sizer=fn(RotationContext)`，`long_ranks[symbol]` | 与主路径二选一 |
 | 止损 | `ctx.stop_loss / stop_loss_pct / stop_trailing / hold_bars` | 仅在 `to_result()` 存在订单时生成，否则抛 `ValueError` |
 | 次日开盘成交 | `StrategyConfig(buy_delay=1, sell_delay=1)` + **逐单** `ctx.buy_fill_price = PriceType.OPEN` | 默认 `PriceType.MIDDLE` |
-| 参数优化 | `pybroker.hyperparam` + `strategy.optimize(score_fn, sampler=..., n_trials=...)` | grid / tpe / random |
-| Walkforward 优化 | `strategy.optimize(score_fn, windows=N)` | 每窗独立调参 |
+| 参数优化 | 当前：`BacktestRunner.optimize` 完整回测网格；后续可接 `pybroker.hyperparam` + `strategy.optimize(score_fn, sampler=..., n_trials=...)` | grid / tpe / random |
+| Walkforward 优化 | 当前：`BacktestRunner.walkforward`（train 选参 / test 回测）；后续可接 `strategy.optimize(score_fn, windows=N)` | 每窗独立调参 |
 | 固定参数多窗口 | `strategy.walkforward(windows=N, timeframe=...)` | 不做参数搜索 |
 | 多周期 / 再平衡门控 | `add_execution(..., intervals=[...])` + `ctx.interval(...)` | weekly / monthly / 每 N bar |
 | 只做多 | `StrategyConfig(position_mode=PositionMode.LONG_ONLY)` | 不必自定义 `allow_short` |
@@ -1013,16 +1022,17 @@ class BacktestResult:
 
 `backtest/research/` 复用同一份因子面板，不经过 PyBroker：
 
-- `forward_returns(panel, horizons=(1, 5, 20))`：用下一期收益，最后 h 行为 NaN；
-- `ic / rank_ic`：按日横截面相关，输出均值、t 值、胜率；
-- `quantile_returns(panel, q=5)`：分层收益、多空组合；
-- `turnover(panel, top_n)`：排名换手，预估成本；
-- `decay(panel, lags)`：因子衰减。
+- `forward_returns(close, horizons=(1, 5, 20))`：用下一期收益，最后 h 行为 NaN；
+- `ic(factor, forward)`：按日横截面 rank IC，输出均值、t 值、胜率；
+- `quantile_returns(factor, forward, q=5)`：分层收益、多空组合；
+- `turnover(factor, top_n)`：排名换手，预估成本；
+- `decay(factor, close, horizons)`：因子衰减。
 
-入口：
+入口（当前 explicit codes；全 A universe 待接）：
 
 ```bash
-python -m backtest research mom20 --start 2021-01-01 --end 2025-12-31 --out csv
+python -m backtest research --factor mom20 --codes 600519,000001,600036 \
+  --start 2021-01-01 --end 2025-12-31 --out csv
 ```
 
 研究层也要记录 `factor_meta` 和 `data.snapshot.hash`，保证与回测同口径。
@@ -1156,6 +1166,7 @@ uv sync --extra backtest
 | 优化过拟合 | 默认 train/test + `windows` walkforward |
 | 幸存者偏差 | universe as-of；退市股标注；静态 universe 时 `survivorship_bias=true` |
 | 5000 只 × 10 年内存/性能 | 金额/现金/净值用 float64；仅因子面板可考虑 float32；按 universe/日期分块 |
+| 全 A 横截面候选集膨胀 | 实测 500×5y 候选 497/500、2000×5y 1492/2000（随机排名）；先做流动性预筛（如 ≤800）或按年分块 + 组合结转，再开 `all_a` |
 | 输出过大 | equity + orders + trades；positions 按需 |
 | 策略任意代码执行 | 只加载可信本地策略；文档声明 |
 

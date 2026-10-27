@@ -11,7 +11,7 @@ from typing import Any, Sequence
 import numpy as np
 import pandas as pd
 
-APP_VERSION = "0.3.0"
+APP_VERSION = "0.4.0"
 
 
 def _json_default(value: Any) -> Any:
@@ -39,6 +39,8 @@ def compute_run_id(
     factors: Sequence[Any],
     universe,
     snapshot,
+    benchmark: pd.Series | None = None,
+    security_status=None,
     engine_name: str = "pybroker",
     engine_version: str = "none",
     seed: int = 0,
@@ -56,6 +58,35 @@ def compute_run_id(
         "weighting": type(getattr(strategy, "weighting", None)).__name__ if getattr(strategy, "weighting", None) is not None else None,
         "universe": getattr(strategy, "universe", None).fingerprint() if hasattr(getattr(strategy, "universe", None), "fingerprint") else None,
     }
+    if benchmark is not None and not benchmark.empty:
+        rows_hash = pd.util.hash_pandas_object(
+            benchmark.astype("float64"), index=True
+        ).to_numpy(dtype="uint64")
+        benchmark_hash = hashlib.sha256(rows_hash.tobytes()).hexdigest()[:16]
+    else:
+        benchmark_hash = "none"
+    security_status_hash = "none"
+    security_status_approximation = True
+    if security_status is not None:
+        security_status_approximation = bool(
+            getattr(security_status, "approximation", True)
+        )
+        status_payload = {
+            "current_st": dict(getattr(security_status, "current_st", {})),
+            "list_dates": dict(getattr(security_status, "list_dates", {})),
+            "delist_dates": dict(getattr(security_status, "delist_dates", {})),
+            "approximation": security_status_approximation,
+        }
+        st_frame = getattr(security_status, "st_by_date", None)
+        if st_frame is not None and not st_frame.empty:
+            status_payload["st_by_date"] = hashlib.sha256(
+                pd.util.hash_pandas_object(st_frame, index=True)
+                .to_numpy(dtype="uint64")
+                .tobytes()
+            ).hexdigest()[:16]
+        security_status_hash = hashlib.sha256(
+            canonical(status_payload).encode("utf-8")
+        ).hexdigest()[:16]
     payload = {
         "strategy_source_hash": loaded.source_hash,
         "strategy_spec": strategy_spec,
@@ -78,10 +109,26 @@ def compute_run_id(
         "factor_source": spec.factor_source,
         "corporate_actions": spec.corporate_actions,
         "metrics_source": spec.metrics_source,
+        "mode": spec.mode,
+        "top_n": spec.top_n,
+        "buffer": spec.buffer,
+        "every_n_bars": spec.every_n_bars,
+        "rebalance": spec.rebalance,
+        "weighting": spec.weighting,
+        "universe_kind": spec.universe,
         "initial_cash": spec.initial_cash,
-        "benchmark": spec.benchmark,
+        "benchmark": {
+            "code": spec.benchmark,
+            "hash": benchmark_hash,
+            "risk_free_rate": spec.risk_free_rate,
+        },
+        "security_status": {
+            "hash": security_status_hash,
+            "approximation": security_status_approximation,
+        },
         "max_gross_exposure": spec.max_gross_exposure,
         "allow_short": spec.allow_short,
+        "risk_free_rate": spec.risk_free_rate,
         "engine": {"name": engine_name, "version": engine_version},
         "libs": {"numpy": np.__version__, "pandas": pd.__version__},
         "seed": int(seed),
