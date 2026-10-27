@@ -9,18 +9,19 @@
 - [3. 配置说明](#3-配置说明)
 - [4. 数据口径与存储契约](#4-数据口径与存储契约)
 - [5. Screener 因子筛股](#5-screener-因子筛股)
-- [6. 代码结构](#6-代码结构)
-- [7. 数据库设计与迁移](#7-数据库设计与迁移)
-- [8. MCP 工具清单](#8-mcp-工具清单)
-- [9. 定时任务](#9-定时任务)
-- [10. 常见问题](#10-常见问题)
-- [11. 开发约定与测试](#11-开发约定与测试)
+- [6. 回测（Backtest）](#6-回测backtest)
+- [7. 代码结构](#7-代码结构)
+- [8. 数据库设计与迁移](#8-数据库设计与迁移)
+- [9. MCP 工具清单](#9-mcp-工具清单)
+- [10. 定时任务](#10-定时任务)
+- [11. 常见问题](#11-常见问题)
+- [12. 开发约定与测试](#12-开发约定与测试)
 
 ---
 
 ## 1. 项目定位
 
-FinBridge 把量化系统拆成四条链路：
+FinBridge 把量化系统拆成四条在线链路，并额外提供独立的离线回测/研究链路：
 
 ```text
 ┌──────────────────────────────────────────────────────────────────┐
@@ -48,7 +49,7 @@ FinBridge 把量化系统拆成四条链路：
 | 技术指标 | `indicator/` | 纯 pandas/numpy 的单标的指标（ATR 等） |
 | 因子库 | `factors/` | 因子声明、时序/横截面算子、date×symbol 面板 |
 | 策略 | `strategies/` | 单股/横截面策略基类与示例（`strategies/models/`） |
-| 回测 | `backtest/` | PyBroker 单股引擎、自建账本、A 股规则、CLI、输出 |
+| 回测 | `backtest/` | PyBroker 单股/横截面引擎、自建账本、A 股规则、benchmark、优化/研究、CLI |
 | 定时同步 | `scheduled_tasks/` | 全 A 股日线/财务分批同步（心跳驱动） |
 | MCP 入口 | `MCPserver.py` | 只组装工具与启动服务 |
 
@@ -461,7 +462,98 @@ python -m screener status
 
 ---
 
-## 6. 代码结构
+## 6. 回测（Backtest）
+
+回测与 MCP 运行时解耦，PyBroker 是 **optional extra**：
+
+```bash
+uv sync --extra backtest
+```
+
+### 6.1 当前能力
+
+| 能力 | 说明 |
+|---|---|
+| 单股策略 | `on_bar` 目标权重 / 买卖股数 / 止损；`strategies/models/atr_trend.py` |
+| 横截面策略 | 全 universe 向量化排名/选股/权重，PyBroker 只执行候选集；当前支持 explicit universe |
+| 调仓执行 | 调仓日先卖后买；pending target 在下一调仓日前重试；buffer 保留仓位占用 gross exposure |
+| A 股规则 | T+1、100 股整手、涨跌停/停牌/ST/新股、佣金/过户费/印花税分段 |
+| 账本与指标 | 自建 `PortfolioLedger` 回放成交；PyBroker 指标仅作对照；对账差异约 `1e-8` |
+| benchmark | 默认 `000300`，产出 beta / alpha / tracking error / information ratio / excess return |
+| 公司行为 | `corporate_actions=approx` 从 `adj_factor` 推导；`off` 可关闭；`exact` 未实现 |
+| 优化 | 完整回测网格搜索；每个 trial 复用 PyBroker 执行、A 股规则和账本 |
+| walk-forward | train 选参、test 回测；支持 windows / train_size / lookahead |
+| 因子研究 | IC / rank IC、分层收益、long-short、换手、衰减（不经过 PyBroker） |
+| 输出 | console / csv；默认 `metrics/equity/orders/trades/selections/rejected/unfilled/corporate_actions` |
+
+### 6.2 CLI
+
+```bash
+# 列出 / 校验策略
+python -m backtest list
+python -m backtest validate strategies/models/atr_trend.py
+
+# 单股回测
+python -m backtest run strategies/models/atr_trend.py \
+    --start 2026-06-01 --end 2026-09-30 \
+    --data questdb --out console,csv
+
+# 横截面回测
+python -m backtest run strategies/models/rank_mom20.py \
+    --start 2026-06-01 --end 2026-09-30 \
+    --data questdb --out console,csv
+
+# 网格优化
+python -m backtest optimize strategies/models/atr_trend.py \
+    --start 2026-06-01 --end 2026-09-30 \
+    --data questdb --grid k=1.0,2.0,3.0 --metric sharpe
+
+# walk-forward
+python -m backtest optimize strategies/models/atr_trend.py \
+    --start 2026-06-01 --end 2026-09-30 \
+    --data questdb --grid k=1.0,2.0 --windows 2
+
+# 因子研究
+python -m backtest research --factor mom20 \
+    --codes 600519,000001,600036 \
+    --start 2026-06-01 --end 2026-09-30 --data questdb
+```
+
+CSV 默认写到 `output/backtest/<run_id>/`，研究结果写到
+`output/backtest/research/<factor>/`。
+
+### 6.3 口径与边界
+
+- 因子默认在 `hfq_close = close × adj_factor` 上计算；成交、整手、涨跌停、盈亏用**不复权** `close`；
+- `run_id` 覆盖策略源码/参数、因子、数据快照、benchmark、ST/上市状态、执行规则和公司行为模式；同输入同 id；
+- 横截面目前只支持 explicit universe；`all_a/index/file` 会明确报错；
+- 历史 ST 仍用当前 `stock_basic_info.is_st` 近似，`meta["st_approximation"]=true`；
+- `corporate_actions=approx` 把现金分红当作再投资，不区分分红/送转；
+- walk-forward 按工作日切分，不读取交易所节假日表；
+- 优化采用完整回测网格，无缓存/并行，大网格会较慢；
+- 更细的策略写法、输出字段和限制见 [`backtest/README.md`](backtest/README.md)。
+
+### 6.4 常用配置
+
+`config.json` 可增加可选的 `backtest` 段（不写则用默认值）：
+
+```json
+"backtest": {
+  "data": "questdb",
+  "outputs": ["console", "csv"],
+  "benchmark": "000300",
+  "corporate_actions": "off",
+  "risk_free_rate": 0.0,
+  "warmup_min_bars": 260
+}
+```
+
+`corporate_actions` 可选 `off` / `approx`；把 `benchmark` 设为 `null` 可关闭基准指标。
+这些配置也可被 CLI 的 `--benchmark`、`--corporate-actions`、`--risk-free-rate` 覆盖。
+
+---
+
+## 7. 代码结构
 
 ```text
 FinBridge/
@@ -508,7 +600,7 @@ FinBridge/
 ├── indicator/                      # 纯 pandas/numpy 指标（ATR 等）
 ├── factors/                        # 因子库：声明/算子/面板
 ├── strategies/                     # 策略基类 + models/ 一文件一策略
-├── backtest/                       # PyBroker 单股引擎、账本、CLI、输出
+├── backtest/                       # PyBroker 单股/横截面引擎、账本、benchmark、CLI、研究
 ├── scripts/
 │   ├── init_database.py            # 建表
 │   ├── migrate_database.py         # 存量库迁移
@@ -519,9 +611,9 @@ FinBridge/
 
 ---
 
-## 7. 数据库设计与迁移
+## 8. 数据库设计与迁移
 
-### 7.1 QuestDB 设计要点
+### 8.1 QuestDB 设计要点
 
 - 每张时序表都有 designated timestamp；
 - 按时间分区：`HOUR / DAY / MONTH / YEAR`；
@@ -529,7 +621,7 @@ FinBridge/
 - **DEDUP key 必须包含 designated timestamp**；
 - 持仓表保留原地 `UPDATE` 语义，因此不使用 WAL/DEDUP。
 
-### 7.2 行情表
+### 8.2 行情表
 
 | 表 | 时间轴 | 分区 | DEDUP KEY | 说明 |
 |---|---|---|---|---|
@@ -540,7 +632,7 @@ FinBridge/
 | `concept_boards` / `_ohlc` / `_constituents` | `ts` | YEAR/MONTH | 见 DDL | 概念板块 |
 | `trading_days` | `ts` | YEAR | `(ts)` | 交易日历 |
 
-### 7.3 财务表
+### 8.3 财务表
 
 | 表 | 时间轴 | DEDUP KEY | 说明 |
 |---|---|---|---|
@@ -555,7 +647,7 @@ FinBridge/
 | `fin_raw_report` | `fetched_at` | `(fetched_at, report_id, source)` | 原始报文 |
 | `dim_fin_field` / `dim_board` / `map_stock_board` | 见 DDL | — | 字段字典与板块 |
 
-### 7.4 Screener 表
+### 8.4 Screener 表
 
 | 表 | 时间轴 | 分区 | DEDUP KEY | 说明 |
 |---|---|---|---|---|
@@ -564,7 +656,7 @@ FinBridge/
 | `screener_build_state` | `updated_at` | YEAR | `(updated_at, build_id)` | 构建状态（append-only） |
 | `market_suspension` | `updated_at` | YEAR | `(updated_at, code, market, status, start_date)` | 停牌/退市/NoData |
 
-### 7.5 持仓表与任务状态
+### 8.5 持仓表与任务状态
 
 | 表 | 时间轴 | 说明 |
 |---|---|---|
@@ -573,7 +665,7 @@ FinBridge/
 | `trade_records` | `trade_date` | 买卖/调整流水（软删除） |
 | `scheduled_task_state` | `updated_at` | 日线/财务同步游标、状态、进度、pending |
 
-### 7.6 建表与迁移
+### 8.6 建表与迁移
 
 ```bash
 python scripts/init_database.py                  # 全部建表
@@ -591,16 +683,16 @@ python scripts/migrate_database.py --apply --truncate-ohlc   # 清空旧前复�
 
 ---
 
-## 8. MCP 工具清单
+## 9. MCP 工具清单
 
-### 8.1 响应信封（所有工具统一）
+### 9.1 响应信封（所有工具统一）
 
 ```json
 {"success": true,  "message": "...", "result": {...}}
 {"success": false, "message": "...", "error_details": {"type": "...", "suggestion": "..."}}
 ```
 
-### 8.2 行情
+### 9.2 行情
 
 | 工具 | 用途 |
 |---|---|
@@ -611,7 +703,7 @@ python scripts/migrate_database.py --apply --truncate-ohlc   # 清空旧前复�
 | `get_today_date` | 今天日期（北京时间） |
 | `get_concept_boards` | 概念板块列表 |
 
-### 8.3 财务
+### 9.3 财务
 
 | 工具 | 用途 |
 |---|---|
@@ -624,7 +716,7 @@ python scripts/migrate_database.py --apply --truncate-ohlc   # 清空旧前复�
 | `sync_board_data` | 同步板块目录或成分股 |
 | `sync_financial_data` | 主动同步财务数据 |
 
-### 8.4 Screener
+### 9.4 Screener
 
 | 工具 | 用途 |
 |---|---|
@@ -634,7 +726,7 @@ python scripts/migrate_database.py --apply --truncate-ohlc   # 清空旧前复�
 | `rebuild_screener` | 提交重建任务（`screener_daily` / `intraday_baseline`） |
 | `get_screener_status` | 构建状态/进度 |
 
-### 8.5 持仓
+### 9.5 持仓
 
 | 工具 | 说明 |
 |---|---|
@@ -646,7 +738,7 @@ python scripts/migrate_database.py --apply --truncate-ohlc   # 清空旧前复�
 | `pm_check_signals` / `pm_get_buying_advice` | 加减仓信号 / 建仓建议 |
 | `pm_get_portfolio_status` / `pm_list_modes` | 组合状态、可用模式 |
 
-### 8.6 定时任务
+### 9.6 定时任务
 
 | 工具 | 用途 |
 |---|---|
@@ -655,7 +747,7 @@ python scripts/migrate_database.py --apply --truncate-ohlc   # 清空旧前复�
 
 ---
 
-## 9. 定时任务
+## 10. 定时任务
 
 `dataset` 可选 `daily`、`financial`、`all`。每次调用只处理一个有界批次，返回 `next_cursor` 和 `done`；Agent 心跳反复调用直到 `done=true`。
 
@@ -675,7 +767,7 @@ Screener 不依赖定时任务：批量 CLI、读路径和 inline worker 都能�
 
 ---
 
-## 10. 常见问题
+## 11. 常见问题
 
 ### Q1: `Conflict. The container name "/questdb-server" is already in use`
 
@@ -746,7 +838,7 @@ python -m screener daily --start 2025-01-01 --end 2026-10-23
 
 ---
 
-## 11. 开发约定与测试
+## 12. 开发约定与测试
 
 ### 新增数据源
 
