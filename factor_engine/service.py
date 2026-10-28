@@ -17,9 +17,11 @@ from factors.spec import FactorSpec
 
 from .data import PriceData
 from .definitions import (
+    FUNDAMENTAL_SPECS,
     LEGACY_COLUMNS,
     LEGACY_SPECS,
     PRICE_FACTORS,
+    FundamentalComputer,
     LegacyComputer,
     builtin_map,
     register_all,
@@ -44,6 +46,8 @@ class FactorEngineService:
         self.builtins = builtin_map()
         self.legacy_columns = dict(LEGACY_COLUMNS)
         self.legacy = LegacyComputer(self.data, self.config)
+        self.fundamental_ids = {spec.factor_id for spec in FUNDAMENTAL_SPECS}
+        self.fundamental = FundamentalComputer(self.config)
         self.all_ids = [spec.factor_id for spec in self.list_factors()]
         self.register_builtins()
         self._registry_synced = False
@@ -76,7 +80,11 @@ class FactorEngineService:
         return register_all()
 
     def list_factors(self) -> list[FactorSpec]:
-        return [item.spec for item in PRICE_FACTORS] + list(LEGACY_SPECS)
+        return (
+            [item.spec for item in PRICE_FACTORS]
+            + list(LEGACY_SPECS)
+            + list(FUNDAMENTAL_SPECS)
+        )
 
     def default_precompute_ids(self) -> list[str]:
         """默认预计算集合（STORED 必算 + AUTO 默认也算）。"""
@@ -96,11 +104,18 @@ class FactorEngineService:
     ) -> dict[str, Any]:
         ids = [str(item) for item in (factor_ids or self.all_ids)]
         specs = [get_spec(item) for item in ids]
+        spec_by_id = {spec.factor_id: spec for spec in specs}
         legacy_specs = [
             spec for spec in specs if spec.factor_id in self.legacy_columns
         ]
+        fundamental_specs = [
+            spec for spec in specs if spec.factor_id in self.fundamental_ids
+        ]
         compute_specs = [
-            spec for spec in specs if spec.factor_id not in self.legacy_columns
+            spec
+            for spec in specs
+            if spec.factor_id not in self.legacy_columns
+            and spec.factor_id not in self.fundamental_ids
         ]
         self._ensure_registry()
         # 带 warmup 加载，避免短区间算不出长窗因子；写库时再裁回请求区间
@@ -152,6 +167,42 @@ class FactorEngineService:
                             "quality": "ok",
                             "source": spec.source.dataset,
                             "source_version": source_version,
+                            "version": spec.version,
+                            "computed_at": computed_at,
+                        }
+                    )
+
+        if fundamental_specs:
+            selected_codes = (
+                list(codes)
+                if codes
+                else sorted(frame["code"].astype(str).unique())
+            )
+            trade_dates = pd.DatetimeIndex(
+                sorted(frame["ts"].dt.normalize().unique())
+            )
+            fin_source_version = f"fin:{pd.Timestamp(end_date).strftime('%Y%m%d')}"
+            metrics = self.fundamental.load_metrics(
+                selected_codes, load_start, end_date, trade_dates
+            )
+            if not metrics.empty:
+                long = self.fundamental.compute(metrics)
+                for row in long.itertuples(index=False):
+                    stamp = pd.Timestamp(row.ts).normalize()
+                    if stamp < start_ts or pd.isna(row.value):
+                        continue
+                    spec = spec_by_id.get(row.factor_id)
+                    if spec is None:
+                        continue
+                    records.append(
+                        {
+                            "ts": stamp,
+                            "code": str(row.code),
+                            "factor_id": row.factor_id,
+                            "value": float(row.value),
+                            "quality": "ok",
+                            "source": spec.source.dataset,
+                            "source_version": fin_source_version,
                             "version": spec.version,
                             "computed_at": computed_at,
                         }

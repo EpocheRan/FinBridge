@@ -334,6 +334,7 @@ M6 重建 latest / panel 缓存
 | build_orchestrator 迁入 acquisition | ✅ `acquisition/build_orchestrator.py` | 最新 |
 | 文档统一到 docs / 删除 skills | ✅ | 最新 |
 | 因子 materialization 标记（stored/inline/auto）| ✅ 回测逐因子混用 stored+inline | 最新 |
+| 15 个基本面成长/质量因子 | ✅ TTM+PIT+截面排名，共 43 因子 | 最新 |
 
 现状：`screener` 只保留字段映射、查询与 API；构建编排在 `acquisition`，因子计算在 `factor_engine`。
 

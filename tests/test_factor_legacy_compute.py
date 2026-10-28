@@ -125,7 +125,7 @@ def test_legacy_service_build_writes_values():
 def test_all_legacy_ids_registered_once():
     service = FactorEngineService(config={})
     ids = [spec.factor_id for spec in service.list_factors()]
-    assert len(ids) == 28
-    assert len(set(ids)) == 28
+    assert len(ids) == 43
+    assert len(set(ids)) == 43
     for factor_id in LEGACY_COLUMNS:
         assert factor_id in ids

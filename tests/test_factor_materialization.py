@@ -112,7 +112,8 @@ def test_default_precompute_ids_are_stored_or_auto():
     ids = default_precompute_ids()
     assert "momentum.ret" in ids
     assert "technical.pct_chg" in ids
-    assert len(ids) == 28
+    assert "growth.yoy_revenue" in ids
+    assert len(ids) == 43
 
 
 def test_auto_falls_back_to_inline_when_stored_missing():
