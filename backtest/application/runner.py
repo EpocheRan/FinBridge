@@ -67,12 +67,15 @@ def _validate_supported(spec: RunSpec, factors, settings: BacktestSettings) -> N
     source = str(settings.factor_source or "auto").strip().lower()
     if source not in ("auto", "compute", "stored"):
         raise ConfigError(f"未知 factor_source: {source!r}")
-    if source == "stored":
-        raise ConfigError("stored 因子尚未实现（screener_daily 接入阶段）")
-    if source == "compute" and any(
-        getattr(item, "source", "compute") == "stored" for item in factors
-    ):
-        raise ConfigError("factor_source=compute 与策略中的 F.stored 冲突")
+    stored_defs = [
+        item for item in factors if getattr(item, "source", "compute") == "stored"
+    ]
+    if source == "stored" and not stored_defs:
+        raise ConfigError(
+            "factor_source=stored 需要策略声明 F.factor(factor_id)；当前因子均为 compute"
+        )
+    if source == "compute" and stored_defs:
+        raise ConfigError("factor_source=compute 与策略中的 F.factor/F.stored 冲突")
 
 
 def _resolve_universe(strategy: BaseStrategy) -> tuple[str, ...]:
@@ -302,7 +305,24 @@ class BacktestRunner:
         data = self.data_source.load(
             spec.symbols, start, end, warmup=warmup, freq=freq
         )
-        panel = build_panel(data.frame, factors, start, end)
+        stored_frame = None
+        stored_defs = [
+            item for item in factors if getattr(item, "source", "compute") == "stored"
+        ]
+        if stored_defs:
+            loader = getattr(self.data_source, "load_factors", None)
+            if loader is None:
+                raise ConfigError("当前数据源不支持 stored 因子（缺少 load_factors）")
+            factor_ids = [
+                getattr(item, "stored_column", None) or item.name for item in stored_defs
+            ]
+            load_start = pd.Timestamp(start).normalize() - pd.Timedelta(
+                days=max(0, warmup) * 2 + 10
+            )
+            stored_frame = loader(
+                spec.symbols, load_start.date(), end, factor_ids
+            )
+        panel = build_panel(data.frame, factors, start, end, stored=stored_frame)
         benchmark = None
         if spec.benchmark:
             loader = getattr(self.data_source, "load_benchmark", None)

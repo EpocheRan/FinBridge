@@ -82,7 +82,7 @@ def _day(value: str | date | datetime) -> datetime:
 class FactorStore:
     def __init__(self, db: QuestDBClient | None = None, config: dict | None = None):
         self.config = config or get_config()
-        self.db = db or QuestDBClient(self.config)
+        self.db = db or QuestDBClient(self.config, connect=False)
 
     # ------------------------------------------------------------------ registry
     def upsert_registry(self, specs: Iterable[Any]) -> int:

@@ -155,6 +155,40 @@ class QuestDBDataSource:
             security_status=self._load_security_status(codes, end),
         )
 
+    def load_factors(
+        self,
+        symbols: Sequence[str],
+        start: date,
+        end: date,
+        factor_ids: Sequence[str],
+    ) -> pd.DataFrame:
+        """读取因子长表，供 F.factor / factor_source=stored 使用。"""
+        codes = tuple(sorted({str(item) for item in symbols}))
+        ids = tuple(sorted({str(item) for item in factor_ids}))
+        if not codes or not ids:
+            return pd.DataFrame(columns=["ts", "code", "factor_id", "value"])
+        code_placeholders = ",".join(["%s"] * len(codes))
+        id_placeholders = ",".join(["%s"] * len(ids))
+        sql = (
+            "SELECT ts, code, factor_id, value FROM \"factor_value_daily\" "
+            f"WHERE code IN ({code_placeholders}) "
+            f"AND factor_id IN ({id_placeholders}) "
+            "AND ts BETWEEN %s AND %s ORDER BY ts, code, factor_id"
+        )
+        params = [
+            *codes,
+            *ids,
+            pd.Timestamp(start).normalize().to_pydatetime(),
+            pd.Timestamp(end).normalize().to_pydatetime(),
+        ]
+        try:
+            frame = self.db.query_dataframe(sql, params)
+        except Exception as exc:
+            raise DataError(f"因子读取失败: {exc}") from exc
+        if frame is None or frame.empty:
+            return pd.DataFrame(columns=["ts", "code", "factor_id", "value"])
+        return frame.reset_index()
+
     def load_benchmark(
         self, code: str, start: date, end: date, *, freq: str = "d"
     ) -> pd.Series | None:

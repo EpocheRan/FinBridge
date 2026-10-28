@@ -120,11 +120,44 @@ def _slice_dates(frame: pd.DataFrame) -> pd.DatetimeIndex:
     return pd.DatetimeIndex(sorted(dates.unique()))
 
 
+def _stored_wide(
+    long: pd.DataFrame | None,
+    defn: FactorDef,
+    dates: pd.DatetimeIndex,
+    symbols: tuple[str, ...],
+) -> pd.DataFrame:
+    """从因子长表 (ts, code, factor_id, value) 透视成 date × symbol。"""
+    if long is None or long.empty:
+        raise FactorError(f"因子 {defn.name!r} 需要 stored 数据，但未提供")
+    data = long.copy()
+    if "ts" in data.columns:
+        data = data.rename(columns={"ts": "date"})
+    if "code" in data.columns:
+        data = data.rename(columns={"code": "symbol"})
+    column = defn.stored_column or defn.name
+    if "factor_id" in data.columns:
+        data = data[data["factor_id"].astype(str) == str(column)]
+    elif column in data.columns:
+        data = data.rename(columns={column: "value"})
+    else:
+        raise FactorError(f"stored 数据缺少 factor_id/value: {defn.name!r}")
+    if data.empty:
+        raise FactorError(f"stored 数据中没有因子 {column!r}")
+    data["date"] = pd.to_datetime(data["date"], errors="coerce").dt.normalize()
+    data = data.dropna(subset=["date", "symbol", "value"])
+    wide = data.pivot_table(
+        index="date", columns="symbol", values="value", aggfunc="last"
+    )
+    return wide.reindex(index=dates, columns=list(symbols))
+
+
 def build_panel(
     frame: pd.DataFrame,
     defs: Sequence[FactorDef],
     start: date,
     end: date,
+    *,
+    stored: pd.DataFrame | None = None,
 ) -> FactorPanel:
     if frame.empty:
         raise FactorError("因子面板输入为空")
@@ -145,10 +178,17 @@ def build_panel(
 
     for defn in base_defs:
         if defn.source == "stored":
-            raise FactorError(
-                f"因子 {defn.name!r} 使用 stored，但当前 MVP 只支持 compute；"
-                "stored 将在 screener_daily 接入阶段实现"
+            if defn.op != "factor":
+                raise FactorError(
+                    f"因子 {defn.name!r} 使用 legacy F.stored（screener_daily 列），"
+                    "回测请改用 F.factor(factor_id)"
+                )
+            wide = _stored_wide(stored, defn, all_dates, symbols)
+            values[defn.name] = wide
+            meta[defn.name] = _meta(
+                defn, wide, start_ts, end_ts, source="stored", warmup=0
             )
+            continue
         per_symbol: dict[str, pd.Series] = {}
         for symbol, group in data.groupby("symbol", sort=True):
             series = group.set_index("date").sort_index()

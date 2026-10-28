@@ -66,6 +66,36 @@ def test_cross_section_rank_is_per_date():
     assert sorted(ranks.dropna().tolist()) == [0.5, 1.0]
 
 
+def test_factor_stored_panel_reads_long_frame():
+    frame = _frame()
+    start = frame["date"].min().date()
+    end = frame["date"].max().date()
+    last = frame["date"].max()
+    stored = pd.DataFrame(
+        [
+            {
+                "date": last,
+                "symbol": "AAA",
+                "factor_id": "momentum.ret",
+                "value": 0.123,
+            }
+        ]
+    )
+    panel = build_panel(
+        frame, [F.factor("momentum.ret")], start, end, stored=stored
+    )
+    assert panel.get("AAA", "momentum.ret", last) == pytest.approx(0.123)
+    assert panel.meta["momentum.ret"].source == "stored"
+
+
+def test_factor_stored_panel_requires_data():
+    frame = _frame()
+    start = frame["date"].min().date()
+    end = frame["date"].max().date()
+    with pytest.raises(FactorError):
+        build_panel(frame, [F.factor("momentum.ret")], start, end)
+
+
 def test_stored_price_unit_is_rejected():
     with pytest.raises(ValueError):
         F.stored("atr14", unit="price")

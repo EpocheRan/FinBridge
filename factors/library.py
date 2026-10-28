@@ -187,6 +187,31 @@ class F:
         )
 
     @staticmethod
+    def factor(
+        factor_id: str,
+        *,
+        window: int | None = None,
+        unit: Unit = "ratio",
+        version: str = "v1",
+        name: str | None = None,
+    ) -> FactorDef:
+        """读取因子库长表（F.factor）；与 legacy 的 F.stored 区分。"""
+        return FactorDef(
+            name=name or factor_id,
+            op="factor",
+            args=(factor_id,),
+            inputs=(),
+            on="none",
+            window=int(window or 0),
+            warmup=int(window or 0),
+            unit=unit,
+            source="stored",
+            stored_column=factor_id,
+            version=version,
+            price_basis="none",
+        )
+
+    @staticmethod
     def rank(factor_name: str, *, name: str | None = None) -> FactorDef:
         return FactorDef(
             name=name or f"rank_{factor_name}",

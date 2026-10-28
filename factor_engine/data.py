@@ -16,7 +16,7 @@ logger = logging.getLogger("FactorEngine.Data")
 class PriceData:
     def __init__(self, db: QuestDBClient | None = None, config: dict | None = None):
         self.config = config or get_config()
-        self.db = db or QuestDBClient(self.config)
+        self.db = db or QuestDBClient(self.config, connect=False)
 
     def load(
         self,
