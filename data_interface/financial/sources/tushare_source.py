@@ -401,6 +401,14 @@ class TushareSource:
         kwargs.setdefault("ts_code", to_ts_code(code))
         return self._call("dividend", self.pro.dividend, **kwargs)
 
+    def fetch_moneyflow(self, **kwargs) -> list[dict[str, Any]]:
+        """个股资金流（四档）。支持 ``trade_date`` 或 ``ts_code+start_date+end_date``。"""
+        return self._call("moneyflow", self.pro.moneyflow, **kwargs)
+
+    def fetch_concept(self) -> list[dict[str, Any]]:
+        """概念分类树（Tushare ``concept``）。"""
+        return self._call("concept", self.pro.concept)
+
     def fetch_trade_cal(
         self, start_date: str, end_date: str, exchange: str = "SSE"
     ) -> list[dict[str, Any]]:

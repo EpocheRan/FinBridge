@@ -133,13 +133,3 @@ def register_market_tools(mcp) -> None:
             "成功获取今天日期",
             {"date": current.strftime("%Y-%m-%d"), "weekday": current.isoweekday()},
         )
-
-    @mcp.tool()
-    def get_concept_boards() -> dict[str, Any]:
-        """获取概念板块列表。"""
-        try:
-            frame = get_market_loader().concept_boards()
-            records = dataframe_to_records(frame)
-            return ok(f"成功获取 {len(records)} 个概念板块", {"data": records, "count": len(records)})
-        except Exception as exc:
-            return from_exception(exc)

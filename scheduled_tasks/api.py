@@ -22,6 +22,7 @@ def register_scheduled_tools(mcp) -> None:
         codes: list[str] | str | None = None,
         max_trade_days: int | None = None,
         max_stocks: int | None = None,
+        max_boards: int | None = None,
         cursor: str | None = None,
         reset: bool = False,
         include_valuation: bool = True,
@@ -37,7 +38,9 @@ def register_scheduled_tools(mcp) -> None:
 
         Args:
             dataset: daily=日线，benchmark=基准指数，financial=财务，
-                screener=日频因子，all=四个阶段都执行。
+                screener=日频因子，moneyflow=个股分档，concept_meta=概念板块列表，
+                concept_daily=板块日线，concept_member=成分快照，
+                concept_class=概念分类，all=日线/基准/财务/Screener/分档/板块列表。
             start_date: 开始日期 YYYY-MM-DD；不传时使用各数据集默认值。
                 指定 codes 且不传 start_date 时，日线默认最近约 400 天、
                 财务默认最近 2 年，避免误触发全历史回填。
@@ -45,9 +48,10 @@ def register_scheduled_tools(mcp) -> None:
             codes: 指定股票/ETF 代码（如 ["600519","000001"] 或 "600519,000001"）；
                 不传或传空表示全市场。指定代码时只更新这些代码，
                 且不会覆盖全市场回填游标。
-            max_trade_days: 日线本次最多处理多少个交易日，默认 20。
+            max_trade_days: 日线/分档本次最多处理多少个交易日，默认 20。
             max_stocks: 财务本次最多处理多少只股票，默认 15。
-            cursor: 手动指定游标（日期或股票代码）；不传则从数据库状态续跑。
+            max_boards: 概念日线/成分本次最多处理多少个板块。
+            cursor: 手动指定游标（日期或股票/板块代码）；不传则从数据库状态续跑。
             reset: 是否重置游标，从头开始。
             include_valuation: 财务是否顺带同步每日估值，默认 True。
             include_funds: 日线是否同时拉取 ETF/LOF；
@@ -64,6 +68,7 @@ def register_scheduled_tools(mcp) -> None:
                 codes=codes,
                 max_trade_days=max_trade_days,
                 max_stocks=max_stocks,
+                max_boards=max_boards,
                 cursor=cursor,
                 reset=reset,
                 include_valuation=include_valuation,

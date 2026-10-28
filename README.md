@@ -1,6 +1,6 @@
 # FinBridge MCP
 
-> 面向 AI Agent 的量化数据服务：行情、财务、**因子筛股（Screener）**、组合持仓，统一通过 MCP 工具暴露。
+> 面向 AI Agent 的量化数据与回测基础设施：行情、财务、**因子筛股（Screener）**、组合持仓、定时同步通过 MCP 暴露；回测作为独立离线链路，复用同一份数据与 A 股执行规则（研究/优化为后续扩展）。
 
 ## 目录
 
@@ -21,48 +21,93 @@
 
 ## 1. 项目定位
 
-FinBridge 把量化系统拆成四条在线链路，并额外提供独立的离线回测/研究链路：
+FinBridge 是面向 AI Agent 的量化数据与回测基础设施：
+
+- **在线链路**：行情、财务、因子筛股、组合持仓、定时同步，统一通过 MCP 工具暴露；
+- **离线链路**：复用同一份数据与 A 股执行规则，做单股/横截面回测；优化、因子研究为后续扩展；
+- **数据底座**：行情表只存**不复权价 + 累计复权因子**，复权在读取时计算；所有服务共享 QuestDB 与进程内单例。
+
+### 1.1 总体架构
 
 ```text
-┌──────────────────────────────────────────────────────────────────┐
-│                          MCP Server                              │
-│  行情工具      财务工具       Screener 工具       持仓 / Skills   │
-└───────┬───────────┬───────────────┬──────────────────┬───────────┘
-        │           │               │                  │
-┌───────▼───────┐ ┌─▼─────────────┐ ┌▼────────────────┐ ┌▼──────────────┐
-│ Market Data   │ │ Financial     │ │ Screener        │ │ Position      │
-│ 行情/基础信息 │ │ 报表/估值/预期│ │ 日频因子/分时基线│ │ 组合/持仓/交易│
-└───────┬───────┘ └─┬─────────────┘ └┬────────────────┘ └┬──────────────┘
-        │           │                │                  │
-        └───────────┴────────────────┴──────────────────┘
-                                    ▼
-                              ┌──────────┐
-                              │ QuestDB  │
-                              └──────────┘
+                 ┌──────────────────────────────────────────────┐
+                 │                 MCP Server                   │
+                 │ market / financial / screener / position /   │
+                 │ scheduled tools + skill prompts              │
+                 └───────────────┬──────────────────────────────┘
+                                 │ data_interface.api.runtime（进程内单例）
+        ┌────────────────────────┼─────────────────────────┐
+        ▼                        ▼                         ▼
+┌───────────────┐       ┌────────────────┐        ┌────────────────┐
+│ data_interface│       │ screener       │        │ position       │
+│ 行情/财务/日历 │       │ 因子/基线/构建 │        │ 组合/持仓/交易 │
+└───────┬───────┘       └───────┬────────┘        └───────┬────────┘
+        └───────────────────────┼─────────────────────────┘
+                                ▼
+                         ┌─────────────┐
+                         │   QuestDB   │
+                         └──────┬──────┘
+                                │ 只读
+                 ┌──────────────▼──────────────┐
+                 │  离线回测 / 研究（可选依赖） │
+                 │ strategies → factors →      │
+                 │ backtest → ledger / outputs │
+                 └─────────────────────────────┘
 ```
 
-| 模块 | 目录 | 职责 |
-|---|---|---|
-| 数据接口 | `data_interface/` | 行情、财务、交易日历、QuestDB、复权、限流、异常 |
-| 因子筛股 | `screener/` | 日频筛选因子、分时量能基线、构建状态、停牌处理 |
-| 持仓 | `position/` | 组合账本、ATR/GRID 仓位、交易与盈亏 |
-| 技术指标 | `indicator/` | 纯 pandas/numpy 的单标的指标（ATR 等） |
-| 因子库 | `factors/` | 因子声明、时序/横截面算子、date×symbol 面板 |
-| 策略 | `strategies/` | 单股/横截面策略基类与示例（`strategies/models/`） |
-| 回测 | `backtest/` | PyBroker 单股/横截面引擎、自建账本、A 股规则、benchmark、优化/研究、CLI |
-| 定时同步 | `scheduled_tasks/` | 全 A 股日线/财务分批同步（心跳驱动） |
-| MCP 入口 | `MCPserver.py` | 只组装工具与启动服务 |
+### 1.2 分层与依赖
 
-> 回测用法、策略/因子写法与当前限制见 [`backtest/README.md`](backtest/README.md)。
+```text
+interface        MCPserver.py / data_interface.api / screener.interface /
+                 backtest.cli / scheduled_tasks.api
+      │
+application      screener.application / backtest.application / position.manager
+      │
+domain           screener.domain / backtest.domain / factors.library /
+                 strategies.base
+      ▲
+      │ 实现端口
+infrastructure   data_interface / screener.infrastructure /
+                 backtest.infrastructure（QuestDB、第三方源、PyBroker、输出）
+      │
+shared           data_interface.common / indicator / scripts.schemas
+```
 
-**数据源**：Tushare Pro（财务与复权因子主源，至少 2000 积分）、AkShare、BaoStock、腾讯实时行情。
+依赖规则：
 
-**设计原则**：
+- 需要分层的模块（`screener/`、`backtest/`）遵循 `interface → application → domain`；
+  `data_interface` 是共享基础设施，被各层复用；`bootstrap` 是唯一装配点；
+- `strategies/`、`factors/` 是纯 Python/pandas，不 import `backtest`、PyBroker、QuestDB、`data_interface`；
+- `backtest/` 单向依赖 `strategies` / `factors`，只有 `backtest/infrastructure/engine/pybroker_engine.py` import PyBroker；
+- `data_interface` 不反向依赖 `screener` / `position` / `backtest`；
+- `MCPserver.py` 只做工具注册与启动，不写业务逻辑，也不在启动时建表。
 
-- 行情表只存**不复权价 + 复权因子**，复权在读取时计算；
-- 所有跨模块服务共用 `data_interface/api/runtime.py` 的进程内单例；
-- Screener 采用 `interface → application → domain`，基础设施通过端口注入；
-- 不在 MCP 启动时建表，建表由 `scripts/init_database.py` 完成。
+### 1.3 主要模块
+
+| 模块 | 目录 | 关键内容 | 对外入口 |
+|---|---|---|---|
+| 数据接口 | `data_interface/` | `common/`（配置、QuestDB、交易日历、限流、代码/板块）、`market/`（loader/fetcher/adjust/adj_factors/sources）、`financial/`（service/repository/normalizer/metrics/fields/sources）、`moneyflow/`（分档 service/repository/sources）、`concept/`（板块/成分/分类 service/repository/sources）、`api/`（runtime 单例、MCP tools） | `data_interface.api.*` |
+| 因子筛股 | `screener/` | domain（模型/因子/构建状态/停牌）、application（服务/ports/编排）、infrastructure（QuestDB 仓储/补齐/队列）、interface（MCP/CLI/worker） | `screener.interface.api`、`python -m screener` |
+| 持仓 | `position/` | `manager`（组合/持仓/交易/盈亏）、`schema`、`modes/`（ATR、GRID）、`llm_tool` | MCP `pm_*` 工具 |
+| 因子库 | `factors/` | `library`（`F` 命名空间/`FactorDef`/注册表）、`ops`（时序算子，复用 screener/indicator）、`cross_section`（rank/zscore）、`panel`（date×symbol 面板）、`stored`（screener_daily 列元数据，占位） | `from factors import F` |
+| 策略 | `strategies/` | `base`（单股/横截面基类）、`context`（只读上下文 + 订单意图）、`universe`、`weighting`、`models/`（一文件一策略） | `python -m backtest list/validate/run` |
+| 回测 | `backtest/` | `domain`（RunSpec/BacktestResult/报告）、`application`（runner/loader/cross_section/rebalance/run_id/ports/registry）、`infrastructure`（data/engine/execution/output）、`config`/`bootstrap`/`cli`；PyBroker 为 optional extra | `python -m backtest` |
+| 技术指标 | `indicator/` | 纯 pandas/numpy 的单标的指标（ATR、IndicatorEngine） | `from indicator import ATR` |
+| 定时同步 | `scheduled_tasks/` | 心跳驱动的全 A 股日线/财务/分档/概念分批同步、状态表 | MCP `scheduled_*` 工具 |
+| 建表/迁移 | `scripts/` | `init_database.py`、`migrate_database.py`、`schemas/`（market/financial/moneyflow/concept/position/screener/task） | 手工执行 |
+| 测试 | `tests/` | 默认离线、不依赖 DB；联网/DB 用例用 `@require_live` + `RUN_LIVE_TESTS=1` | `pytest` |
+| Agent Skills | `skills/` | 组合/持仓操作指南（MCP prompt） | MCP prompts |
+| MCP 入口 | `MCPserver.py` | 注册工具、启动 FastMCP（http/sse/stdio） | `python MCPserver.py` |
+
+> 回测的策略/因子写法、设计细节与当前限制见 [`backtest/README.md`](backtest/README.md) 与 [`backtest/ARCHITECTURE.md`](backtest/ARCHITECTURE.md)。
+
+### 1.4 数据流
+
+1. **同步**：`scheduled_tasks` 或 `scripts` 把行情/财务写入 QuestDB（不复权价 + `adj_factor`）；
+2. **服务**：`data_interface` 读库、按需回源、复权计算；`screener` 生成 `screener_daily` / 分时基线；
+3. **在线消费**：MCP 工具（行情、财务、筛股、持仓、任务）统一走 `api/runtime.py` 单例；
+4. **离线消费**：回测从 QuestDB 只读加载 → 因子面板 → 策略/引擎 → 自建账本 → console/csv；
+5. **可复现**：回测 `run_id` 覆盖策略、参数、因子、数据快照、执行规则与配置。
 
 ---
 
@@ -125,24 +170,13 @@ python scripts/init_database.py --only screener
 - `screener_build_state`
 - `market_suspension`
 
-### 2.4 从旧版本升级（重要）
-
-旧版本行情表存的是**前复权价**，无法还原成不复权价。升级步骤：
+### 2.4 单独初始化分档 / 概念
 
 ```bash
-# 1) 体检：看哪些表要补 adj_factor / 修 amount 类型
-python scripts/migrate_database.py --check
-
-# 2) 加列 / 重建 amount 为 DOUBLE
-python scripts/migrate_database.py --apply
-
-# 3) 旧行是前复权数据，需要清空后重新同步（推荐）
-python scripts/migrate_database.py --apply --truncate-ohlc
-
-# 4) 让 Agent 调 scheduled_sync_a_shares，或等服务自动补齐
+python scripts/init_database.py --only moneyflow,concept
 ```
 
-不想清空历史（接受旧数据被标记为“因子缺失”）时用 `--apply --keep-legacy`，读取端会返回 `adjust_fallback: "missing_adj_factor"`，不会假装因子是 1。
+会创建 `moneyflow_daily`、`moneyflow_source`、`concept_board_dim`、`concept_board_daily`、`concept_member_snapshot`、`concept_classification`、`concept_board_alias`。
 
 ---
 
@@ -287,206 +321,161 @@ infrastructure
 - `infrastructure` 实现端口，可以复用 `data_interface`；
 - `bootstrap.py` 是唯一装配具体实现的地方。
 
-### 5.3 表结构
-
-| 表 | 类型 | 说明 |
-|---|---|---|
-| `screener_daily` | 业务表 | 一只股票一个交易日一行，宽表，直接支撑筛选/排序 |
-| `intraday_baseline` | 业务表 | 按 `as_of_date + code + freq + minute_end` 存分时量能基线 |
-| `screener_build_state` | 状态表 | 构建/重建状态、进度、游标、质量、租约、重试 |
-| `market_suspension` | 状态表 | 停牌 / 退市 / NoData 负缓存 |
-
-关键字段：
-
-- `screener_daily`：
-  - 行情：`open/high/low/close/raw_close/adj_factor/prev_close/volume/amount/turnover`
-  - 收益：`pct_chg/gap_pct/intraday_pct/range_pct`
-  - 量能：`avg_volume_5d/20d/60d`、`avg_amount_20d`、`volume_ratio_20d`、`volume_chg_pct`
-  - 波动：`atr14/atr_pct/volatility_20d/volatility_60d`
-  - 趋势：`ma5..ma250`、`close_vs_ma20/60/250_pct`
-  - 区间：`high_20d/low_20d/high_52w/low_52w`、`dist_*`、`is_new_high_52w/is_new_low_52w`
-  - Beta：`benchmark_code/beta_252/corr_252/beta_window`
-  - 市值：`total_share/float_share/total_mv/float_mv`
-  - 质量：`lookback_days/is_partial/core_ready/full_ready/formula_version/computed_at`
-- 查询时派生（不落库）：
-  - `price_x_avg_volume = close × avg_volume_20d`
-  - `price_x_volume = close × volume`
-  - `pct_from_open = (close / open - 1) × 100`
-  - `dist_high_20d_pct / dist_low_20d_pct`
-
-> `close` 是前复权价；`raw_close` 是不复权价；`total_mv/float_mv` 使用 `raw_close` 计算。
-
-### 5.4 因子口径
-
-| 因子 | 口径 |
-|---|---|
-| `pct_chg` | `(close / prev_close - 1) × 100` |
-| `gap_pct` | `(open / prev_close - 1) × 100` |
-| `range_pct` | `(high - low) / prev_close × 100` |
-| `avg_volume_Nd` | 前 N 个交易日成交量均值（不含当日） |
-| `volume_ratio_20d` | `volume / avg_volume_20d` |
-| `atr14` | Wilder ATR（RMA） |
-| `volatility_20d` | 日收益标准差 × `sqrt(252) × 100` |
-| `beta_252` | `cov(stock_ret, bench_ret, 252) / var(bench_ret, 252)` |
-| `high_52w / low_52w` | 252 个交易日滚动高低点 |
-| `full_ready` | 历史长度达到最大窗口且核心因子非空 |
-| `is_partial` | `full_ready=false` |
-
-说明：
-
-- 历史不足时仍写行，但 `is_partial=true`；默认查询 `allow_partial=false` 会过滤这些行。
-- **Beta 缺失不会把整行标记为 partial**：基准指数是可选交叉因子，基准源不可用时 `beta_252` 为 `null`，但其他因子仍可用。
-- 基准默认不阻塞读路径；需要 Beta 时先运行 `python -m screener benchmark`，或把 `screener.backfill.fetch_benchmark` 设为 `true`。
-
-### 5.5 读路径与构建规则
-
-| 场景 | 写 `build_state`？ | 行为 |
-|---|---|---|
-| 快照 `DONE + FULL + 版本一致 + rows 存在` | 否 | 零写入热路径，直接查询 |
-| 快照 `PARTIAL` | 否 | 返回结果 + `quality=PARTIAL`，不自动重算 |
-| 未命中 + `auto_build=true` | 是 | `claim` 一条快照状态，内联构建，写 `DONE/PARTIAL` |
-| 未命中 + `auto_build=false` | 否 | 抛 `ScreenerNotBuilt` |
-| 状态 `RUNNING` 未过期 | 否 | 等待/返回 `BUILDING` |
-| 状态 `RUNNING` 已过期 | 是 | 重新 claim，从 cursor 恢复 |
-| `rebuild_screener` / CLI / 后台 | 是 | 统一走 `BuildOrchestrator` + inline worker |
-
-构建状态机：
-
-```text
-PENDING → RUNNING → DONE
-                 ├→ PARTIAL（retry_at 到期后才自动恢复；读路径不重算）
-                 ├→ FAILED
-                 └→ CANCELLED
-```
-
-关键点：
-
-- `build_id` 是确定性幂等键，包含数据集、日期范围、universe 指纹、频率、公式版本；
-- `screener_build_state` 采用 append-only，读取用 `LATEST ON updated_at PARTITION BY build_id`；
-- `PARTIAL` 的 `retry_at` 只供后台/rebuild 使用，读路径不自动重算，避免抖动。
-
-### 5.6 自动补齐与 lookback
-
-Screener 不要求每天定时跑。三条路径都能补齐：
-
-1. **批量入口**：`python -m screener daily/repair`；
-2. **读路径**：`screen_stocks` / `get_screener_metrics` 发现缺口时按预算补齐；
-3. **后台 worker**：超过预算转 `InProcessJobDispatcher`。
-
-统一顺序：
-
-```text
-DB → 缺口合并 → 第三方源 → 写回 QuestDB → 再从 DB 读取 → 计算 → 写因子表
-```
-
-细节：
-
-- 计算 `beta_252` / `52 周` / `ma250` 时自动把 lookback 窗口（默认最多 260 个交易日）带入；
-- `max_lookback_bars` 可限制回看上限，超出会截断并告警；
-- 停牌/退市/NoData 日期通过 `skip_dates` 排除，不算缺口；
-- `NoData` 写 `market_suspension` 并设置 TTL，避免反复打第三方；
-- 长区间按 `daily_chunk_years` / `minute_chunk_days` 分块，降低单次请求失败率。
-
-### 5.7 分时量能基线
-
-`intraday_baseline` 的构建逻辑：
-
-1. 取最近 `lookback_days` 个交易日的 1m/5m bar；
-2. 只保留常规交易时段（09:30–11:30、13:00–15:00）；
-3. 按 `minute_end` 聚合成交量/成交额，并计算累计量；
-4. 剔除缺失桶超过 `max_missing_bucket_ratio` 的交易日；
-5. 对有效交易日求均值/标准差；
-6. `sample_days < min_sample_days` 时 `is_partial=true`。
-
-读取：
-
-```text
-time_rel_volume = 当前累计成交量 / avg_cum_volume[当前分钟]
-```
-
-### 5.8 CLI
-
-```bash
-# 日频因子
-python -m screener daily --start 2026-10-01 --end 2026-10-23
-python -m screener daily --start 2026-10-23 --end 2026-10-23 --codes 600519
-
-# 修复/强制重建
-python -m screener repair --start 2026-01-01 --end 2026-10-23
-
-# 分时基线
-python -m screener baseline --as-of 2026-10-23 --codes 600519 --freq 5m
-
-# 补齐基准指数（Beta 需要）
-python -m screener benchmark --start 2025-01-01 --end 2026-10-23
-
-# 查看构建状态
-python -m screener status
-```
-
-### 5.9 MCP 工具
-
-| 工具 | 用途 |
-|---|---|
-| `screen_stocks` | 按因子筛选/排序股票 |
-| `get_screener_metrics` | 查询指定股票的日频因子明细 |
-| `get_intraday_baseline` | 查询分时量能基线 |
-| `rebuild_screener` | 提交重建任务，返回 `build_id` |
-| `get_screener_status` | 查询构建状态/进度 |
-
-示例：
-
-```json
-{
-  "as_of": "2026-10-23",
-  "universe": {"codes": null, "exclude_st": true},
-  "filters": [
-    {"field": "beta_252", "op": "between", "value": [0.8, 1.5]},
-    {"field": "volume_ratio_20d", "op": "ge", "value": 2},
-    {"field": "close", "op": "gt", "value": 5}
-  ],
-  "sort": [{"field": "pct_chg", "desc": true}],
-  "limit": 100,
-  "auto_build": true,
-  "allow_partial": false
-}
-```
-
-### 5.10 性能与注意事项
-
-- 单日 600519 首次构建约 0.2s，二次命中约 0.02s（本地 QuestDB，实测）；
-- 全市场首次回填受第三方源限速影响，建议用 CLI/后台跑，不要在 MCP 请求里同步等待；
-- 默认 `allow_partial=false`，历史不足的股票会被过滤；需要包含时显式传 `true`；
-- 默认 `fetch_benchmark=false`，Beta 需要先跑 `screener benchmark`；
-- 读路径默认预算 2s，超时转后台 worker；V1 只支持 inline 调度。
+> 表结构见 §8.4；因子字段与构建规则以 `screener/domain/factor_engine.py`、
+> `scripts/schemas/screener_schema.py` 为准。
 
 ---
 
 ## 6. 回测（Backtest）
 
-回测与 MCP 运行时解耦，PyBroker 是 **optional extra**：
+回测是独立的离线链路，与 MCP 运行时解耦；PyBroker 是 **optional extra**：
 
 ```bash
 uv sync --extra backtest
 ```
 
-### 6.1 当前能力
+### 6.1 设计目标
 
-| 能力 | 说明 |
+- 策略只依赖「策略 API + 因子库」，不 import PyBroker / QuestDB / `data_interface`；
+- 数据源、执行引擎、输出都是可替换插槽（ports + registry + 配置名）；
+- 单股与横截面共用账本、A 股执行规则与输出；
+- 指标以**自建账本**为准，PyBroker 的 `metrics_df` 只作对照；
+- 同一输入（策略源码/参数/因子/数据快照/规则/配置）必须得到同一个 `run_id`。
+
+### 6.2 分层架构
+
+```text
+strategies/（纯 Python）              factors/（纯 pandas）
+  base / context / universe             library / ops / cross_section / panel
+  weighting / models/*.py               （复用 screener/domain/factors 与 indicator）
+        │                                      │
+        └──────────────────┬───────────────────┘
+                           ▼
+              backtest/application
+   runner / loader / cross_section / rebalance / run_id / ports / registry
+                           │
+              backtest/infrastructure
+   data/       QuestDBDataSource / MemoryDataSource / snapshot
+   engine/     PyBrokerEngine（唯一 import pybroker 的文件）
+   execution/  a_share（T+1/整手/涨跌停/停牌/费用）/ ledger（PortfolioLedger）
+   output/     console / csv
+                           │
+                     backtest/domain
+          RunSpec / BacktestResult / ExecutionReport / errors
+```
+
+| 文件 | 职责 |
 |---|---|
-| 单股策略 | `on_bar` 目标权重 / 买卖股数 / 止损；`strategies/models/atr_trend.py` |
-| 横截面策略 | 全 universe 向量化排名/选股/权重，PyBroker 只执行候选集；当前支持 explicit universe |
-| 调仓执行 | 调仓日先卖后买；pending target 在下一调仓日前重试；buffer 保留仓位占用 gross exposure |
-| A 股规则 | T+1、100 股整手、涨跌停/停牌/ST/新股、佣金/过户费/印花税分段 |
-| 账本与指标 | 自建 `PortfolioLedger` 回放成交；PyBroker 指标仅作对照；对账差异约 `1e-8` |
-| benchmark | 默认 `000300`，产出 beta / alpha / tracking error / information ratio / excess return |
-| 公司行为 | `corporate_actions=approx` 从 `adj_factor` 推导；`off` 可关闭；`exact` 未实现 |
-| 优化 | 完整回测网格搜索；每个 trial 复用 PyBroker 执行、A 股规则和账本 |
-| walk-forward | train 选参、test 回测；支持 windows / train_size / lookahead |
-| 因子研究 | IC / rank IC、分层收益、long-short、换手、衰减（不经过 PyBroker） |
-| 输出 | console / csv；默认 `metrics/equity/orders/trades/selections/rejected/unfilled/corporate_actions` |
+| `backtest/application/runner.py` | 解析 universe、加载行情、建因子面板、算 `run_id`、调用引擎、输出 |
+| `backtest/application/cross_section.py` | 横截面预选：向量化排名 → 目标权重 → 候选集/每日 ranks/selections |
+| `backtest/application/loader.py` | 按路径加载策略 `.py`，校验模块级 `STRATEGY`，合并 `--param` |
+| `backtest/application/rebalance.py` | 日/周/月/每 N bar 的调仓日门控 |
+| `backtest/infrastructure/engine/pybroker_engine.py` | 单股/横截面执行、A 股校验、下单、T+1 台账同步 |
+| `backtest/infrastructure/execution/a_share.py` | 涨跌停价、整手、T+1 可卖数量、费用模型 |
+| `backtest/infrastructure/execution/ledger.py` | 多标的账本、`equity/metrics`、公司行为钩子、对账 |
+| `backtest/infrastructure/output/*.py` | `console` / `csv` 输出 |
+| `backtest/application/run_id.py` | 规范化 payload + SHA-256，保证同输入同 id |
 
-### 6.2 CLI
+### 6.3 两条执行路径
+
+**单股**：
+
+```text
+数据（start-warmup..end）→ 因子面板 → Strategy.add_execution(exec_fn)
+  → on_bar 产生订单意图 → A 股校验（整手/涨跌停/停牌/T+1/现金）
+  → 下一根 bar 成交（默认 open，可配 close）→ T+1 台账 → PortfolioLedger → metrics
+```
+
+**横截面（混合架构）**：
+
+```text
+全 universe 数据 → 因子面板
+  → plan_cross_section：每个调仓日 rank → top_n → weights
+     产出 targets / 每日 ranks / candidates / selections
+  → PyBroker：add_execution(risk_fn, candidates)
+              set_after_exec(rebalance_fn)
+     risk_fn     ：只对持仓调 on_bar（风控退出）
+     rebalance_fn：调仓日按 targets 先卖后买；非调仓日只做 buffer 退出
+  → PortfolioLedger → metrics
+```
+
+- **候选集 = 所有调仓日入选标的的并集**，只有候选集进入 PyBroker；
+- 横截面不使用 PyBroker 的 `stop_loss/stop_trailing`（入场在 `after_exec`，无法绑定 entry），
+  风控退出由策略在 `on_bar` 里 `close_position()`；
+- buffer 卖出阈值为 `rank > top_n + buffer`，只在非调仓日执行，不重置目标权重；
+- 调仓日先卖后买，卖出回款计入买入预算（PyBroker 默认卖单先于买单结算）。
+
+### 6.4 策略与因子写法
+
+策略是一个 `.py` 文件，模块级 `STRATEGY` 必须是**类或工厂**（不能是实例），每次 run 实例化：
+
+```python
+# strategies/models/atr_trend.py（单股）
+from strategies import SingleSymbolStrategy
+from factors import F
+
+class AtrTrend(SingleSymbolStrategy):
+    name = "atr_trend"
+    symbols = ("600519",)
+    params = {"n": 14, "k": 2.0}
+
+    def factors(self):
+        return [F.atr(self.params["n"]), F.ma(20)]
+
+    def on_bar(self, ctx):
+        ...
+
+STRATEGY = AtrTrend
+```
+
+```python
+# strategies/models/rank_mom20.py（横截面）
+from strategies import CrossSectionStrategy, Universe, Rebalance, EqualWeight
+from factors import F
+
+class RankMom20(CrossSectionStrategy):
+    name = "rank_mom20"
+    universe = Universe.explicit(("600519", "000001", "300750"))
+    top_n = 2
+    buffer = 1
+    rebalance = Rebalance.WEEKLY
+    weighting = EqualWeight()
+    params = {"n": 20}
+
+    def factors(self):
+        return [F.mom(self.params["n"], on="hfq_close")]
+
+    def rank(self, panel, dt):
+        return panel.at(dt, f"mom{self.params['n']}")
+
+STRATEGY = RankMom20
+```
+
+因子只声明、不计算：`F.mom / F.ma / F.atr / F.vol`；横截面变换用 `F.rank / F.zscore`。
+`F.stored(...)` 已定义但 **stored 路径尚未实现**，运行时会明确报错。
+
+### 6.5 数据与执行口径
+
+| 项 | 口径 |
+|---|---|
+| `close` | 不复权，用于成交、整手、涨跌停、盈亏 |
+| `hfq_close` | `close × adj_factor`，用于因子计算 |
+| `adj_close` | 前复权，展示/兼容；依赖取数区间 anchor |
+| `adj_factor` | 累计后复权因子 |
+| `volume` / `amount` | 股 / 元 |
+
+- 因子在 `hfq_close` 上计算；信号在 T 日收盘产生，默认 T+1 开盘成交（`fill=next_open`），
+  可配 `fill=close`（下一根 bar 收盘）；PyBroker 默认 `PriceType.MIDDLE` 不会出现在主路径；
+- **T+1**：卖单下一根 bar 成交，台账区分 `available`（已解禁）与 `sellable`（含当日成交）；
+- **整手**：买入向下取整 100 股，卖出允许零股；
+- **涨跌停**：主板 10%、创业板/科创板 20%、北交所 30%，按 `prev_close` 计算；
+  ST 5% 与新股无涨跌幅**尚未接线**（当前按非 ST、非新股处理）；
+- **停牌**：`volume<=0` 或 `close` 无效不下单，持仓按最近收盘估值；
+- **费用**：佣金 0.025%（最低 5 元，双边）、过户费 0.001%（双边）、
+  印花税卖出 0.1%（2023-08-28 前）/ 0.05%（之后）；
+- **账本**：`PortfolioLedger` 回放成交，按不复权 `close` 估值；公司行为当前只支持 `off`。
+
+### 6.6 CLI 用法
 
 ```bash
 # 列出 / 校验策略
@@ -498,58 +487,88 @@ python -m backtest run strategies/models/atr_trend.py \
     --start 2026-06-01 --end 2026-09-30 \
     --data questdb --out console,csv
 
-# 横截面回测
+# 横截面回测（当前仅 explicit universe）
 python -m backtest run strategies/models/rank_mom20.py \
     --start 2026-06-01 --end 2026-09-30 \
     --data questdb --out console,csv
 
-# 网格优化
-python -m backtest optimize strategies/models/atr_trend.py \
-    --start 2026-06-01 --end 2026-09-30 \
-    --data questdb --grid k=1.0,2.0,3.0 --metric sharpe
-
-# walk-forward
-python -m backtest optimize strategies/models/atr_trend.py \
-    --start 2026-06-01 --end 2026-09-30 \
-    --data questdb --grid k=1.0,2.0 --windows 2
-
-# 因子研究
-python -m backtest research --factor mom20 \
-    --codes 600519,000001,600036 \
-    --start 2026-06-01 --end 2026-09-30 --data questdb
+# 覆盖参数
+python -m backtest run strategies/models/atr_trend.py \
+    --start 2026-06-01 --end 2026-09-30 --param n=10 --param k=1.5
 ```
 
-CSV 默认写到 `output/backtest/<run_id>/`，研究结果写到
-`output/backtest/research/<factor>/`。
+CSV 默认写入 `output/backtest/<run_id>/`：`metrics.json`、`equity.csv`、`orders.csv`、
+`trades.csv`、`selections.csv`、`rejected.csv`、`unfilled.csv`、`corporate_actions.csv`。
 
-### 6.3 口径与边界
+### 6.7 输出与 `run_id`
 
-- 因子默认在 `hfq_close = close × adj_factor` 上计算；成交、整手、涨跌停、盈亏用**不复权** `close`；
-- `run_id` 覆盖策略源码/参数、因子、数据快照、benchmark、ST/上市状态、执行规则和公司行为模式；同输入同 id；
-- 横截面目前只支持 explicit universe；`all_a/index/file` 会明确报错；
-- 历史 ST 仍用当前 `stock_basic_info.is_st` 近似，`meta["st_approximation"]=true`；
-- `corporate_actions=approx` 把现金分红当作再投资，不区分分红/送转；
-- walk-forward 按工作日切分，不读取交易所节假日表；
-- 优化采用完整回测网格，无缓存/并行，大网格会较慢；
-- 更细的策略写法、输出字段和限制见 [`backtest/README.md`](backtest/README.md)。
+- `BacktestResult`：`run_id / spec / metrics / metrics_pybroker / equity / orders /
+  trades / selections / factor_meta / execution_report / meta`；
+- `metrics` 由自建账本产出；`metrics_pybroker` 仅对照；
+- `run_id` 覆盖：策略源码 hash、策略参数、因子定义、数据快照（全 OHLCV + amount + adj_factor）、
+  universe、日期区间、执行规则、`fill`、`corporate_actions`、`mode/top_n/buffer/weighting`、
+  引擎与库版本、`seed`；
+- 同一 `run_id` 重复运行结果一致（已实测宿主机/容器、重复运行均相同）。
 
-### 6.4 常用配置
+### 6.8 配置
 
-`config.json` 可增加可选的 `backtest` 段（不写则用默认值）：
+`config.json` 可选 `backtest` 段（不写则用默认值）：
 
 ```json
 "backtest": {
+  "engine": "pybroker",
   "data": "questdb",
+  "factor_source": "auto",
   "outputs": ["console", "csv"],
+  "output_dir": "output/backtest",
+  "initial_cash": 1000000,
+  "warmup_min_bars": 260,
+  "fill": "next_open",
   "benchmark": "000300",
+  "rebalance": "weekly",
+  "max_gross_exposure": 0.98,
+  "allow_short": false,
+  "seed": 0,
   "corporate_actions": "off",
-  "risk_free_rate": 0.0,
-  "warmup_min_bars": 260
+  "rules": {
+    "lot_size": 100,
+    "t_plus_1": true,
+    "limit_up_down": true,
+    "suspension": true,
+    "commission_rate": 0.00025,
+    "min_commission": 5.0,
+    "transfer_fee_rate": 0.00001,
+    "stamp_tax_schedule": [
+      {"effective_from": "1990-01-01", "rate": 0.001},
+      {"effective_from": "2023-08-28", "rate": 0.0005}
+    ]
+  }
 }
 ```
 
-`corporate_actions` 可选 `off` / `approx`；把 `benchmark` 设为 `null` 可关闭基准指标。
-这些配置也可被 CLI 的 `--benchmark`、`--corporate-actions`、`--risk-free-rate` 覆盖。
+配置在加载/运行前校验：未知字段、非法 `fill/factor_source/corporate_actions`、
+`max_gross_exposure ∉ (0,1]` 都会抛 `ConfigError`。以下开关**会明确失败**而不是静默忽略：
+`corporate_actions="approx"`、`allow_short=true`、`factor_source="stored"`。
+`benchmark` 目前只记录到 `spec/meta`，尚未产出 alpha/beta（`meta["benchmark_used"]=false`）。
+
+### 6.9 当前限制与注意事项
+
+| 限制 | 现状 |
+|---|---|
+| universe | 只支持 `explicit`；`all_a/index/file` 会明确报错 |
+| 横截面风控 | `on_bar` 只对**持仓**调用；开仓统一在 `after_exec`；不使用 PyBroker 止损 |
+| 再平衡 | 支持 `daily/weekly/monthly/every_n_bars`；`DRIFT` 未实现 |
+| 候选集规模 | 候选集 = 所有调仓日入选标的并集，随机排名下接近全 universe（500×5y 实测 497/500，约 41s；2000×5y 1492/2000，约 121s）。全 A 需先做流动性预筛或分块执行 |
+| ST / 新股 | 涨跌幅规则未接历史 ST/上市日，当前按非 ST、非新股处理 |
+| 公司行为 | 只支持 `off`；没有分红/送转调整，长期回测收益会偏保守 |
+| benchmark | 只记录代码，不产出 alpha/beta/tracking error |
+| 优化 / 研究 | `optimize/walkforward/research` 尚未接入 CLI |
+| 输出 | 只有 `console/csv`；`html/questdb` 未实现 |
+| 滑点 | 无滑点模型；成交价取 open/close 并四舍五入到分 |
+| 测试 | 离线 263 passed / 10 skipped（`pytest`）；联网/DB 用例需 `RUN_LIVE_TESTS=1` |
+
+更细的策略 API、输出字段与设计取舍见 [`backtest/README.md`](backtest/README.md)
+和 [`backtest/ARCHITECTURE.md`](backtest/ARCHITECTURE.md)。
 
 ---
 
@@ -583,10 +602,20 @@ FinBridge/
 │   │   ├── repository.py           # FinancialRepository
 │   │   ├── service.py              # FinancialDataService
 │   │   └── sources/                # tushare / akshare
+│   ├── moneyflow/                  # 个股日频分档（资金流）
+│   │   ├── service.py              # 同步/质量/查询
+│   │   ├── repository.py           # MoneyflowRepository
+│   │   └── sources/                # tushare.moneyflow
+│   ├── concept/                    # 概念板块
+│   │   ├── service.py              # 列表/日线/成分/分类
+│   │   ├── repository.py           # ConceptRepository（PIT 快照）
+│   │   └── sources/                # ths / em / ths_scrape / tushare.concept
 │   └── api/
 │       ├── runtime.py              # 进程内单例装配
 │       ├── market_tools.py         # 行情 MCP 工具
 │       ├── financial_tools.py      # 财务 MCP 工具
+│       ├── moneyflow_tools.py      # 分档 MCP 工具
+│       ├── concept_tools.py        # 概念板块 MCP 工具
 │       └── utils.py                # 统一响应信封
 ├── screener/
 │   ├── bootstrap.py                # composition root
@@ -596,11 +625,32 @@ FinBridge/
 │   ├── infrastructure/             # QuestDB 仓储/补齐/SQL/队列
 │   └── interface/                  # MCP tools / CLI / worker_main
 ├── scheduled_tasks/                # 心跳式批量同步
-├── position/                       # 组合/持仓/交易 + ATR/GRID
-├── indicator/                      # 纯 pandas/numpy 指标（ATR 等）
-├── factors/                        # 因子库：声明/算子/面板
-├── strategies/                     # 策略基类 + models/ 一文件一策略
-├── backtest/                       # PyBroker 单股/横截面引擎、账本、benchmark、CLI、研究
+│   ├── service.py / api.py / state.py
+├── position/                       # 组合/持仓/交易
+│   ├── manager.py / schema.py / llm_tool.py
+│   └── modes/                      # ATR / GRID
+├── indicator/                      # 纯 pandas/numpy 指标（ATR、Engine）
+├── factors/                        # 因子库
+│   ├── library.py                  # F 命名空间 / FactorDef / 注册表
+│   ├── ops.py                      # 时序算子（复用 screener/indicator）
+│   ├── cross_section.py            # rank / zscore / winsorize
+│   ├── panel.py                    # 长表 -> date×symbol 面板
+│   └── stored.py                   # screener_daily 列元数据（占位）
+├── strategies/                     # 策略 API
+│   ├── base.py / context.py / universe.py / weighting.py
+│   └── models/                     # 一文件一策略
+├── backtest/                       # 离线回测 / 研究
+│   ├── domain/                     # RunSpec / BacktestResult / 报告
+│   ├── application/                # runner / loader / cross_section /
+│   │                               # rebalance / run_id / ports / registry
+│   ├── infrastructure/
+│   │   ├── data/                   # questdb / memory / snapshot
+│   │   ├── engine/                 # pybroker_engine（唯一 import pybroker）
+│   │   ├── execution/              # a_share / ledger
+│   │   └── output/                 # console / csv
+│   ├── config.py / bootstrap.py / cli.py / __main__.py
+│   ├── README.md                   # 用法与当前状态
+│   └── ARCHITECTURE.md             # 目标设计与假设验证
 ├── scripts/
 │   ├── init_database.py            # 建表
 │   ├── migrate_database.py         # 存量库迁移
@@ -629,7 +679,14 @@ FinBridge/
 | `ohlcv_1d` / `1w` / `1mo` | `ts` | MONTH/YEAR | `(ts, code, market)` | 日/周/月 OHLCV、换手率、`adj_factor` |
 | `stock_basic_info` | `ts` | MONTH | `(code, ts)` | 基础信息（`PROFILE_COLUMNS`） |
 | `fund_basic_info` | `ts` | MONTH | `(code, ts)` | ETF/LOF 资料 |
-| `concept_boards` / `_ohlc` / `_constituents` | `ts` | YEAR/MONTH | 见 DDL | 概念板块 |
+| `moneyflow_daily` | `ts` | MONTH | `(ts, code, market, source)` | 个股日频分档（元/股，多源并存） |
+| `moneyflow_source` | `updated_at` | YEAR | `(updated_at, source)` | 分档源口径/覆盖/优先级 |
+| `concept_board_dim` | `ts` | YEAR | `(ts, board_code, source)` | 概念板块维度（日快照） |
+| `concept_board_daily` | `ts` | MONTH | `(ts, board_code, source)` | 板块日线（OHLCV+成交额） |
+| `concept_member_snapshot` | `ts` | YEAR | `(ts, board_code, stock_code, source)` | 成分快照（PIT） |
+| `concept_classification` | `ts` | YEAR | `(ts, concept_code, source)` | 概念分类树 |
+| `concept_board_alias` | `updated_at` | YEAR | `(updated_at, board_code, source, source_code)` | 跨源板块代码映射 |
+| `concept_boards` / `_ohlc` / `_constituents` | `ts` | YEAR/MONTH | 见 DDL | **legacy**，迁移后停用 |
 | `trading_days` | `ts` | YEAR | `(ts)` | 交易日历 |
 
 ### 8.3 财务表
@@ -701,7 +758,6 @@ python scripts/migrate_database.py --apply --truncate-ohlc   # 清空旧前复�
 | `get_realtime_quote` | 腾讯单只实时行情（不复权） |
 | `get_trading_days` | 交易日列表 |
 | `get_today_date` | 今天日期（北京时间） |
-| `get_concept_boards` | 概念板块列表 |
 
 ### 9.3 财务
 
@@ -742,26 +798,65 @@ python scripts/migrate_database.py --apply --truncate-ohlc   # 清空旧前复�
 
 | 工具 | 用途 |
 |---|---|
-| `scheduled_sync_a_shares` | 分批拉全 A 股日线与财务（`dataset=daily\|financial\|all`） |
+| `scheduled_sync_a_shares` | 分批拉日线/财务/分档/概念（`dataset=daily\|financial\|moneyflow\|concept_*\|all`） |
 | `scheduled_task_status` | 查看游标、进度、待补日期 |
+
+### 9.7 分档与概念
+
+| 工具 | 用途 |
+|---|---|
+| `get_moneyflow` | 个股日频分档（四档 × 主动买/卖），返回 `data_source` |
+| `get_moneyflow_rank` | 按 `main_amount` / `super_large_net` 等做横截面排名 |
+| `get_moneyflow_sources` | 分档源口径、覆盖区间、优先级 |
+| `get_concept_boards` | 概念板块列表（支持 `as_of`） |
+| `get_concept_members` | 板块成分股（PIT 快照，支持 `as_of`） |
+| `get_concept_ohlc` | 板块日线（OHLC + 成交量 + 成交额） |
+| `get_concept_classification` | Tushare 概念分类树（可按键词过滤） |
 
 ---
 
 ## 10. 定时任务
 
-`dataset` 可选 `daily`、`financial`、`all`。每次调用只处理一个有界批次，返回 `next_cursor` 和 `done`；Agent 心跳反复调用直到 `done=true`。
+`dataset` 可选 `daily`、`benchmark`、`financial`、`screener`、`moneyflow`、`concept_meta`、`concept_daily`、`concept_member`、`concept_class`、`all`。每次调用只处理一个有界批次，返回 `next_cursor` 和 `done`；Agent 心跳反复调用直到 `done=true`。
 
 ```text
 scheduled_sync_a_shares(dataset="daily", start_date="2024-01-01", max_trade_days=20)
 scheduled_sync_a_shares(dataset="daily", include_funds=True)
 scheduled_sync_a_shares(dataset="financial", start_date="2020-01-01", max_stocks=15)
+scheduled_sync_a_shares(dataset="moneyflow", start_date="2020-01-01", max_trade_days=20)
+scheduled_sync_a_shares(dataset="concept_daily", max_boards=50)
+scheduled_sync_a_shares(dataset="concept_member", max_boards=20)
 ```
 
 - **日线**：按交易日调 Tushare `daily` + `daily_basic`（换手率）+ `adj_factor`（复权因子），可选 `fund_daily` 拉 ETF/LOF；
 - **财务**：按股票池分批，逐只增量拉三大报表、重算指标（可选估值）；
+- **分档**：按交易日调 Tushare `moneyflow`（一次全市场），金额万元→元、量手→股，`source=tushare.moneyflow`；
+- **板块列表/日线**：同花顺（AkShare）一次拿 375 个板块，日线按板块增量；
+- **成分**：东方财富优先，失败回退同花顺网页抓取；每次全量写同一快照日，单板块不足上一快照 70% 且为 partial 时跳过；
+- **概念分类**：Tushare `concept`，注意该接口限 1 次/小时；
 - **空数据日**：当天未收盘导致的“无数据”不算错误，记入 `pending` 下次补；
   历史交易日首次无数据会暂停在该日重试，连续 `empty_day_retry_limit` 次才跳过并记 error；
 - 游标保存在 `scheduled_task_state`，Agent 重启后可继续。
+
+### 10.1 历史回补脚本
+
+```bash
+# 分档：自动跳过库内已有交易日，可反复执行
+python scripts/backfill_moneyflow.py --start 2022-10-10 --end 2026-10-27
+
+# 概念维度：当前 375 个板块投影回区间端点（source=akshare.ths_index.reconstructed）
+python scripts/backfill_concept.py --dataset dim
+
+# 板块日线：逐板块拉取，单板块失败不中断
+python scripts/backfill_concept.py --dataset daily --start 2022-10-10 --end 2026-10-27
+
+# 只修复指定板块（例如年度缺口）
+python scripts/backfill_concept.py --dataset daily --only-codes 300890,301016 --sleep 0.5
+```
+
+> 概念板块没有历史列表/成分源，`dim` 只能做“当前列表投影”，存在幸存者偏差；
+> 2022-10-10 的 dim 含 375 个板块，但当天实际有日线的是 284 个（其余为后续成立），
+> 回测应以 `concept_board_daily` 的 `min(ts)` 过滤。日线通过同花顺年度 K 线文件回补，单板块约 1 秒。
 
 Screener 不依赖定时任务：批量 CLI、读路径和 inline worker 都能补齐。
 

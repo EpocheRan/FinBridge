@@ -56,6 +56,25 @@
             "FY": 120
         }
     },
+    "moneyflow": {
+        "source_priority": [
+            "tushare.moneyflow"
+        ],
+        "quality_min_rows": 1000
+    },
+    "concept": {
+        "daily_source_priority": [
+            "akshare.ths_index"
+        ],
+        "member_source_priority": [
+            "akshare.em_board",
+            "ths.scrape"
+        ],
+        "member_max_boards_per_run": 20,
+        "member_drop_guard": 0.7,
+        "scrape_max_pages": 60,
+        "scrape_sleep_seconds": 0.35
+    },
     "screener": {
         "enabled": true,
         "benchmark": {
@@ -131,6 +150,7 @@
     },
     "scheduled_tasks": {
         "daily_start_date": "2020-01-01",
+        "moneyflow_start_date": "2020-01-01",
         "daily_batch_days": 20,
         "financial_start_year": 2020,
         "financial_batch_stocks": 15,

@@ -65,6 +65,25 @@ def get_financial_service():
     return _get("financial_service", _factory)
 
 
+def get_moneyflow_service():
+    def _factory():
+        from data_interface.moneyflow.service import MoneyflowService
+
+        # 与行情/财务共用同一份 DB 连接与 Tushare 限流器
+        return MoneyflowService()
+
+    return _get("moneyflow_service", _factory)
+
+
+def get_concept_service():
+    def _factory():
+        from data_interface.concept.service import ConceptService
+
+        return ConceptService()
+
+    return _get("concept_service", _factory)
+
+
 def get_position_interface():
     def _factory():
         from position import PositionAgentInterface

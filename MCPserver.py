@@ -20,8 +20,10 @@ from typing import Any
 
 from fastmcp import FastMCP
 
+from data_interface.api.concept_tools import register_concept_tools
 from data_interface.api.financial_tools import register_financial_tools
 from data_interface.api.market_tools import register_market_tools
+from data_interface.api.moneyflow_tools import register_moneyflow_tools
 from data_interface.api.runtime import get_position_interface
 from data_interface.common.config import get_config, project_path
 from scheduled_tasks.api import register_scheduled_tools
@@ -70,6 +72,8 @@ mcp = FastMCP(name=SERVER_CONFIG.get("name", "QuantDataServer"))
 
 register_market_tools(mcp)
 register_financial_tools(mcp)
+register_moneyflow_tools(mcp)
+register_concept_tools(mcp)
 register_scheduled_tools(mcp)
 register_screener_tools(mcp)
 

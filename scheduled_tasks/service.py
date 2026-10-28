@@ -46,6 +46,14 @@ from data_interface.common.security_code import (
 )
 from data_interface.common.timeutil import market_closed_today, now_cn, today_str
 from data_interface.common.trading_calendar import TradingCalendar
+from data_interface.concept.repository import ConceptRepository
+from data_interface.concept.service import ConceptService
+from data_interface.concept.sources.em_source import EmConceptSource
+from data_interface.concept.sources.ths_scrape_source import ThsScrapeConceptSource
+from data_interface.concept.sources.ths_source import ThsConceptSource
+from data_interface.concept.sources.tushare_classification import (
+    TushareConceptClassificationSource,
+)
 from data_interface.financial.service import FinancialDataService
 from data_interface.financial.sources.tushare_source import (
     TushareSource,
@@ -53,6 +61,9 @@ from data_interface.financial.sources.tushare_source import (
 )
 from data_interface.market.adj_factors import AdjFactorProvider
 from data_interface.market.fetcher import MarketDataFetcher
+from data_interface.moneyflow.repository import MoneyflowRepository
+from data_interface.moneyflow.service import MoneyflowService
+from data_interface.moneyflow.sources.tushare_source import TushareMoneyflowSource
 
 from .state import TaskStateRepository
 
@@ -73,8 +84,24 @@ FINANCIAL_STATE = "financial"
 FINANCIAL_CODES_STATE = "financial_codes"
 BENCHMARK_STATE = "benchmark"
 SCREENER_STATE = "screener"
+MONEYFLOW_STATE = "moneyflow"
+CONCEPT_META_STATE = "concept_meta"
+CONCEPT_DAILY_STATE = "concept_daily"
+CONCEPT_MEMBER_STATE = "concept_member"
+CONCEPT_CLASS_STATE = "concept_class"
 
-DATASETS = ("daily", "benchmark", "financial", "screener", "all")
+DATASETS = (
+    "daily",
+    "benchmark",
+    "financial",
+    "screener",
+    "moneyflow",
+    "concept_meta",
+    "concept_daily",
+    "concept_member",
+    "concept_class",
+    "all",
+)
 
 
 def normalize_selected_codes(
@@ -154,6 +181,8 @@ class AShareSyncService:
         )
         self._screener_app_factory = screener_app_factory
         self._screener_app_instance: Any | None = None
+        self._moneyflow_service: MoneyflowService | None = None
+        self._concept_service: ConceptService | None = None
 
     def _get_screener_app(self) -> Any:
         """惰性构建 screener 应用，避免纯日线/财务任务加载整个 screener。"""
@@ -165,6 +194,31 @@ class AShareSyncService:
 
                 self._screener_app_instance = build_screener_application(self.config)
         return self._screener_app_instance
+
+    def _get_moneyflow_service(self) -> MoneyflowService:
+        if self._moneyflow_service is None:
+            self._moneyflow_service = MoneyflowService(
+                config=self.config,
+                repository=MoneyflowRepository(db=self.db, config=self.config),
+                sources=[
+                    TushareMoneyflowSource(self.config, tushare=self.tushare)
+                ],
+            )
+        return self._moneyflow_service
+
+    def _get_concept_service(self) -> ConceptService:
+        if self._concept_service is None:
+            self._concept_service = ConceptService(
+                config=self.config,
+                repository=ConceptRepository(db=self.db, config=self.config),
+                board_sources=[ThsConceptSource(), EmConceptSource()],
+                daily_source=ThsConceptSource(),
+                member_sources=[EmConceptSource(), ThsScrapeConceptSource()],
+                classification_source=TushareConceptClassificationSource(
+                    self.config, tushare=self.tushare
+                ),
+            )
+        return self._concept_service
 
     # ------------------------------------------------------------------ 日线
     def sync_daily(
@@ -895,6 +949,163 @@ class AShareSyncService:
             "message": state.message,
         }
 
+    # ------------------------------------------------------------------ 分档
+    def sync_moneyflow(
+        self,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        max_trade_days: int | None = None,
+        cursor: str | None = None,
+        reset: bool = False,
+    ) -> dict[str, Any]:
+        """按交易日回补/增量分档数据。"""
+        start = str(
+            start_date
+            or self.settings.get(
+                "moneyflow_start_date",
+                self.settings.get("daily_start_date", "2020-01-01"),
+            )
+        )[:10]
+        end = str(end_date or today_str())[:10]
+        previous = None if reset else self.state.get(TASK_NAME, MONEYFLOW_STATE)
+        old_payload: dict[str, Any] = {}
+        if previous and previous.get("payload"):
+            try:
+                old_payload = json.loads(previous["payload"])
+            except Exception:
+                old_payload = {}
+        if old_payload.get("start_date") and old_payload["start_date"] != start:
+            previous = None
+            old_payload = {}
+        current_cursor = cursor or (previous or {}).get("cursor")
+        retry_limit = max(1, int(self.settings.get("empty_day_retry_limit", 3)))
+        attempts: dict[str, int] = dict(old_payload.get("attempts") or {})
+        pending_days = [
+            day
+            for day in (old_payload.get("pending") or [])
+            if attempts.get(day, 0) < retry_limit
+        ]
+
+        result = self._get_moneyflow_service().sync(
+            start,
+            end,
+            max_trade_days=max_trade_days or 20,
+            cursor=current_cursor,
+            pending=pending_days,
+        )
+        new_pending = list(result.get("pending") or [])
+        for day in new_pending:
+            attempts[day] = attempts.get(day, 0) + 1
+        for day in list(attempts):
+            if day not in new_pending:
+                attempts.pop(day)
+        self.state.save(
+            TASK_NAME,
+            MONEYFLOW_STATE,
+            cursor=result.get("next_cursor"),
+            status="DONE" if result.get("done") else "RUNNING",
+            total=int(result.get("total_days") or 0),
+            processed=len(result.get("processed_days") or []),
+            message=f"rows={result.get('rows_written', 0)} pending={len(new_pending)}",
+            payload={
+                "start_date": start,
+                "end_date": end,
+                "pending": new_pending,
+                "attempts": attempts,
+            },
+        )
+        result.update({"start_date": start, "end_date": end})
+        return result
+
+    # ------------------------------------------------------------------ 概念
+    def sync_concept_meta(self) -> dict[str, Any]:
+        result = self._get_concept_service().sync_boards()
+        self.state.save(
+            TASK_NAME,
+            CONCEPT_META_STATE,
+            cursor=None,
+            status="DONE" if result.get("done") else "ERROR",
+            total=int(result.get("rows_written") or 0),
+            processed=int(result.get("rows_written") or 0),
+            message=result.get("source"),
+            payload={"as_of": result.get("as_of")},
+        )
+        return result
+
+    def sync_concept_daily(
+        self,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        max_boards: int | None = None,
+        cursor: str | None = None,
+        reset: bool = False,
+    ) -> dict[str, Any]:
+        start = str(start_date or (now_cn().date() - timedelta(days=30)))[:10]
+        end = str(end_date or today_str())[:10]
+        previous = None if reset else self.state.get(TASK_NAME, CONCEPT_DAILY_STATE)
+        current_cursor = cursor or (previous or {}).get("cursor")
+        result = self._get_concept_service().sync_daily(
+            start,
+            end,
+            max_boards=max_boards or 50,
+            cursor=current_cursor,
+        )
+        self.state.save(
+            TASK_NAME,
+            CONCEPT_DAILY_STATE,
+            cursor=result.get("next_cursor"),
+            status="DONE" if result.get("done") else "RUNNING",
+            total=int(result.get("rows_written") or 0),
+            processed=len(result.get("processed") or []),
+            message=f"rows={result.get('rows_written', 0)}",
+            payload={"start_date": start, "end_date": end},
+        )
+        result.update({"start_date": start, "end_date": end})
+        return result
+
+    def sync_concept_member(
+        self,
+        *,
+        max_boards: int | None = None,
+        cursor: str | None = None,
+        reset: bool = False,
+        as_of: str | None = None,
+    ) -> dict[str, Any]:
+        previous = None if reset else self.state.get(TASK_NAME, CONCEPT_MEMBER_STATE)
+        current_cursor = cursor or (previous or {}).get("cursor")
+        result = self._get_concept_service().sync_members(
+            max_boards=max_boards,
+            cursor=current_cursor,
+            as_of=as_of,
+        )
+        self.state.save(
+            TASK_NAME,
+            CONCEPT_MEMBER_STATE,
+            cursor=result.get("next_cursor"),
+            status="DONE" if result.get("done") else "RUNNING",
+            total=int(result.get("rows_written") or 0),
+            processed=len(result.get("sources") or {}),
+            message=f"rows={result.get('rows_written', 0)}",
+            payload={"as_of": result.get("as_of")},
+        )
+        return result
+
+    def sync_concept_classification(self) -> dict[str, Any]:
+        result = self._get_concept_service().sync_classification()
+        self.state.save(
+            TASK_NAME,
+            CONCEPT_CLASS_STATE,
+            cursor=None,
+            status="DONE" if result.get("done") else "ERROR",
+            total=int(result.get("rows_written") or 0),
+            processed=int(result.get("rows_written") or 0),
+            message=None if result.get("done") else str(result.get("errors")),
+            payload={"as_of": result.get("as_of")},
+        )
+        return result
+
     # ------------------------------------------------------------------ 编排
     def run(
         self,
@@ -905,6 +1116,7 @@ class AShareSyncService:
         codes: Sequence[str] | str | None = None,
         max_trade_days: int | None = None,
         max_stocks: int | None = None,
+        max_boards: int | None = None,
         cursor: str | None = None,
         reset: bool = False,
         include_valuation: bool | None = None,
@@ -915,9 +1127,9 @@ class AShareSyncService:
     ) -> dict[str, Any]:
         """按阶段编排一次股票数据更新。
 
-        - ``dataset="all"``：日线 → 基准 → 财务 → Screener；
+        - ``dataset="all"``：日线 → 基准 → 财务 → Screener → 分档 → 板块列表；
         - ``codes`` 为空：全市场；指定后只更新这些代码；
-        - ``start_date`` / ``end_date``：日线/基准/Screener 用交易日，
+        - ``start_date`` / ``end_date``：日线/基准/Screener/分档用交易日，
           财务用报告年份 + 估值日期范围。
         """
         dataset = dataset.lower()
@@ -992,28 +1204,65 @@ class AShareSyncService:
                     "done": True,
                     "status": "SKIPPED",
                 }
+        if dataset in ("moneyflow", "all"):
+            result["moneyflow"] = self.sync_moneyflow(
+                start_date=start_date,
+                end_date=end_date,
+                max_trade_days=max_trade_days,
+                cursor=cursor if dataset == "moneyflow" else None,
+                reset=reset,
+            )
+        if dataset in ("concept_meta", "all"):
+            result["concept_meta"] = self.sync_concept_meta()
+        if dataset == "concept_daily":
+            result["concept_daily"] = self.sync_concept_daily(
+                start_date=start_date,
+                end_date=end_date,
+                max_boards=max_boards,
+                cursor=cursor,
+                reset=reset,
+            )
+        if dataset == "concept_member":
+            result["concept_member"] = self.sync_concept_member(
+                max_boards=max_boards,
+                cursor=cursor,
+                reset=reset,
+            )
+        if dataset == "concept_class":
+            result["concept_class"] = self.sync_concept_classification()
 
         phase_keys = [
             key
-            for key in ("daily", "benchmark", "financial", "screener")
+            for key in (
+                "daily",
+                "benchmark",
+                "financial",
+                "screener",
+                "moneyflow",
+                "concept_meta",
+                "concept_daily",
+                "concept_member",
+                "concept_class",
+            )
             if key in result
         ]
         result["done"] = all(result[key].get("done", True) for key in phase_keys)
         result["next_cursors"] = {
             key: result[key].get("next_cursor")
-            for key in ("daily", "financial")
+            for key in ("daily", "financial", "moneyflow", "concept_daily", "concept_member")
             if key in result
         }
         if dataset == "daily":
             result["next_cursor"] = result["daily"].get("next_cursor")
         elif dataset == "financial":
             result["next_cursor"] = result["financial"].get("next_cursor")
+        elif dataset in ("moneyflow", "concept_daily", "concept_member"):
+            result["next_cursor"] = result[dataset].get("next_cursor")
         elif dataset == "all":
-            result["next_cursor"] = (
-                result["daily"].get("next_cursor")
-                if not result["daily"].get("done")
-                else result["financial"].get("next_cursor")
-            )
+            if not result["daily"].get("done"):
+                result["next_cursor"] = result["daily"].get("next_cursor")
+            else:
+                result["next_cursor"] = result["financial"].get("next_cursor")
         else:
             result["next_cursor"] = None
         return result
@@ -1027,4 +1276,9 @@ class AShareSyncService:
             "financial_codes": latest.get(FINANCIAL_CODES_STATE),
             "benchmark": latest.get(BENCHMARK_STATE),
             "screener": latest.get(SCREENER_STATE),
+            "moneyflow": latest.get(MONEYFLOW_STATE),
+            "concept_meta": latest.get(CONCEPT_META_STATE),
+            "concept_daily": latest.get(CONCEPT_DAILY_STATE),
+            "concept_member": latest.get(CONCEPT_MEMBER_STATE),
+            "concept_class": latest.get(CONCEPT_CLASS_STATE),
         }
