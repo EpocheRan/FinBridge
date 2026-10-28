@@ -1,7 +1,7 @@
 """因子算子包：纯数学 + 序列计算。
 
 依赖方向：``factors.ops`` 只依赖 ``factors.library`` / ``factors.technical``，
-不得 import screener / indicator / data_interface / backtest。
+不得 import screener / data_interface / backtest。
 """
 
 from __future__ import annotations

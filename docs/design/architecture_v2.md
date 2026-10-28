@@ -30,7 +30,6 @@
 | `backtest/` | 离线回测/研究 | `factors` + `data_interface` + `factor_engine`(读) |
 | `data_interface/` | 底层数据访问（raw 表唯一写者） | common/config/questdb + 第三方源 |
 | `position/` | 组合/持仓/交易 | `data_interface` + `factors`(technical) |
-| `indicator/` | 兼容 shim | `factors` |
 
 > `scheduled_tasks/` 由 `acquisition/` 取代；`screener/` 的计算职责迁到 `factor_engine/`。
 
@@ -43,11 +42,11 @@
                     │   factors    │  （纯定义 + 数学）
                     └──────┬───────┘
          ┌─────────────────┼──────────────────┐
-         ▼                 ▼                  ▼
-  ┌──────────────┐  ┌──────────────┐   ┌──────────────┐
-  │ factor_engine │  │   backtest   │   │  indicator   │
-  │ (计算+存储)   │  │  (回测/研究) │   │  (shim)      │
-  └───┬──────────┘  └──┬───────────┘   └──────────────┘
+         ▼                 ▼
+  ┌──────────────┐  ┌──────────────┐
+  │ factor_engine │  │   backtest   │
+  │ (计算+存储)   │  │  (回测/研究) │
+  └───┬──────────┘  └──┬───────────┘
       │                │
   ┌───▼────────────────▼────────────┐
   │          data_interface         │  raw 表唯一写者；DB 访问者之一
@@ -65,7 +64,7 @@
 
 **硬性规则**：
 
-1. `factors` 不得 import screener/indicator/backtest/data_interface/factor_engine/acquisition。
+1. `factors` 不得 import screener/backtest/data_interface/factor_engine/acquisition。
 2. **DB 访问只有两方**：`data_interface`（raw 表）与 `factor_engine`（factor 表 + 缓存）。screener/acquisition/backtest 一律 0 直连 QuestDB。
 3. `screener` 不做任何因子计算；只通过 port 调 `factor_engine.ensure()`，然后读值。
 4. `acquisition` 只编排拉数；算因子委托 `factor_engine`；且 `factor_engine` 永不 import `acquisition`。
@@ -288,7 +287,7 @@ M6 重建 latest / panel 缓存
 | `acquisition/` | 新建；吸收 scheduled_tasks + backfill_*.py；进度/Scope/事件 |
 | `data_interface/` | raw 表唯一写者；新增 common/events.py + common/progress.py |
 | `backtest/` | `factor_source=stored` 走 factor_engine.read |
-| `indicator/` | shim |
+| `indicator/` | 已删除，并入 `factors.technical` |
 | `MCPserver.py` | 注册 acquisition / factor_engine 工具 |
 | `scripts/` | 新增 migrate_factors.py；backfill_*.py 迁入 acquisition 后删除 |
 

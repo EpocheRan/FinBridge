@@ -1,8 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from indicator import ATR, IndicatorEngine
-from indicator.ATR import atr_wilder
+from factors import ATR, IndicatorEngine, atr_wilder
 from screener.domain.factors import atr_wilder as screener_atr_wilder
 
 
@@ -21,7 +20,7 @@ def _frame(rows: int = 60) -> pd.DataFrame:
     )
 
 
-def test_indicator_engine_matches_wilder_atr():
+def test_factor_engine_matches_wilder_atr():
     frame = _frame()
     result = IndicatorEngine().calculate(frame, ATR, N=14, method="WILDER")
 

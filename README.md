@@ -70,7 +70,7 @@ domain           screener.domain / backtest.domain / factors.library /
 infrastructure   data_interface / screener.infrastructure /
                  backtest.infrastructure（QuestDB、第三方源、PyBroker、输出）
       │
-shared           data_interface.common / indicator / scripts.schemas
+shared           data_interface.common / scripts.schemas
 ```
 
 依赖规则：
@@ -94,7 +94,7 @@ shared           data_interface.common / indicator / scripts.schemas
 | 整合同步 | `acquisition/` | `Scope`（全市场/单代码/板块 × 日期段）、`Orchestrator`、`datasets/`（daily/financial/benchmark/screener/moneyflow/concept）、`build_orchestrator`、进度条、CLI/MCP | `python -m acquisition run/update/status` |
 | 策略 | `strategies/` | `base`（单股/横截面基类）、`context`（只读上下文 + 订单意图）、`universe`、`weighting`、`models/`（一文件一策略） | `python -m backtest list/validate/run` |
 | 回测 | `backtest/` | `domain`（RunSpec/BacktestResult/报告）、`application`（runner/loader/cross_section/rebalance/run_id/ports/registry）、`infrastructure`（data/engine/execution/output）、`config`/`bootstrap`/`cli`；PyBroker 为 optional extra | `python -m backtest` |
-| 技术指标 | `factors/technical/` | 纯 pandas/numpy 的 ATR canonical 实现；`indicator/` 仅保留兼容 shim | `from factors import ATR` |
+| 技术指标 | `factors/technical/` | 纯 pandas/numpy 的 ATR canonical 实现 | `from factors import ATR` |
 | 建表/迁移 | `scripts/` | `init_database.py`、`migrate_database.py`、`migrate_factors.py`、`schemas/`（market/financial/moneyflow/concept/factor/position/screener/task） | 手工执行 |
 | 测试 | `tests/` | 默认离线、不依赖 DB；联网/DB 用例用 `@require_live` + `RUN_LIVE_TESTS=1` | `pytest` |
 | 文档 | `docs/` | 架构设计、因子库、回测/筛股说明、变更备注 | 见 `docs/` |
@@ -360,7 +360,7 @@ uv sync --extra backtest
 ```text
 strategies/（纯 Python）              factors/（纯 pandas）
   base / context / universe             library / ops / cross_section / panel
-  weighting / models/*.py               （复用 screener/domain/factors 与 indicator）
+  weighting / models/*.py               （复用 factors.ops 与 screener 字段）
         │                                      │
         └──────────────────┬───────────────────┘
                            ▼
@@ -653,7 +653,6 @@ FinBridge/
 ├── position/                       # 组合/持仓/交易
 │   ├── manager.py / schema.py / llm_tool.py
 │   └── modes/                      # ATR / GRID
-├── indicator/                      # 兼容 shim（ATR/Engine 已并入 factors）
 ├── factors/                        # 因子库
 │   ├── library.py                  # F 命名空间 / FactorDef / 注册表
 │   ├── ops/                        # 时序算子（ts.py + technical.py）

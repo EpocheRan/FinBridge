@@ -130,7 +130,7 @@ backtest/                         # 只做「取数 -> 因子装配 -> 撮合 ->
 ├── cli.py
 └── __main__.py                   # python -m backtest run/list/validate/research/optimize
 
-indicator/                        # 纯 pandas/numpy 指标（ATR 等），被 factors/ops.py 复用
+factors/technical/                # 纯 pandas/numpy 指标（ATR 等），factors/ops 复用
 screener/                         # 已有因子计算与 screener_daily 落库
 data_interface/                   # 行情/财务/QuestDB/交易日历
 ```
@@ -511,9 +511,8 @@ from screener.domain.factors import pct_change, atr_wilder, realized_volatility,
 from indicator.ATR import atr
 ```
 
-> 当前 `indicator/ATR.py` 与 `screener/domain/factors.py` 各有一份 ATR 实现。
-> 迁移第 0 步先合并为一份 canonical 实现（建议放 `indicator/ATR.py`，
-> `screener/domain/factors.py` re-export），避免两套公式漂移。
+> 已合并为一份 canonical 实现：`factors/technical/atr.py`（`indicator/` 已删除）。
+> `screener/domain/factors.py` 只做 re-export，避免两套公式漂移。
 
 ### 5.3 横截面算子
 
@@ -1129,7 +1128,7 @@ uv sync --extra backtest
 0. **准备（半天，不写业务代码）**：
    - `uv sync --extra backtest`，确认 `pybroker.__version__ == 2.0.2`；
    - 写 `tests/test_pybroker_contract.py` 并跑绿——**先钉死 §9.4 的假设**；
-   - 合并 `indicator/ATR.py` 与 `screener/domain/factors.atr_wilder` 为一份 canonical 实现；
+   - 已完成：`indicator/ATR.py` 与 `screener/domain/factors.atr_wilder` 合并为 `factors/technical/atr.py`；
    - 500 只 × 5 年内存/耗时 spike，决定是否要分块。
 1. **MVP 纵切（§0.5）**：`domain` → `ports` → `questdb.py` → `factors`（现算）→
    `strategies/{base,template}` → `pybroker_engine`（单股 + `OPEN` + `LONG_ONLY`）→ `console`。

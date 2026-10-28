@@ -1,9 +1,8 @@
 """模块依赖方向检查（M0 起生效）。
 
 规则（architecture_v2.md）：
-- factors 不得 import screener / indicator / backtest / data_interface /
+- factors 不得 import screener / backtest / data_interface /
   factor_engine / acquisition / pybroker / psycopg2。
-- 例外：``factors/ops.py`` 目前仍引用 indicator/screener，M1 迁移后删除。
 """
 
 from __future__ import annotations
