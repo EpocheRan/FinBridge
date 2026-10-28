@@ -80,6 +80,14 @@ def factors(scope: Scope) -> dict:
     )
 
 
+def screener(scope: Scope) -> dict:
+    return _service().sync_screener(
+        start_date=scope.start,
+        end_date=scope.end,
+        codes=list(scope.codes) if scope.codes else None,
+    )
+
+
 def trading_calendar(scope: Scope) -> dict:
     # 日历由 TradingCalendar 读路径自动补齐；这里显式触发一次
     from data_interface.common.trading_calendar import TradingCalendar
@@ -115,5 +123,6 @@ REAL_SYNCERS = {
     "concept_daily": concept_daily,
     "concept_member": concept_member,
     "concept_class": concept_class,
+    "screener": screener,
     "factors": factors,
 }

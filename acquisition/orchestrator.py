@@ -47,6 +47,7 @@ DATASET_ORDER: tuple[str, ...] = (
     "concept_daily",
     "concept_member",
     "concept_class",
+    "screener",
     "factors",
 )
 

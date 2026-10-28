@@ -6,7 +6,8 @@ from datetime import date
 
 import pytest
 
-from acquisition.orchestrator import Orchestrator, Scope
+from acquisition.orchestrator import DATASET_ORDER, Orchestrator, Scope
+from acquisition.syncers import REAL_SYNCERS
 
 
 class FakeProgress:
@@ -27,6 +28,12 @@ def make_scope(**kwargs):
     payload = dict(start=date(2026, 10, 1), end=date(2026, 10, 27))
     payload.update(kwargs)
     return Scope(**payload)
+
+
+def test_all_order_covers_screener_and_factors():
+    assert "screener" in DATASET_ORDER
+    assert "factors" in DATASET_ORDER
+    assert set(REAL_SYNCERS) == set(DATASET_ORDER)
 
 
 def test_scope_sorts_codes_and_validates_range():
