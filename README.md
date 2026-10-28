@@ -870,14 +870,14 @@ python scripts/migrate_database.py --apply --truncate-ohlc   # 清空旧前复�
 
 ## 10. 整合同步（acquisition）
 
-统一入口是 `python -m acquisition` / MCP `acquisition_run`、`acquisition_status`。`datasets` 可选 `trading_calendar`、`stock_basic`、`ohlcv_1d`、`benchmark`、`financial`、`valuation`、`moneyflow`、`concept_meta`、`concept_daily`、`concept_member`、`concept_class`、`screener`、`factors`。
+统一入口是 `python -m acquisition` / MCP `acquisition_run`、`acquisition_status`。`datasets` 可选 `trading_calendar`、`stock_basic`、`ohlcv_1d`、`benchmark`、`financial`、`valuation`、`moneyflow`、`concept_meta`、`concept_daily`、`concept_member`、`concept_class`、`factors`、`screener`。
 
 ```bash
 # 一键全部：raw + screener 宽表 + 因子长表
 python -m acquisition run
 
 # 只更新部分数据集
-python -m acquisition run --datasets ohlcv_1d,screener,factors
+python -m acquisition run --datasets ohlcv_1d,factors,screener
 
 # 单代码 + 日期段
 python -m acquisition update --code 600519 --start 2024-01-01 --end 2026-10-27
@@ -895,8 +895,8 @@ python -m acquisition status
 - **日线**：按交易日调 Tushare `daily` + `daily_basic`（换手率）+ `adj_factor`，可选 `fund_daily` 拉 ETF/LOF；
 - **财务**：按股票池分批，逐只增量拉三大报表、重算指标（可选估值）；
 - **分档**：按交易日调 Tushare `moneyflow`（一次全市场），金额万元→元、量手→股；
-- **Screener 宽表**：`screener` 数据集调用 `BuildOrchestrator`，写 `factor_daily_wide`；
 - **因子长表**：`factors` 数据集调用 `FactorEngineService`，写 `factor_value_daily` / `factor_value_latest`；
+- **Screener 宽表**：`screener` 数据集调用 `BuildOrchestrator`，写 `factor_daily_wide`（在 factors 之后）；
 - **板块列表/日线**：同花顺（AkShare）一次拿 375 个板块，日线按板块增量；
 - **成分**：东方财富优先，失败回退同花顺网页抓取；每次全量写同一快照日；
 - **概念分类**：Tushare `concept`，注意该接口限 1 次/小时；
@@ -921,7 +921,7 @@ python scripts/backfill_concept.py --dataset daily --only-codes 300890,301016 --
 
 # 统一入口（推荐）：全市场补齐 / 单代码日期段 / 只补某个数据集
 python -m acquisition run
-python -m acquisition run --datasets ohlcv_1d,moneyflow,screener,factors
+python -m acquisition run --datasets ohlcv_1d,moneyflow,factors,screener
 python -m acquisition update --code 600519 --start 2024-01-01 --end 2026-10-27
 python -m acquisition update --code 600519 --start 2026-10-01 --end 2026-10-27 --datasets screener
 ```

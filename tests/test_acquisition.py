@@ -33,6 +33,7 @@ def make_scope(**kwargs):
 def test_all_order_covers_screener_and_factors():
     assert "screener" in DATASET_ORDER
     assert "factors" in DATASET_ORDER
+    assert DATASET_ORDER.index("factors") < DATASET_ORDER.index("screener")
     assert set(REAL_SYNCERS) == set(DATASET_ORDER)
 
 
