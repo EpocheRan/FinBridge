@@ -45,6 +45,7 @@ from data_interface.common.config import load_config, resolve_questdb_host  # no
 from data_interface.common.questdb_client import QuestDBClient  # noqa: E402
 from scripts.schemas import (  # noqa: E402
     create_concept_tables,
+    create_factor_tables,
     create_financial_tables,
     create_market_tables,
     create_moneyflow_tables,
@@ -60,6 +61,7 @@ SUB_SCRIPTS = {
     "financial": create_financial_tables,
     "moneyflow": create_moneyflow_tables,
     "concept": create_concept_tables,
+    "factor": create_factor_tables,
     "position": create_position_tables,
     "screener": create_screener_tables,
     "task": create_task_tables,
@@ -147,10 +149,10 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="FinBridge QuestDB 初始化主脚本")
     parser.add_argument(
         "--only",
-        default="market,financial,moneyflow,concept,position,screener,task",
+        default="market,financial,moneyflow,concept,factor,position,screener,task",
         help=(
             "只运行指定子脚本，逗号分隔："
-            "market,financial,moneyflow,concept,position,screener,task"
+            "market,financial,moneyflow,concept,factor,position,screener,task"
         ),
     )
     parser.add_argument("--host", default=None, help="覆盖 QuestDB host")

@@ -1,0 +1,53 @@
+"""模块依赖方向检查（M0 起生效）。
+
+规则（architecture_v2.md）：
+- factors 不得 import screener / indicator / backtest / data_interface /
+  factor_engine / acquisition / pybroker / psycopg2。
+- 例外：``factors/ops.py`` 目前仍引用 indicator/screener，M1 迁移后删除。
+"""
+
+from __future__ import annotations
+
+import ast
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+FACTORS = ROOT / "factors"
+
+FORBIDDEN_ROOTS = {
+    "screener",
+    "indicator",
+    "backtest",
+    "data_interface",
+    "factor_engine",
+    "acquisition",
+    "pybroker",
+    "psycopg2",
+}
+
+#: M1 迁移前允许的遗留文件
+LEGACY_ALLOWLIST = {"factors/ops.py"}
+
+
+def _import_roots(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    roots: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                roots.add(alias.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            roots.add(node.module.split(".")[0])
+    return roots
+
+
+def test_factors_has_no_forbidden_imports():
+    violations: list[str] = []
+    for path in sorted(FACTORS.rglob("*.py")):
+        rel = path.relative_to(ROOT).as_posix()
+        if rel in LEGACY_ALLOWLIST:
+            continue
+        roots = _import_roots(path) & FORBIDDEN_ROOTS
+        if roots:
+            violations.append(f"{rel}: {sorted(roots)}")
+    assert not violations, "factors 出现反向依赖:\n" + "\n".join(violations)
