@@ -1,4 +1,4 @@
-"""真实数据集适配：包一层现有 data_interface / scheduled_tasks / factor_engine。"""
+"""真实数据集适配：包一层 data_interface / acquisition.datasets / factor_engine。"""
 
 from __future__ import annotations
 

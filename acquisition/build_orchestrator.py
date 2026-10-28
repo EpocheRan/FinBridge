@@ -34,7 +34,7 @@ from screener.domain.build_state import (
 from screener.domain.errors import ScreenerNotBuilt
 from screener.domain.models import BuildRequest, CoverageReport
 
-logger = logging.getLogger("Screener.BuildOrchestrator")
+logger = logging.getLogger("Acquisition.BuildOrchestrator")
 
 
 class BuildOrchestrator:

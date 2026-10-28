@@ -1,6 +1,6 @@
 """PyBroker 2.0.x API 契约测试。
 
-这些用例不是业务测试，而是把 ``backtest/ARCHITECTURE.md`` §9.1/§9.2 依赖的
+这些用例不是业务测试，而是把 ``docs/backtest/ARCHITECTURE.md`` §9.1/§9.2 依赖的
 PyBroker 行为钉死：**失败意味着设计假设错了，应先改设计，而不是改测试**。
 
 未安装 pybroker 时整模块跳过（与 tests/test_backtest_data_source.py 一致）。

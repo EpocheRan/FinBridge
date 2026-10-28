@@ -28,7 +28,7 @@ from data_interface.api.moneyflow_tools import register_moneyflow_tools
 from data_interface.api.runtime import get_position_interface
 from factor_engine.api import register_factor_tools
 from data_interface.common.config import get_config, project_path
-from scheduled_tasks.api import register_scheduled_tools
+from acquisition.legacy_tools import register_scheduled_tools
 from screener.interface.api import register_screener_tools
 
 CONFIG = get_config()
@@ -219,28 +219,6 @@ def pm_get_buying_advice(
     return _pm().get_buying_advice(
         portfolio_id, ticker, initial_risk_per_trade, mode
     )
-
-
-# ---------------------------------------------------------------------------
-# Skill prompts
-# ---------------------------------------------------------------------------
-def _load_skill_content(skill_name: str) -> str:
-    path = project_path("skills", skill_name, "SKILL.md")
-    if path.exists():
-        return path.read_text(encoding="utf-8")
-    return f"Skill {skill_name} not found."
-
-
-@mcp.prompt()
-def manage_portfolio_skill() -> str:
-    """Return the operational guide for managing portfolios."""
-    return _load_skill_content("manage_portfolio")
-
-
-@mcp.prompt()
-def manage_position_skill() -> str:
-    """Return the operational guide for managing positions."""
-    return _load_skill_content("manage_position")
 
 
 def _resolve_transport(name: str) -> str:

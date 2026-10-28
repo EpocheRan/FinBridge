@@ -1,4 +1,4 @@
-"""定时任务的离线回归测试：日线单位换算、空数据日重试、复权因子贴附。"""
+"""acquisition 同步的离线回归测试：日线单位换算、空数据日重试、复权因子贴附。"""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 
 from data_interface.common.timeutil import market_closed_today, today_str
-from scheduled_tasks.service import AShareSyncService
+from acquisition.datasets import AShareSyncService
 
 
 def test_daily_frame_units_and_turnover():

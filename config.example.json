@@ -148,7 +148,7 @@
             "max_limit": 1000
         }
     },
-    "scheduled_tasks": {
+    "acquisition": {
         "daily_start_date": "2020-01-01",
         "moneyflow_start_date": "2020-01-01",
         "daily_batch_days": 20,

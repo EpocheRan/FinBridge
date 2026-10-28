@@ -65,9 +65,9 @@ from data_interface.moneyflow.repository import MoneyflowRepository
 from data_interface.moneyflow.service import MoneyflowService
 from data_interface.moneyflow.sources.tushare_source import TushareMoneyflowSource
 
-from .state import TaskStateRepository
+from ..state import TaskStateRepository
 
-logger = logging.getLogger("ScheduledTasks.AShareSync")
+logger = logging.getLogger("Acquisition.AShareSync")
 
 TASK_NAME = "a_share_sync"
 STOP_ERRORS = (
@@ -165,7 +165,9 @@ class AShareSyncService:
         screener_app_factory: Callable[[], Any] | None = None,
     ):
         self.config = config or get_config()
-        self.settings = self.config.get("scheduled_tasks", {})
+        self.settings = self.config.get("acquisition", {}) or self.config.get(
+            "scheduled_tasks", {}
+        )
         self.db = db or getattr(financial, "db", None) or QuestDBClient()
         self.tushare = tushare or getattr(financial, "tushare", None) or get_shared_tushare_source(self.config)
         self.financial = financial or FinancialDataService(

@@ -1,6 +1,6 @@
 """进程内单例装配。
 
-此前 ``MCPserver``、``market_tools``、``financial_tools``、``scheduled_tasks.api``
+此前 ``MCPserver``、``market_tools``、``financial_tools``、``acquisition.api``
 各自 new 了一份 ``MarketDataLoader`` / ``FinancialDataService`` / ``TradingCalendar``，
 导致同进程里有多套 QuestDB 连接、多套 Tushare 限流器（实际配额可以被打到 2 倍）。
 这里统一收口，所有入口共用同一份实例。
@@ -95,7 +95,7 @@ def get_position_interface():
 
 def get_sync_service():
     def _factory():
-        from scheduled_tasks.service import AShareSyncService
+        from acquisition.datasets import AShareSyncService
 
         # 与行情/财务工具共用同一份 FinancialDataService / TushareSource /
         # MarketDataFetcher / TradingCalendar，避免同进程多套限流器和连接。

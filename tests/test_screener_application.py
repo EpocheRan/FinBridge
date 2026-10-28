@@ -5,7 +5,7 @@ from datetime import date, datetime
 import pandas as pd
 import pytest
 
-from screener.application.build_orchestrator import BuildOrchestrator
+from acquisition.build_orchestrator import BuildOrchestrator
 from screener.application.models import ChunkResult
 from screener.application.screener_service import ScreenerService
 from screener.config import ScreenerSettings

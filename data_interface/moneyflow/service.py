@@ -85,7 +85,7 @@ class MoneyflowService:
     ) -> dict[str, Any]:
         """按交易日批量拉取分档数据。
 
-        返回结构与 ``scheduled_tasks`` 的其它数据集保持一致：
+        返回结构与 ``acquisition`` 的其它数据集保持一致：
         ``done / next_cursor / rows_written / processed_days / errors / pending``。
 
         ``pending`` 用于重试上次没拿到数据的交易日（例如当天尚未发布）。

@@ -10,7 +10,7 @@ from data_interface.market.loader import MarketDataLoader
 from data_interface.market.sources.index_source import IndexMarketSource
 from screener.application.backfill_service import BackfillService
 from screener.application.baseline_service import BaselineService
-from screener.application.build_orchestrator import BuildOrchestrator
+from acquisition.build_orchestrator import BuildOrchestrator
 from screener.application.factor_service import FactorService
 from screener.application.screener_service import ScreenerService
 from screener.config import ScreenerSettings

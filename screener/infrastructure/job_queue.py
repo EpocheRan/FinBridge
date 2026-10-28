@@ -12,7 +12,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Sequence
 
-from screener.application.build_orchestrator import BuildOrchestrator
+from acquisition.build_orchestrator import BuildOrchestrator
 from screener.application.ports import BuildStatePort, MarketDataPort
 from screener.config import ScreenerSettings
 from screener.domain.clock import now_local

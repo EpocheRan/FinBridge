@@ -92,6 +92,6 @@ class Orchestrator:
 
 
 def build_orchestrator(progress: ProgressReporter | None = None) -> Orchestrator:
-    from .datasets import REAL_SYNCERS
+    from .syncers import REAL_SYNCERS
 
     return Orchestrator(syncers=REAL_SYNCERS, progress=progress)

@@ -6,7 +6,7 @@ from datetime import date, timedelta
 
 import pandas as pd
 
-from screener.application.build_orchestrator import BuildOrchestrator
+from acquisition.build_orchestrator import BuildOrchestrator
 from screener.application.ports import CalendarPort, FactorStorePort
 from screener.config import ScreenerSettings
 from screener.domain.models import CoverageReport

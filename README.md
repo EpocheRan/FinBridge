@@ -33,7 +33,7 @@ FinBridge 是面向 AI Agent 的量化数据与回测基础设施：
                  ┌──────────────────────────────────────────────┐
                  │                 MCP Server                   │
                  │ market / financial / screener / position /   │
-                 │ scheduled tools + skill prompts              │
+                 │ acquisition / factor tools                    │
                  └───────────────┬──────────────────────────────┘
                                  │ data_interface.api.runtime（进程内单例）
         ┌────────────────────────┼─────────────────────────┐
@@ -59,7 +59,7 @@ FinBridge 是面向 AI Agent 的量化数据与回测基础设施：
 
 ```text
 interface        MCPserver.py / data_interface.api / screener.interface /
-                 backtest.cli / scheduled_tasks.api
+                 backtest.cli / acquisition.api
       │
 application      screener.application / backtest.application / position.manager
       │
@@ -95,17 +95,17 @@ shared           data_interface.common / indicator / scripts.schemas
 | 策略 | `strategies/` | `base`（单股/横截面基类）、`context`（只读上下文 + 订单意图）、`universe`、`weighting`、`models/`（一文件一策略） | `python -m backtest list/validate/run` |
 | 回测 | `backtest/` | `domain`（RunSpec/BacktestResult/报告）、`application`（runner/loader/cross_section/rebalance/run_id/ports/registry）、`infrastructure`（data/engine/execution/output）、`config`/`bootstrap`/`cli`；PyBroker 为 optional extra | `python -m backtest` |
 | 技术指标 | `indicator/` | 纯 pandas/numpy 的单标的指标（ATR、IndicatorEngine） | `from indicator import ATR` |
-| 定时同步 | `scheduled_tasks/` | 心跳驱动的全 A 股日线/财务/分档/概念分批同步、状态表 | MCP `scheduled_*` 工具 |
+| 整合同步 | `acquisition/` | 心跳驱动的全 A 股日线/财务/分档/概念分批同步、Scope、进度、状态表 | `python -m acquisition` / MCP `acquisition_*` |
 | 建表/迁移 | `scripts/` | `init_database.py`、`migrate_database.py`、`schemas/`（market/financial/moneyflow/concept/position/screener/task） | 手工执行 |
 | 测试 | `tests/` | 默认离线、不依赖 DB；联网/DB 用例用 `@require_live` + `RUN_LIVE_TESTS=1` | `pytest` |
-| Agent Skills | `skills/` | 组合/持仓操作指南（MCP prompt） | MCP prompts |
+| 文档 | `docs/` | 架构设计、因子库、回测/筛股说明、变更备注 | 见 `docs/` |
 | MCP 入口 | `MCPserver.py` | 注册工具、启动 FastMCP（http/sse/stdio） | `python MCPserver.py` |
 
-> 回测的策略/因子写法、设计细节与当前限制见 [`backtest/README.md`](backtest/README.md) 与 [`backtest/ARCHITECTURE.md`](backtest/ARCHITECTURE.md)。
+> 回测的策略/因子写法、设计细节与当前限制见 [`docs/backtest/README.md`](docs/backtest/README.md) 与 [`docs/backtest/ARCHITECTURE.md`](docs/backtest/ARCHITECTURE.md)。
 
 ### 1.4 数据流
 
-1. **同步**：`scheduled_tasks` 或 `scripts` 把行情/财务写入 QuestDB（不复权价 + `adj_factor`）；
+1. **同步**：`acquisition` 或 `scripts` 把行情/财务写入 QuestDB（不复权价 + `adj_factor`）；
 2. **服务**：`data_interface` 读库、按需回源、复权计算；`screener` 生成 `screener_daily` / 分时基线；
 3. **在线消费**：MCP 工具（行情、财务、筛股、持仓、任务）统一走 `api/runtime.py` 单例；
 4. **离线消费**：回测从 QuestDB 只读加载 → 因子面板 → 策略/引擎 → 自建账本 → console/csv；
@@ -199,7 +199,7 @@ python scripts/init_database.py --only moneyflow,concept
     "baseline": {"freq": "5m", "lookback_days": 20},
     "backfill": {"max_lookback_bars": 260, "sync_budget_ms": 2000}
   },
-  "scheduled_tasks": {"include_funds": true, "empty_day_retry_limit": 3},
+  "acquisition": {"include_funds": true, "empty_day_retry_limit": 3},
   "server": {"transport": "http", "host": "0.0.0.0", "port": 8080}
 }
 ```
@@ -214,7 +214,7 @@ python scripts/init_database.py --only moneyflow,concept
 | `screener.baseline` | `freq` / `lookback_days` | 分时基线频率与样本窗口 |
 | `screener.backfill` | `max_lookback_bars` / `sync_budget_ms` / `fetch_benchmark` | 回看上限、读路径预算、是否同步拉基准 |
 | `financial` | `statement_start_year` / `disclosure_lag_days` | 财报范围与按报告期区分的披露滞后 |
-| `scheduled_tasks` | `daily_batch_days` / `include_funds` / `empty_day_retry_limit` | 批次大小、是否含 ETF/LOF、空数据日重试 |
+| `acquisition` | `daily_batch_days` / `include_funds` / `empty_day_retry_limit` | 批次大小、是否含 ETF/LOF、空数据日重试 |
 | `server` | `transport` / `host` / `port` | 默认 Streamable HTTP `8080`（也支持 `sse` / `stdio`） |
 | `logging` | `directory` / `file` / `console_level` | 日志轮转 |
 
@@ -569,8 +569,8 @@ CSV 默认写入 `output/backtest/<run_id>/`：`metrics.json`、`equity.csv`、`
 | 滑点 | 无滑点模型；成交价取 open/close 并四舍五入到分 |
 | 测试 | 离线 263 passed / 10 skipped（`pytest`）；联网/DB 用例需 `RUN_LIVE_TESTS=1` |
 
-更细的策略 API、输出字段与设计取舍见 [`backtest/README.md`](backtest/README.md)
-和 [`backtest/ARCHITECTURE.md`](backtest/ARCHITECTURE.md)。
+更细的策略 API、输出字段与设计取舍见 [`docs/backtest/README.md`](docs/backtest/README.md)
+和 [`docs/backtest/ARCHITECTURE.md`](docs/backtest/ARCHITECTURE.md)。
 
 ---
 
@@ -626,7 +626,7 @@ FinBridge/
 │   ├── application/                # 用例编排 + ports
 │   ├── infrastructure/             # QuestDB 仓储/补齐/SQL/队列
 │   └── interface/                  # MCP tools / CLI / worker_main
-├── scheduled_tasks/                # 心跳式批量同步
+├── acquisition/                   # 整合同步（Scope/编排/进度/CLI/MCP）
 │   ├── service.py / api.py / state.py
 ├── position/                       # 组合/持仓/交易
 │   ├── manager.py / schema.py / llm_tool.py
@@ -651,14 +651,19 @@ FinBridge/
 │   │   ├── execution/              # a_share / ledger
 │   │   └── output/                 # console / csv
 │   ├── config.py / bootstrap.py / cli.py / __main__.py
-│   ├── README.md                   # 用法与当前状态
-│   └── ARCHITECTURE.md             # 目标设计与假设验证
 ├── scripts/
 │   ├── init_database.py            # 建表
 │   ├── migrate_database.py         # 存量库迁移
-│   └── schemas/                    # market/financial/position/screener/task
-├── tests/                          # 离线单测（默认不联网、不依赖 DB）
-└── skills/                         # Agent Skill Prompts
+│   ├── migrate_factors.py          # 旧 screener 表迁移
+│   └── schemas/                    # market/financial/moneyflow/concept/factor/...
+├── docs/                           # 所有设计/模块/变更文档
+│   ├── design/                     # architecture_v2 / factor_library / concept_moneyflow
+│   ├── backtest/                   # README / ARCHITECTURE
+│   ├── screener/                   # README
+│   └── notes/                      # 变更备注
+├── factor_engine/                  # 因子计算/存储/缓存/对账
+├── acquisition/                    # 整合同步（Scope/编排/进度/CLI/MCP）
+└── tests/                          # 离线单测（默认不联网、不依赖 DB）
 ```
 
 ---
