@@ -1,6 +1,6 @@
 # FinBridge MCP
 
-> 面向 AI Agent 的量化数据与回测基础设施：行情、财务、**因子筛股（Screener）**、组合持仓、定时同步通过 MCP 暴露；回测作为独立离线链路，复用同一份数据与 A 股执行规则（研究/优化为后续扩展）。
+> 面向 AI Agent 的量化数据与回测基础设施：行情、财务、**因子筛股（Screener）**、组合持仓、整合同步通过 MCP 暴露；回测作为独立离线链路，复用同一份数据与 A 股执行规则（研究/优化为后续扩展）。
 
 ## 目录
 
@@ -13,7 +13,7 @@
 - [7. 代码结构](#7-代码结构)
 - [8. 数据库设计与迁移](#8-数据库设计与迁移)
 - [9. MCP 工具清单](#9-mcp-工具清单)
-- [10. 定时任务](#10-定时任务)
+- [10. 整合同步](#10-整合同步acquisition)
 - [11. 常见问题](#11-常见问题)
 - [12. 开发约定与测试](#12-开发约定与测试)
 
@@ -23,7 +23,7 @@
 
 FinBridge 是面向 AI Agent 的量化数据与回测基础设施：
 
-- **在线链路**：行情、财务、因子筛股、组合持仓、定时同步，统一通过 MCP 工具暴露；
+- **在线链路**：行情、财务、因子筛股、组合持仓、整合同步，统一通过 MCP 工具暴露；
 - **离线链路**：复用同一份数据与 A 股执行规则，做单股/横截面回测；优化、因子研究为后续扩展；
 - **数据底座**：行情表只存**不复权价 + 累计复权因子**，复权在读取时计算；所有服务共享 QuestDB 与进程内单例。
 
@@ -87,16 +87,15 @@ shared           data_interface.common / indicator / scripts.schemas
 | 模块 | 目录 | 关键内容 | 对外入口 |
 |---|---|---|---|
 | 数据接口 | `data_interface/` | `common/`（配置、QuestDB、交易日历、限流、代码/板块）、`market/`（loader/fetcher/adjust/adj_factors/sources）、`financial/`（service/repository/normalizer/metrics/fields/sources）、`moneyflow/`（分档 service/repository/sources）、`concept/`（板块/成分/分类 service/repository/sources）、`api/`（runtime 单例、MCP tools） | `data_interface.api.*` |
-| 因子筛股 | `screener/` | domain（模型/因子/构建状态/停牌）、application（服务/ports/编排）、infrastructure（QuestDB 仓储/补齐/队列）、interface（MCP/CLI/worker） | `screener.interface.api`、`python -m screener` |
+| 因子筛股 | `screener/` | domain（模型/字段/停牌）、application（ScreenerService/BackfillService/BaselineService/ports）、infrastructure（QuestDB 仓储/补齐/队列）、interface；**构建编排已迁到 acquisition** | `screener.interface.api`、`python -m screener` |
 | 持仓 | `position/` | `manager`（组合/持仓/交易/盈亏）、`schema`、`modes/`（ATR、GRID）、`llm_tool` | MCP `pm_*` 工具 |
-| 因子库 | `factors/` | `library`（`F` 命名空间/`FactorDef`/注册表）、`ops`（时序算子）、`cross_section`（rank/zscore）、`panel`（date×symbol 面板）、`stored`（legacy 列元数据） | `from factors import F` |
-| 因子引擎 | `factor_engine/` | `service`（计算/写库/ensure）、`store`（因子表）、`hooks`（入库事件）、`audit`、`definitions/`（5 个价格因子 + 23 个 legacy 因子）、CLI | `python -m factor_engine` |
-| 整合同步 | `acquisition/` | `Scope`（全市场/单代码/板块 × 日期段）、`Orchestrator`、`datasets/`、进度条、CLI | `python -m acquisition run/update/status` |
+| 因子库 | `factors/` | `library`（`F` 命名空间/`FactorDef`/注册表）、`ops/`（时序算子）、`cross_section`（rank/zscore）、`panel`（date×symbol 面板）、`stored`（legacy 列元数据）、`technical`（ATR canonical） | `from factors import F` |
+| 因子引擎 | `factor_engine/` | `service`（计算/写库/ensure）、`store`（因子表）、`hooks`（入库事件）、`audit`、`wide`（56 列宽表）、`definitions/`（5 个价格因子 + 23 个 legacy 因子）、CLI | `python -m factor_engine` |
+| 整合同步 | `acquisition/` | `Scope`（全市场/单代码/板块 × 日期段）、`Orchestrator`、`datasets/`（daily/financial/benchmark/screener/moneyflow/concept）、`build_orchestrator`、进度条、CLI/MCP | `python -m acquisition run/update/status` |
 | 策略 | `strategies/` | `base`（单股/横截面基类）、`context`（只读上下文 + 订单意图）、`universe`、`weighting`、`models/`（一文件一策略） | `python -m backtest list/validate/run` |
 | 回测 | `backtest/` | `domain`（RunSpec/BacktestResult/报告）、`application`（runner/loader/cross_section/rebalance/run_id/ports/registry）、`infrastructure`（data/engine/execution/output）、`config`/`bootstrap`/`cli`；PyBroker 为 optional extra | `python -m backtest` |
-| 技术指标 | `indicator/` | 纯 pandas/numpy 的单标的指标（ATR、IndicatorEngine） | `from indicator import ATR` |
-| 整合同步 | `acquisition/` | 心跳驱动的全 A 股日线/财务/分档/概念分批同步、Scope、进度、状态表 | `python -m acquisition` / MCP `acquisition_*` |
-| 建表/迁移 | `scripts/` | `init_database.py`、`migrate_database.py`、`schemas/`（market/financial/moneyflow/concept/position/screener/task） | 手工执行 |
+| 技术指标 | `factors/technical/` | 纯 pandas/numpy 的 ATR canonical 实现；`indicator/` 仅保留兼容 shim | `from factors import ATR` |
+| 建表/迁移 | `scripts/` | `init_database.py`、`migrate_database.py`、`migrate_factors.py`、`schemas/`（market/financial/moneyflow/concept/factor/position/screener/task） | 手工执行 |
 | 测试 | `tests/` | 默认离线、不依赖 DB；联网/DB 用例用 `@require_live` + `RUN_LIVE_TESTS=1` | `pytest` |
 | 文档 | `docs/` | 架构设计、因子库、回测/筛股说明、变更备注 | 见 `docs/` |
 | MCP 入口 | `MCPserver.py` | 注册工具、启动 FastMCP（http/sse/stdio） | `python MCPserver.py` |
@@ -106,7 +105,7 @@ shared           data_interface.common / indicator / scripts.schemas
 ### 1.4 数据流
 
 1. **同步**：`acquisition` 或 `scripts` 把行情/财务写入 QuestDB（不复权价 + `adj_factor`）；
-2. **服务**：`data_interface` 读库、按需回源、复权计算；`screener` 生成 `screener_daily` / 分时基线；
+2. **服务**：`data_interface` 读库、按需回源、复权计算；`factor_engine` 写 `factor_value_*` 与 `factor_daily_wide`，`screener` 只读筛选；
 3. **在线消费**：MCP 工具（行情、财务、筛股、持仓、任务）统一走 `api/runtime.py` 单例；
 4. **离线消费**：回测从 QuestDB 只读加载 → 因子面板 → 策略/引擎 → 自建账本 → console/csv；
 5. **可复现**：回测 `run_id` 覆盖策略、参数、因子、数据快照、执行规则与配置。
@@ -165,12 +164,20 @@ python MCPserver.py
 python scripts/init_database.py --only screener
 ```
 
-会创建四张表：
+会创建四张 screener 表：
 
 - `factor_daily_wide`（原 `screener_daily`）
 - `intraday_baseline`
 - `screener_build_state`
 - `market_suspension`
+
+因子长表单独初始化：
+
+```bash
+python scripts/init_database.py --only factor
+```
+
+会创建 `factor_registry`、`factor_alias`、`factor_value_daily`、`factor_value_announce`、`factor_value_latest`、`factor_build_state`、`factor_audit_state`。
 
 ### 2.4 单独初始化分档 / 概念
 
@@ -288,7 +295,8 @@ python scripts/init_database.py --only moneyflow,concept
 
 Screener 提供：
 
-- **日频筛选因子**：涨跌、跳空、量比、均量、ATR、波动率、均线、52 周高低、Beta、市值等；
+- **日频筛选因子**：涨跌、跳空、量比、均量、ATR、波动率、均线、52 周高低、Beta、市值等；计算由 `factor_engine` 负责，screener 只读；
+- **因子长表**：`factor_value_daily` / `factor_value_latest`，支持任意 `factor_id` 与版本；
 - **分时量能基线**：按分钟/5 分钟桶统计历史平均成交量与累计成交量，用于相对成交量、时间相对交易量；
 - **读路径自动补齐**：DB 优先，缺口才回源，取到先落库再计算；
 - **可恢复构建状态**：`screener_build_state` 记录进度/游标/质量/重试，进程重启后可恢复；
@@ -302,19 +310,22 @@ interface
   api.py / cli.py / worker_main.py
         │
 application
-  ScreenerService / BackfillService / BaselineService /
-  FactorService / BuildOrchestrator / ports.py
+  ScreenerService / BackfillService / BaselineService / ports.py
         │
 domain
   models / build_state / suspension / fields / factors /
-  factor_engine / baseline / coverage / clock
+  baseline / coverage / clock
         ▲
         │ 实现端口
 infrastructure
-  acquisition / repository / query_builder / job_queue / mappers
+  acquisition.py（行情读取端口） / repository / query_builder /
+  job_queue / mappers
         │
         └── data_interface（共享行情/QuestDB/交易日历）
 ```
+
+> 构建编排 `BuildOrchestrator` 已迁到 `acquisition/build_orchestrator.py`；
+> 56 列因子计算在 `factor_engine/wide.py`，screener 只读筛选。
 
 依赖规则：
 
@@ -323,7 +334,7 @@ infrastructure
 - `infrastructure` 实现端口，可以复用 `data_interface`；
 - `bootstrap.py` 是唯一装配具体实现的地方。
 
-> 表结构见 §8.4；因子字段与构建规则以 `screener/domain/factor_engine.py`、
+> 表结构见 §8.4；因子字段与构建规则以 `factor_engine/wide.py`、
 > `scripts/schemas/screener_schema.py` 为准。
 
 ---
@@ -454,7 +465,14 @@ STRATEGY = RankMom20
 ```
 
 因子只声明、不计算：`F.mom / F.ma / F.atr / F.vol`；横截面变换用 `F.rank / F.zscore`。
-`F.stored(...)` 已定义但 **stored 路径尚未实现**，运行时会明确报错。
+读取因子库长表用 `F.factor("momentum.ret")`（回测时 `--factor-source stored`）。
+
+```python
+def factors(self):
+    return [F.factor("momentum.ret"), F.factor("technical.pct_chg")]
+```
+
+`F.stored(...)` 仅保留为 legacy screener 宽表列兼容入口，新策略请用 `F.factor`。
 
 ### 6.5 数据与执行口径
 
@@ -627,17 +645,26 @@ FinBridge/
 │   ├── infrastructure/             # QuestDB 仓储/补齐/SQL/队列
 │   └── interface/                  # MCP tools / CLI / worker_main
 ├── acquisition/                   # 整合同步（Scope/编排/进度/CLI/MCP）
-│   ├── service.py / api.py / state.py
+│   ├── datasets/                   # base + daily/financial/benchmark/screener/moneyflow/concept
+│   ├── service.py                  # AShareSyncService（总调度）
+│   ├── build_orchestrator.py       # screener 构建编排
+│   ├── api.py / legacy_tools.py
+│   └── state.py
 ├── position/                       # 组合/持仓/交易
 │   ├── manager.py / schema.py / llm_tool.py
 │   └── modes/                      # ATR / GRID
-├── indicator/                      # 纯 pandas/numpy 指标（ATR、Engine）
+├── indicator/                      # 兼容 shim（ATR/Engine 已并入 factors）
 ├── factors/                        # 因子库
 │   ├── library.py                  # F 命名空间 / FactorDef / 注册表
-│   ├── ops.py                      # 时序算子（复用 screener/indicator）
+│   ├── ops/                        # 时序算子（ts.py + technical.py）
+│   ├── technical/                  # ATR canonical
 │   ├── cross_section.py            # rank / zscore / winsorize
-│   ├── panel.py                    # 长表 -> date×symbol 面板
-│   └── stored.py                   # screener_daily 列元数据（占位）
+│   ├── panel.py                    # 长表 -> date×symbol 面板（含 stored）
+│   └── stored.py                   # legacy screener 列元数据
+├── factor_engine/                  # 因子计算/存储/缓存/对账
+│   ├── service.py / store.py / data.py / hooks.py / audit.py
+│   ├── wide.py / wide_store.py     # 56 列宽表计算与写路径
+│   └── definitions/                # price.py（5）+ legacy.py（23）
 ├── strategies/                     # 策略 API
 │   ├── base.py / context.py / universe.py / weighting.py
 │   └── models/                     # 一文件一策略
@@ -657,12 +684,9 @@ FinBridge/
 │   ├── migrate_factors.py          # 旧 screener 表迁移
 │   └── schemas/                    # market/financial/moneyflow/concept/factor/...
 ├── docs/                           # 所有设计/模块/变更文档
-│   ├── design/                     # architecture_v2 / factor_library / concept_moneyflow
+│   ├── design/                     # architecture_v2 / factor_library
 │   ├── backtest/                   # README / ARCHITECTURE
-│   ├── screener/                   # README
-│   └── notes/                      # 变更备注
-├── factor_engine/                  # 因子计算/存储/缓存/对账
-├── acquisition/                    # 整合同步（Scope/编排/进度/CLI/MCP）
+│   └── screener/                   # README
 └── tests/                          # 离线单测（默认不联网、不依赖 DB）
 ```
 
@@ -711,11 +735,18 @@ FinBridge/
 | `fin_raw_report` | `fetched_at` | `(fetched_at, report_id, source)` | 原始报文 |
 | `dim_fin_field` / `dim_board` / `map_stock_board` | 见 DDL | — | 字段字典与板块 |
 
-### 8.4 Screener 表
+### 8.4 Screener / 因子表
 
 | 表 | 时间轴 | 分区 | DEDUP KEY | 说明 |
 |---|---|---|---|---|
-| `factor_daily_wide` | `ts` | MONTH | `(ts, code, market)` | 日频筛选因子（原 `screener_daily`） |
+| `factor_daily_wide` | `ts` | MONTH | `(ts, code, market)` | 日频筛选宽表（原 `screener_daily`） |
+| `factor_value_daily` | `ts` | MONTH | `(ts, code, factor_id, version, source_version)` | 因子长表（日频） |
+| `factor_value_announce` | `ts` | YEAR | `(ts, code, factor_id, version, source_version)` | 公告类因子（PIT） |
+| `factor_value_latest` | `ts` | MONTH | `(ts, code, factor_id, version, source_version)` | 每 code×factor 最新值 |
+| `factor_registry` | `updated_at` | YEAR | `(updated_at, factor_id)` | 因子规格目录 |
+| `factor_alias` | `updated_at` | YEAR | `(updated_at, alias)` | legacy/简写别名 |
+| `factor_build_state` | `updated_at` | YEAR | `(updated_at, job_id)` | 因子构建/重试状态 |
+| `factor_audit_state` | `updated_at` | YEAR | `(updated_at, audit_id)` | 投影/增量对账 |
 | `intraday_baseline` | `as_of_date` | MONTH | `(as_of_date, code, market, freq, minute_end)` | 分时量能基线 |
 | `screener_build_state` | `updated_at` | YEAR | `(updated_at, build_id)` | 构建状态（append-only） |
 | `market_suspension` | `updated_at` | YEAR | `(updated_at, code, market, status, start_date)` | 停牌/退市/NoData |
@@ -735,6 +766,7 @@ FinBridge/
 python scripts/init_database.py                  # 全部建表
 python scripts/init_database.py --only market    # 只建行情表
 python scripts/init_database.py --only screener  # 只建 Screener 表
+python scripts/init_database.py --only factor    # 只建因子表
 python scripts/init_database.py --dry-run        # 只打印 DDL
 
 python scripts/migrate_database.py --check       # 存量库体检
@@ -786,7 +818,7 @@ python scripts/migrate_database.py --apply --truncate-ohlc   # 清空旧前复�
 | `screen_stocks` | 因子筛选/排序（支持 `spec` 或扁平参数） |
 | `get_screener_metrics` | 单只/多只股票的日频因子明细 |
 | `get_intraday_baseline` | 分时量能基线 |
-| `rebuild_screener` | 提交重建任务（`screener_daily` / `intraday_baseline`） |
+| `rebuild_screener` | 提交重建任务（`factor_daily_wide` / `intraday_baseline`） |
 | `get_screener_status` | 构建状态/进度 |
 
 ### 9.5 持仓
@@ -801,7 +833,7 @@ python scripts/migrate_database.py --apply --truncate-ohlc   # 清空旧前复�
 | `pm_check_signals` / `pm_get_buying_advice` | 加减仓信号 / 建仓建议 |
 | `pm_get_portfolio_status` / `pm_list_modes` | 组合状态、可用模式 |
 
-### 9.6 定时任务
+### 9.6 同步（legacy 兼容）
 
 | 工具 | 用途 |
 |---|---|
@@ -819,11 +851,16 @@ python scripts/migrate_database.py --apply --truncate-ohlc   # 清空旧前复�
 | `get_concept_members` | 板块成分股（PIT 快照，支持 `as_of`） |
 | `get_concept_ohlc` | 板块日线（OHLC + 成交量 + 成交额） |
 | `get_concept_classification` | Tushare 概念分类树（可按键词过滤） |
+
+### 9.8 因子库
+
+| 工具 | 用途 |
+|---|---|
 | `get_factor_registry` | 因子目录（分类/来源/频率/窗口） |
 | `get_factor_values` | 因子长表值（`factor_value_daily`） |
 | `get_factor_latest` | 每个代码×因子的最新值 |
 
-### 9.8 整合同步
+### 9.9 整合同步
 
 | 工具 | 用途 |
 |---|---|
@@ -832,28 +869,33 @@ python scripts/migrate_database.py --apply --truncate-ohlc   # 清空旧前复�
 
 ---
 
-## 10. 定时任务
+## 10. 整合同步（acquisition）
 
-`dataset` 可选 `daily`、`benchmark`、`financial`、`screener`、`moneyflow`、`concept_meta`、`concept_daily`、`concept_member`、`concept_class`、`all`。每次调用只处理一个有界批次，返回 `next_cursor` 和 `done`；Agent 心跳反复调用直到 `done=true`。
+统一入口是 `python -m acquisition` / MCP `acquisition_run`、`acquisition_status`。`datasets` 可选 `trading_calendar`、`stock_basic`、`ohlcv_1d`、`benchmark`、`financial`、`valuation`、`moneyflow`、`concept_meta`、`concept_daily`、`concept_member`、`concept_class`、`factors`。
 
-```text
-scheduled_sync_a_shares(dataset="daily", start_date="2024-01-01", max_trade_days=20)
-scheduled_sync_a_shares(dataset="daily", include_funds=True)
-scheduled_sync_a_shares(dataset="financial", start_date="2020-01-01", max_stocks=15)
-scheduled_sync_a_shares(dataset="moneyflow", start_date="2020-01-01", max_trade_days=20)
-scheduled_sync_a_shares(dataset="concept_daily", max_boards=50)
-scheduled_sync_a_shares(dataset="concept_member", max_boards=20)
+```bash
+# 全市场补齐到最近交易日（可反复执行，按游标续跑）
+python -m acquisition run --datasets ohlcv_1d,moneyflow,factors
+
+# 单代码 + 日期段
+python -m acquisition update --code 600519 --start 2024-01-01 --end 2026-10-27
+
+# 单板块 + 日期段
+python -m acquisition update --board 300013 --start 2026-10-01 --end 2026-10-27
+
+# 查看游标/状态
+python -m acquisition status
 ```
 
-- **日线**：按交易日调 Tushare `daily` + `daily_basic`（换手率）+ `adj_factor`（复权因子），可选 `fund_daily` 拉 ETF/LOF；
+- **日线**：按交易日调 Tushare `daily` + `daily_basic`（换手率）+ `adj_factor`，可选 `fund_daily` 拉 ETF/LOF；
 - **财务**：按股票池分批，逐只增量拉三大报表、重算指标（可选估值）；
-- **分档**：按交易日调 Tushare `moneyflow`（一次全市场），金额万元→元、量手→股，`source=tushare.moneyflow`；
+- **分档**：按交易日调 Tushare `moneyflow`（一次全市场），金额万元→元、量手→股；
 - **板块列表/日线**：同花顺（AkShare）一次拿 375 个板块，日线按板块增量；
-- **成分**：东方财富优先，失败回退同花顺网页抓取；每次全量写同一快照日，单板块不足上一快照 70% 且为 partial 时跳过；
+- **成分**：东方财富优先，失败回退同花顺网页抓取；每次全量写同一快照日；
 - **概念分类**：Tushare `concept`，注意该接口限 1 次/小时；
-- **空数据日**：当天未收盘导致的“无数据”不算错误，记入 `pending` 下次补；
-  历史交易日首次无数据会暂停在该日重试，连续 `empty_day_retry_limit` 次才跳过并记 error；
-- 游标保存在 `scheduled_task_state`，Agent 重启后可继续。
+- **空数据日**：未收盘导致的“无数据”记入 `pending` 下次补；
+- 游标保存在 `scheduled_task_state`（表名保留兼容），Agent 重启后可继续；
+- 旧的 `scheduled_sync_a_shares` / `scheduled_task_status` 仍可用，但已标记 legacy。
 
 ### 10.1 历史回补脚本
 
@@ -879,7 +921,26 @@ python -m acquisition update --code 600519 --start 2024-01-01 --end 2026-10-27
 > 2022-10-10 的 dim 含 375 个板块，但当天实际有日线的是 284 个（其余为后续成立），
 > 回测应以 `concept_board_daily` 的 `min(ts)` 过滤。日线通过同花顺年度 K 线文件回补，单板块约 1 秒。
 
-Screener 不依赖定时任务：批量 CLI、读路径和 inline worker 都能补齐。
+Screener 不依赖同步任务：批量 CLI、读路径和 inline worker 都能补齐。
+
+### 10.2 因子引擎
+
+当前 28 个因子：5 个价格因子 + 23 个 screener legacy 列，全部有 compute。
+
+```bash
+# 列出因子
+python -m factor_engine list
+
+# 单代码 / 日期段
+python -m factor_engine build --start 2026-10-01 --end 2026-10-27 --codes 600519
+
+# 指定因子
+python -m factor_engine build --start 2026-10-01 --end 2026-10-27 \
+  --codes 600519 --factor momentum.ret,technical.atr,technical.pct_chg
+
+# 确保某日已就绪（缺则算）
+python -m factor_engine ensure --as-of 2026-10-27 --codes 600519
+```
 
 ---
 
@@ -964,15 +1025,15 @@ python -m screener daily --start 2025-01-01 --end 2026-10-23
 4. 在 `fields.py` 增加字段映射；
 5. 补 mocked 单测。
 
-### 新增 Screener 因子
+### 新增因子
 
-1. 在 `screener/domain/factors.py` 增加纯函数；
-2. 在 `screener/domain/factor_engine.py` 组合输出；
-3. 在 `scripts/schemas/screener_schema.py` 加列，并更新 `mappers.py`；
-4. 在 `screener/domain/fields.py` 注册可筛/可排字段；
-5. 在 `screener/domain/models.py` / `query_builder.py` 需要时增加派生表达式；
-6. 提升 `formula_version`，让旧行自动失效并重算；
-7. 补离线单测。
+1. 在 `factors/ops/` 增加纯时序函数（无 DB/无 IO）；
+2. 在 `factor_engine/definitions/price.py` 注册 `FactorSpec` + compute；
+3. 若是 screener 宽表列，在 `factor_engine/wide.py` 的 `DAILY_COLUMNS` 增加列并实现；
+4. 若是 legacy 列，在 `factor_engine/legacy.py` 增加元数据；
+5. 需要筛股字段时，在 `screener/domain/fields.py` / `query_builder.py` 注册；
+6. 提升 `formula_version` / factor `version`，让旧值失效并重算；
+7. 补离线单测（`tests/test_factor_*`、`tests/test_screener_*`）。
 
 ### 新增财务字段
 
@@ -994,7 +1055,7 @@ RUN_LIVE_TESTS=1 python -m pytest # 额外跑真实数据源/QuestDB 用例
 - TTM / 单季不变量、PIT 重述；
 - 证券代码（含 92x 北交所）、表结构列一致性；
 - 持仓账本（均价/卖出校验/调整持久性）；
-- 定时任务的单位换算与空数据日重试；
+- 整合同步的单位换算与空数据日重试；
 - 响应信封与序列化；
 - Screener 因子、查询 SQL、缺口分类、BuildState 状态机、
   lookback、停牌跳过、查询 limit、北京时间、BaoStock 共享会话。
