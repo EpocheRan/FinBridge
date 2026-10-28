@@ -119,9 +119,9 @@ def test_build_skips_warmup_nan():
 
 def test_ensure_builds_when_missing_then_skips():
     service, store, _ = make_service()
-    first = service.ensure(["600519"], "2026-02-20")
+    first = service.ensure(["600519"], "2026-02-20", ["momentum.ret"])
     assert first["built"] is True
-    second = service.ensure(["600519"], "2026-02-20")
+    second = service.ensure(["600519"], "2026-02-20", ["momentum.ret"])
     assert second["built"] is False
 
 

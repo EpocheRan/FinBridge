@@ -329,6 +329,7 @@ M6 重建 latest / panel 缓存
 | M5 stored 回测 + MCP + 文档 | ✅ | `cf5153b` |
 | screener 56 列计算迁入 factor_engine.wide | ✅ | `4d993e2` |
 | factor_daily_wide 写路径归 factor_engine | ✅ | `58a030d` |
+| 23 个 legacy 因子补 compute | ✅ 复用 `factor_engine.wide`，5 内置 + 23 legacy = 28 | 最新 |
 | scheduled_tasks 完全退役 | ✅ 已删除；同步服务在 `acquisition/datasets/service.py` + `daily/financial/benchmark/screener/moneyflow/concept.py` | 最新 |
 | build_orchestrator 迁入 acquisition | ✅ `acquisition/build_orchestrator.py` | 最新 |
 | 文档统一到 docs / 删除 skills | ✅ | 最新 |

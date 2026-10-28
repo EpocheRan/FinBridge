@@ -90,7 +90,7 @@ shared           data_interface.common / indicator / scripts.schemas
 | 因子筛股 | `screener/` | domain（模型/因子/构建状态/停牌）、application（服务/ports/编排）、infrastructure（QuestDB 仓储/补齐/队列）、interface（MCP/CLI/worker） | `screener.interface.api`、`python -m screener` |
 | 持仓 | `position/` | `manager`（组合/持仓/交易/盈亏）、`schema`、`modes/`（ATR、GRID）、`llm_tool` | MCP `pm_*` 工具 |
 | 因子库 | `factors/` | `library`（`F` 命名空间/`FactorDef`/注册表）、`ops`（时序算子）、`cross_section`（rank/zscore）、`panel`（date×symbol 面板）、`stored`（legacy 列元数据） | `from factors import F` |
-| 因子引擎 | `factor_engine/` | `service`（计算/写库/ensure）、`store`（因子表）、`hooks`（入库事件）、`audit`、`definitions/`（内置因子）、CLI | `python -m factor_engine` |
+| 因子引擎 | `factor_engine/` | `service`（计算/写库/ensure）、`store`（因子表）、`hooks`（入库事件）、`audit`、`definitions/`（5 个价格因子 + 23 个 legacy 因子）、CLI | `python -m factor_engine` |
 | 整合同步 | `acquisition/` | `Scope`（全市场/单代码/板块 × 日期段）、`Orchestrator`、`datasets/`、进度条、CLI | `python -m acquisition run/update/status` |
 | 策略 | `strategies/` | `base`（单股/横截面基类）、`context`（只读上下文 + 订单意图）、`universe`、`weighting`、`models/`（一文件一策略） | `python -m backtest list/validate/run` |
 | 回测 | `backtest/` | `domain`（RunSpec/BacktestResult/报告）、`application`（runner/loader/cross_section/rebalance/run_id/ports/registry）、`infrastructure`（data/engine/execution/output）、`config`/`bootstrap`/`cli`；PyBroker 为 optional extra | `python -m backtest` |

@@ -16,7 +16,13 @@ from factors.registry import register_factor, get as get_spec
 from factors.spec import FactorSpec
 
 from .data import PriceData
-from .definitions import PRICE_FACTORS, builtin_map
+from .definitions import (
+    LEGACY_COLUMNS,
+    LEGACY_SPECS,
+    PRICE_FACTORS,
+    LegacyComputer,
+    builtin_map,
+)
 from .store import FactorStore
 from .versions import price_source_version
 
@@ -35,6 +41,9 @@ class FactorEngineService:
         self.store = store or FactorStore(config=self.config)
         self.data = data or PriceData(config=self.config)
         self.builtins = builtin_map()
+        self.legacy_columns = dict(LEGACY_COLUMNS)
+        self.legacy = LegacyComputer(self.data, self.config)
+        self.all_ids = [spec.factor_id for spec in self.list_factors()]
         self.register_builtins()
         self._registry_synced = False
 
@@ -67,10 +76,13 @@ class FactorEngineService:
         for item in PRICE_FACTORS:
             register_factor(item.spec, replace=True)
             registered.append(item.spec.factor_id)
+        for spec in LEGACY_SPECS:
+            register_factor(spec, replace=True)
+            registered.append(spec.factor_id)
         return sorted(registered)
 
     def list_factors(self) -> list[FactorSpec]:
-        return [item.spec for item in PRICE_FACTORS]
+        return [item.spec for item in PRICE_FACTORS] + list(LEGACY_SPECS)
 
     # ------------------------------------------------------------------ build
     def build(
@@ -82,11 +94,19 @@ class FactorEngineService:
         *,
         write_latest: bool = True,
     ) -> dict[str, Any]:
-        ids = [str(item) for item in (factor_ids or self.builtins)]
+        ids = [str(item) for item in (factor_ids or self.all_ids)]
         specs = [get_spec(item) for item in ids]
+        legacy_specs = [
+            spec for spec in specs if spec.factor_id in self.legacy_columns
+        ]
+        compute_specs = [
+            spec for spec in specs if spec.factor_id not in self.legacy_columns
+        ]
         self._ensure_registry()
         # 带 warmup 加载，避免短区间算不出长窗因子；写库时再裁回请求区间
         warmup = max((spec.warmup for spec in specs), default=0)
+        if legacy_specs:
+            warmup = max(warmup, 300)  # 52 周高低点/252 日 beta
         load_start = pd.Timestamp(start_date).normalize() - pd.Timedelta(
             days=max(0, warmup) * 2 + 10
         )
@@ -103,7 +123,41 @@ class FactorEngineService:
         source_version = price_source_version(frame)
         computed_at = now_cn()
         records: list[dict[str, Any]] = []
-        for spec in specs:
+
+        if legacy_specs:
+            selected_codes = (
+                list(codes)
+                if codes
+                else sorted(frame["code"].astype(str).unique())
+            )
+            wide = self.legacy.compute(
+                frame, selected_codes, load_start, end_date
+            )
+            for spec in legacy_specs:
+                column = self.legacy_columns[spec.factor_id]
+                if wide.empty or column not in wide.columns:
+                    logger.warning("legacy 列缺失: %s.%s", spec.factor_id, column)
+                    continue
+                part = wide[["ts", "code", column]].dropna(subset=[column])
+                for row in part.itertuples(index=False):
+                    stamp = pd.Timestamp(row.ts).normalize()
+                    if stamp < start_ts:
+                        continue
+                    records.append(
+                        {
+                            "ts": stamp,
+                            "code": str(row.code),
+                            "factor_id": spec.factor_id,
+                            "value": float(row[2]),
+                            "quality": "ok",
+                            "source": spec.source.dataset,
+                            "source_version": source_version,
+                            "version": spec.version,
+                            "computed_at": computed_at,
+                        }
+                    )
+
+        for spec in compute_specs:
             builtin = self.builtins.get(spec.factor_id)
             if builtin is None:
                 logger.warning("跳过未实现计算的内置因子: %s", spec.factor_id)
@@ -180,7 +234,7 @@ class FactorEngineService:
         as_of: str | date,
         factor_ids: Sequence[str] | None = None,
     ) -> dict[str, Any]:
-        ids = [str(item) for item in (factor_ids or self.builtins)]
+        ids = [str(item) for item in (factor_ids or self.all_ids)]
         target = pd.Timestamp(as_of).normalize()
         missing: list[str] = []
         for factor_id in ids:
