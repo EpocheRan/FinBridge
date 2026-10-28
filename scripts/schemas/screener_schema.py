@@ -25,7 +25,7 @@ logger = logging.getLogger("Scripts.ScreenerSchema")
 def _ddl() -> list[str]:
     return [
         """
-        CREATE TABLE IF NOT EXISTS "screener_daily" (
+        CREATE TABLE IF NOT EXISTS "factor_daily_wide" (
             ts TIMESTAMP,
             code SYMBOL,
             market SYMBOL,

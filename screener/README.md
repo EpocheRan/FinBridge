@@ -16,7 +16,7 @@ bootstrap.py -> composition root
 
 ## 表
 
-- `screener_daily`：日频筛选因子
+- `factor_daily_wide`：日频筛选因子（原 `screener_daily`，M3 迁移后改名，screener 只读写该表）
 - `intraday_baseline`：分时量能基线
 - `screener_build_state`：构建状态、断点续跑、幂等键
 - `market_suspension`：停牌/退市/NoData 负缓存

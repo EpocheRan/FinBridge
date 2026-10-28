@@ -165,7 +165,7 @@ python scripts/init_database.py --only screener
 
 会创建四张表：
 
-- `screener_daily`
+- `factor_daily_wide`（原 `screener_daily`）
 - `intraday_baseline`
 - `screener_build_state`
 - `market_suspension`
@@ -708,7 +708,7 @@ FinBridge/
 
 | 表 | 时间轴 | 分区 | DEDUP KEY | 说明 |
 |---|---|---|---|---|
-| `screener_daily` | `ts` | MONTH | `(ts, code, market)` | 日频筛选因子 |
+| `factor_daily_wide` | `ts` | MONTH | `(ts, code, market)` | 日频筛选因子（原 `screener_daily`） |
 | `intraday_baseline` | `as_of_date` | MONTH | `(as_of_date, code, market, freq, minute_end)` | 分时量能基线 |
 | `screener_build_state` | `updated_at` | YEAR | `(updated_at, build_id)` | 构建状态（append-only） |
 | `market_suspension` | `updated_at` | YEAR | `(updated_at, code, market, status, start_date)` | 停牌/退市/NoData |

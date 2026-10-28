@@ -42,7 +42,7 @@ class QuestDBScreenerQuery:
             f"{expression} AS {name}"
             for name, expression in DERIVED_SQL.items()
         ]
-        select = "SELECT *, " + ", ".join(derived) + ' FROM "screener_daily"'
+        select = "SELECT *, " + ", ".join(derived) + ' FROM "factor_daily_wide"'
 
         clauses = ["ts = %s", "market = %s"]
         params: list = [

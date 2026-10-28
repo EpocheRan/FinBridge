@@ -54,7 +54,7 @@ class QuestDBFactorRepository:
         if not codes:
             return pd.DataFrame()
         sql = (
-            'SELECT * FROM "screener_daily" '
+            'SELECT * FROM "factor_daily_wide" '
             "WHERE ts BETWEEN %s AND %s "
             f"AND code IN ({_placeholders(len(codes))}) "
             "ORDER BY ts, code"
@@ -75,7 +75,7 @@ class QuestDBFactorRepository:
             return pd.DataFrame()
         sql = (
             'SELECT ts, code, formula_version, is_partial, full_ready '
-            'FROM "screener_daily" '
+            'FROM "factor_daily_wide" '
             "WHERE ts BETWEEN %s AND %s "
             f"AND code IN ({_placeholders(len(codes))}) "
             "ORDER BY code, ts"
@@ -93,7 +93,7 @@ class QuestDBFactorRepository:
         if not codes:
             return False
         sql = (
-            "SELECT count_distinct(code) FROM \"screener_daily\" "
+            "SELECT count_distinct(code) FROM \"factor_daily_wide\" "
             "WHERE ts = %s "
             f"AND code IN ({_placeholders(len(codes))})"
         )
@@ -107,7 +107,7 @@ class QuestDBFactorRepository:
         if not codes:
             return 0
         sql = (
-            "SELECT count_distinct(code) FROM \"screener_daily\" "
+            "SELECT count_distinct(code) FROM \"factor_daily_wide\" "
             "WHERE ts = %s "
             f"AND code IN ({_placeholders(len(codes))})"
         )
@@ -136,7 +136,7 @@ class QuestDBFactorRepository:
         if not rows:
             return 0
         columns = ", ".join(f'"{column}"' for column in DAILY_DB_COLUMNS)
-        sql = f'INSERT INTO "screener_daily" ({columns}) VALUES %s'
+        sql = f'INSERT INTO "factor_daily_wide" ({columns}) VALUES %s'
         return self.db.execute_values(sql, rows, page_size=500)
 
     # ------------------------------------------------------------------ baseline
