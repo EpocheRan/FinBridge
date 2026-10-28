@@ -818,6 +818,13 @@ python scripts/migrate_database.py --apply --truncate-ohlc   # 清空旧前复�
 | `get_factor_values` | 因子长表值（`factor_value_daily`） |
 | `get_factor_latest` | 每个代码×因子的最新值 |
 
+### 9.8 整合同步
+
+| 工具 | 用途 |
+|---|---|
+| `acquisition_run` | 一键补齐（可按 datasets/日期/代码/板块限定） |
+| `acquisition_status` | 各数据集游标与状态 |
+
 ---
 
 ## 10. 定时任务

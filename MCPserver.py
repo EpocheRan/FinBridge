@@ -20,6 +20,7 @@ from typing import Any
 
 from fastmcp import FastMCP
 
+from acquisition.api import register_acquisition_tools
 from data_interface.api.concept_tools import register_concept_tools
 from data_interface.api.financial_tools import register_financial_tools
 from data_interface.api.market_tools import register_market_tools
@@ -76,6 +77,7 @@ register_financial_tools(mcp)
 register_moneyflow_tools(mcp)
 register_concept_tools(mcp)
 register_factor_tools(mcp)
+register_acquisition_tools(mcp)
 register_scheduled_tools(mcp)
 register_screener_tools(mcp)
 
