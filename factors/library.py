@@ -38,6 +38,7 @@ class FactorDef:
     stored_column: str | None = None
     version: str = "v1"
     price_basis: PriceBasis = "hfq"
+    materialization: str = "auto"
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "window", max(0, int(self.window)))
@@ -54,6 +55,10 @@ class FactorDef:
             object.__setattr__(self, "price_basis", "raw" if self.unit in ("currency", "shares") else "none")
         if self.source == "compute" and self.on == "none" and self.op not in ("rank", "zscore"):
             raise ValueError(f"factor {self.name!r}: compute 因子必须声明 on")
+        materialization = str(self.materialization).strip().lower()
+        if materialization not in ("stored", "inline", "auto"):
+            raise ValueError(f"factor {self.name!r}: 未知 materialization {self.materialization!r}")
+        object.__setattr__(self, "materialization", materialization)
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -69,6 +74,7 @@ class FactorDef:
             "stored_column": self.stored_column,
             "version": self.version,
             "price_basis": self.price_basis,
+            "materialization": self.materialization,
         }
 
 
@@ -194,8 +200,13 @@ class F:
         unit: Unit = "ratio",
         version: str = "v1",
         name: str | None = None,
+        materialization: str = "auto",
     ) -> FactorDef:
-        """读取因子库长表（F.factor）；与 legacy 的 F.stored 区分。"""
+        """读取因子库长表（F.factor）；与 legacy 的 F.stored 区分。
+
+        ``materialization``：stored=必须读预计算 / inline=逐 bar 现算 /
+        auto=stored 优先，缺失回退 inline。
+        """
         return FactorDef(
             name=name or factor_id,
             op="factor",
@@ -209,6 +220,7 @@ class F:
             stored_column=factor_id,
             version=version,
             price_basis="none",
+            materialization=materialization,
         )
 
     @staticmethod

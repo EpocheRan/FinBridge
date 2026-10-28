@@ -113,13 +113,15 @@ class FactorStore:
                     int(spec.warmup),
                     spec.formula,
                     bool(spec.enabled),
+                    str(spec.materialization.value),
                 )
             )
         sql = (
             f"INSERT INTO {REGISTRY_TABLE} "
             "(updated_at, factor_id, name, category, subcategory, source_dataset, source_vendor, "
             "source_fields, freq, window, lag, value_kind, update_mode, unit, direction, "
-            "price_basis, version, source_version_policy, dependencies, warmup, formula, enabled) "
+            "price_basis, version, source_version_policy, dependencies, warmup, formula, enabled, "
+            "materialization) "
             "VALUES %s"
         )
         return self.db.execute_values(sql, rows)

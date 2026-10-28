@@ -333,6 +333,7 @@ M6 重建 latest / panel 缓存
 | scheduled_tasks 完全退役 | ✅ 已删除；同步服务在 `acquisition/datasets/service.py` + `daily/financial/benchmark/screener/moneyflow/concept.py` | 最新 |
 | build_orchestrator 迁入 acquisition | ✅ `acquisition/build_orchestrator.py` | 最新 |
 | 文档统一到 docs / 删除 skills | ✅ | 最新 |
+| 因子 materialization 标记（stored/inline/auto）| ✅ 回测逐因子混用 stored+inline | 最新 |
 
 现状：`screener` 只保留字段映射、查询与 API；构建编排在 `acquisition`，因子计算在 `factor_engine`。
 

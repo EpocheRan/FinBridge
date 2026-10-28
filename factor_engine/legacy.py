@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from factors.spec import FactorSpec, SourceSpec
+from factors.spec import FactorSpec, Materialization, SourceSpec
 from factors.stored import SCREENER_DAILY_COLUMNS
 from factors.taxonomy import Category
 
@@ -33,6 +33,7 @@ def legacy_specs() -> list[FactorSpec]:
                 warmup=0,
                 formula=f"legacy screener_daily.{column}",
                 aliases=(f"legacy.{column}",),
+                materialization=Materialization.STORED,
             )
         )
     return specs

@@ -6,6 +6,7 @@ import math
 import re
 from dataclasses import dataclass, field
 from datetime import date
+from enum import Enum
 from typing import Any, Literal
 
 from .library import PriceBasis, Unit
@@ -14,6 +15,22 @@ from .taxonomy import Category, normalize_category, normalize_subcategory
 Freq = Literal["1d", "5m", "1w", "event"]
 DependencyKind = Literal["raw", "factor", "ref"]
 AsOfPolicy = Literal["trade_date", "available_at", "none"]
+
+
+class Materialization(str, Enum):
+    """因子落库/消费方式标记。
+
+    - STORED：必须预计算落库；回测只读，缺失即报错。
+    - INLINE：不落库；永远逐 bar 现算，必须有 compute。
+    - AUTO：stored 优先，缺失且有 compute 则回退 inline。
+    """
+
+    STORED = "stored"
+    INLINE = "inline"
+    AUTO = "auto"
+
+
+_VALID_MATERIALIZATION = {item.value for item in Materialization}
 
 _FACTOR_ID_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$")
 _VALID_FREQ = {"1d", "5m", "1w", "event"}
@@ -134,6 +151,7 @@ class FactorSpec:
     aliases: tuple[str, ...] = ()
     tolerance: Tolerance = field(default_factory=Tolerance)
     enabled: bool = True
+    materialization: Materialization | str = Materialization.AUTO
 
     def __post_init__(self) -> None:
         factor_id = str(self.factor_id).strip()
@@ -164,6 +182,14 @@ class FactorSpec:
         object.__setattr__(self, "aliases", tuple(str(item) for item in self.aliases))
         if not isinstance(self.tolerance, Tolerance):
             raise TypeError("tolerance 必须是 Tolerance")
+        if isinstance(self.materialization, Materialization):
+            materialization = self.materialization
+        else:
+            text = str(self.materialization).strip().lower()
+            if text not in _VALID_MATERIALIZATION:
+                raise ValueError(f"未知 materialization: {self.materialization!r}")
+            materialization = Materialization(text)
+        object.__setattr__(self, "materialization", materialization)
 
     # ------------------------------------------------------------------ 标签
     @property
@@ -209,4 +235,5 @@ class FactorSpec:
             "aliases": list(self.aliases),
             "tolerance": self.tolerance.to_payload(),
             "enabled": self.enabled,
+            "materialization": self.materialization.value,
         }

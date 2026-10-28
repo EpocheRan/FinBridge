@@ -464,13 +464,22 @@ class RankMom20(CrossSectionStrategy):
 STRATEGY = RankMom20
 ```
 
-因子只声明、不计算：`F.mom / F.ma / F.atr / F.vol`；横截面变换用 `F.rank / F.zscore`。
-读取因子库长表用 `F.factor("momentum.ret")`（回测时 `--factor-source stored`）。
+因子只声明、不计算：`F.mom / F.ma / F.atr / F.vol` 逐 bar 现算；横截面变换用 `F.rank / F.zscore`。
+读取预计算因子用 `F.factor(id)`，可用 `materialization` 指定消费方式：
 
 ```python
 def factors(self):
-    return [F.factor("momentum.ret"), F.factor("technical.pct_chg")]
+    # auto：stored 优先，缺了且有 compute 就逐 bar 现算
+    return [
+        F.factor("momentum.ret"),
+        F.factor("technical.pct_chg", materialization="stored"),  # 必须读预计算
+        F.factor("momentum.ret", materialization="inline"),        # 强制逐 bar 现算
+    ]
 ```
+
+- `stored`：必须已预计算，缺数据启动报错
+- `inline`：不读库，逐 bar 现算（需有 compute）
+- `auto`：默认，stored 优先，缺失回退 inline
 
 `F.stored(...)` 仅保留为 legacy screener 宽表列兼容入口，新策略请用 `F.factor`。
 
@@ -924,6 +933,9 @@ python -m acquisition run
 python -m acquisition run --datasets ohlcv_1d,moneyflow,factors,screener
 python -m acquisition update --code 600519 --start 2024-01-01 --end 2026-10-27
 python -m acquisition update --code 600519 --start 2026-10-01 --end 2026-10-27 --datasets screener
+# 只预计算指定因子（其余不落库）
+python -m acquisition update --code 600519 --start 2026-10-01 --end 2026-10-27 \
+  --datasets factors --factor momentum.ret,technical.atr,technical.pct_chg
 ```
 
 > 概念板块没有历史列表/成分源，`dim` 只能做“当前列表投影”，存在幸存者偏差；
@@ -934,7 +946,7 @@ Screener 不依赖同步任务：批量 CLI、读路径和 inline worker 都能�
 
 ### 10.2 因子引擎
 
-当前 28 个因子：5 个价格因子 + 23 个 screener legacy 列，全部有 compute。
+当前 28 个因子：5 个价格因子 + 23 个 screener legacy 列，全部有 compute。每个因子带 `materialization` 标记（`stored` 必预计算 / `inline` 逐 bar 现算 / `auto` 默认），决定回测时读库还是现算。
 
 ```bash
 # 列出因子

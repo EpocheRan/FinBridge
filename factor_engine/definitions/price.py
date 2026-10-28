@@ -8,7 +8,7 @@ from typing import Callable
 import pandas as pd
 
 from factors.ops import atr_wilder, pct_change, realized_volatility
-from factors.spec import Dependency, FactorSpec, SourceSpec
+from factors.spec import Dependency, FactorSpec, Materialization, SourceSpec
 from factors.taxonomy import Category
 
 
@@ -59,6 +59,7 @@ PRICE_FACTORS: tuple[BuiltinFactor, ...] = (
             warmup=20,
             formula="pct_change(hfq_close, 20)",
             aliases=("mom20",),
+            materialization=Materialization.AUTO,
         ),
         compute=_momentum,
     ),
@@ -82,6 +83,7 @@ PRICE_FACTORS: tuple[BuiltinFactor, ...] = (
             warmup=5,
             formula="-pct_change(hfq_close, 5)",
             aliases=("rev5",),
+            materialization=Materialization.AUTO,
         ),
         compute=_reversal,
     ),
@@ -105,6 +107,7 @@ PRICE_FACTORS: tuple[BuiltinFactor, ...] = (
             warmup=14,
             formula="atr_wilder(hfq_high, hfq_low, hfq_close, 14)",
             aliases=("atr14",),
+            materialization=Materialization.AUTO,
         ),
         compute=_atr,
     ),
@@ -128,6 +131,7 @@ PRICE_FACTORS: tuple[BuiltinFactor, ...] = (
             warmup=20,
             formula="realized_volatility(pct_change(hfq_close,1), 20)",
             aliases=("vol20",),
+            materialization=Materialization.AUTO,
         ),
         compute=_volatility,
     ),
@@ -151,6 +155,7 @@ PRICE_FACTORS: tuple[BuiltinFactor, ...] = (
             warmup=0,
             formula="turnover",
             aliases=("turnover",),
+            materialization=Materialization.STORED,
         ),
         compute=_turnover,
     ),

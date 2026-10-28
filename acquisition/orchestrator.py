@@ -24,6 +24,7 @@ class Scope:
     codes: tuple[str, ...] | None = None
     boards: tuple[str, ...] | None = None
     datasets: tuple[str, ...] | None = None
+    factor_ids: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         if self.start > self.end:
@@ -32,6 +33,10 @@ class Scope:
             object.__setattr__(self, "codes", tuple(sorted({str(c) for c in self.codes})))
         if self.boards is not None:
             object.__setattr__(self, "boards", tuple(sorted({str(b) for b in self.boards})))
+        if self.factor_ids is not None:
+            object.__setattr__(
+                self, "factor_ids", tuple(sorted({str(f) for f in self.factor_ids}))
+            )
 
 
 #: 数据集依赖顺序

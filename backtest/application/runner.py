@@ -19,7 +19,9 @@ from backtest.application.run_id import compute_run_id
 from backtest.config import BacktestSettings
 from backtest.domain.errors import BacktestError, ConfigError
 from backtest.domain.models import BacktestResult, RunSpec
+from factor_engine.definitions import INLINE_COMPUTE_REGISTRY, register_all
 from factors import build_panel, required_warmup
+from factors.registry import resolve_id
 from strategies.base import BaseStrategy
 
 logger = logging.getLogger("Backtest.Runner")
@@ -32,6 +34,34 @@ def _engine_version() -> str:
         return version("lib-pybroker")
     except PackageNotFoundError:
         return "none"
+
+
+def _ensure_registry() -> None:
+    try:
+        register_all()
+    except Exception as exc:  # 注册失败不阻断回测（stored 读按因子 id 直查）
+        logger.warning("factor registry 注册失败: %s", exc)
+
+
+def _canonical_id(defn) -> str:
+    name = getattr(defn, "stored_column", None) or defn.name
+    try:
+        factor_id, _ = resolve_id(name)
+        return factor_id
+    except Exception:
+        return str(name)
+
+
+def _effective_mode(defn, global_source: str) -> str:
+    """因子级 materialization 与全局 factor_source 合成有效模式。"""
+    if getattr(defn, "source", "compute") != "stored":
+        return "inline"
+    materialization = getattr(defn, "materialization", "auto")
+    if global_source == "stored":
+        return "stored"
+    if global_source == "compute":
+        return "inline"
+    return materialization
 
 
 def _validate_supported(spec: RunSpec, factors, settings: BacktestSettings) -> None:
@@ -67,15 +97,14 @@ def _validate_supported(spec: RunSpec, factors, settings: BacktestSettings) -> N
     source = str(settings.factor_source or "auto").strip().lower()
     if source not in ("auto", "compute", "stored"):
         raise ConfigError(f"未知 factor_source: {source!r}")
-    stored_defs = [
-        item for item in factors if getattr(item, "source", "compute") == "stored"
+    compute_defs = [
+        item for item in factors if getattr(item, "source", "compute") != "stored"
     ]
-    if source == "stored" and not stored_defs:
+    if source == "stored" and compute_defs:
         raise ConfigError(
-            "factor_source=stored 需要策略声明 F.factor(factor_id)；当前因子均为 compute"
+            "factor_source=stored 只支持 F.factor(...) 预计算因子；"
+            "F.mom/F.ma/F.atr 等现算因子请用 auto 或 compute"
         )
-    if source == "compute" and stored_defs:
-        raise ConfigError("factor_source=compute 与策略中的 F.factor/F.stored 冲突")
 
 
 def _resolve_universe(strategy: BaseStrategy) -> tuple[str, ...]:
@@ -305,23 +334,9 @@ class BacktestRunner:
         data = self.data_source.load(
             spec.symbols, start, end, warmup=warmup, freq=freq
         )
-        stored_frame = None
-        stored_defs = [
-            item for item in factors if getattr(item, "source", "compute") == "stored"
-        ]
-        if stored_defs:
-            loader = getattr(self.data_source, "load_factors", None)
-            if loader is None:
-                raise ConfigError("当前数据源不支持 stored 因子（缺少 load_factors）")
-            factor_ids = [
-                getattr(item, "stored_column", None) or item.name for item in stored_defs
-            ]
-            load_start = pd.Timestamp(start).normalize() - pd.Timedelta(
-                days=max(0, warmup) * 2 + 10
-            )
-            stored_frame = loader(
-                spec.symbols, load_start.date(), end, factor_ids
-            )
+        stored_frame = self._build_stored_frame(
+            data, factors, spec, start, end, warmup
+        )
         panel = build_panel(data.frame, factors, start, end, stored=stored_frame)
         benchmark = None
         if spec.benchmark:
@@ -359,6 +374,122 @@ class BacktestRunner:
             spec.benchmark if benchmark is not None else "none",
         )
         return data, panel, run_id, benchmark, corporate_actions
+
+    def _build_stored_frame(self, data, factors, spec, start, end, warmup):
+        _ensure_registry()
+        stored_defs = [
+            item for item in factors if getattr(item, "source", "compute") == "stored"
+        ]
+        if not stored_defs:
+            return None
+
+        plan = [
+            {
+                "defn": defn,
+                "factor_id": _canonical_id(defn),
+                "mode": _effective_mode(defn, self.settings.factor_source),
+            }
+            for defn in stored_defs
+        ]
+
+        load_ids = sorted(
+            {item["factor_id"] for item in plan if item["mode"] in ("stored", "auto")}
+        )
+        stored_frame = None
+        if load_ids:
+            loader = getattr(self.data_source, "load_factors", None)
+            if loader is None:
+                raise ConfigError("当前数据源不支持 stored 因子（缺少 load_factors）")
+            load_start = pd.Timestamp(start).normalize() - pd.Timedelta(
+                days=max(0, warmup) * 2 + 10
+            )
+            stored_frame = loader(spec.symbols, load_start.date(), end, load_ids)
+
+        covered: set[tuple[str, str]] = set()
+        if stored_frame is not None and not stored_frame.empty:
+            cols = {"code", "factor_id"}
+            if cols <= set(stored_frame.columns):
+                covered = {
+                    (str(row.code), str(row.factor_id))
+                    for row in stored_frame[["code", "factor_id"]]
+                    .drop_duplicates()
+                    .itertuples(index=False)
+                }
+
+        codes = tuple(sorted({str(item) for item in spec.symbols}))
+        extra_rows: list[dict[str, Any]] = []
+        for item in plan:
+            factor_id = item["factor_id"]
+            missing = [code for code in codes if (code, factor_id) not in covered]
+            if item["mode"] == "stored":
+                if missing:
+                    raise ConfigError(
+                        f"因子 {factor_id} 标记 STORED，但 {start}..{end} 缺落库数据 "
+                        f"（codes={missing}）。请先运行："
+                        f"python -m acquisition update --code {missing[0]} "
+                        f"--start {start} --end {end} --datasets factors --factor {factor_id}"
+                    )
+            elif item["mode"] == "inline":
+                extra_rows.extend(
+                    self._compute_inline(data, factor_id, codes, start)
+                )
+            else:  # auto
+                if missing:
+                    if factor_id in INLINE_COMPUTE_REGISTRY:
+                        logger.warning(
+                            "因子 %s stored 缺失，回退 inline: %s", factor_id, missing
+                        )
+                        extra_rows.extend(
+                            self._compute_inline(data, factor_id, missing, start)
+                        )
+                    else:
+                        raise ConfigError(
+                            f"因子 {factor_id} 标记 AUTO 且无 inline compute，"
+                            f"但 {start}..{end} 缺落库数据（codes={missing}）"
+                        )
+
+        if not extra_rows:
+            return stored_frame
+        extra = pd.DataFrame(extra_rows)
+        if stored_frame is None or stored_frame.empty:
+            return extra
+        return pd.concat([stored_frame, extra], ignore_index=True)
+
+    def _compute_inline(self, data, factor_id: str, codes, start) -> list[dict[str, Any]]:
+        builtin = INLINE_COMPUTE_REGISTRY.get(factor_id)
+        if builtin is None:
+            raise ConfigError(
+                f"因子 {factor_id} 无 inline compute 实现（materialization=inline 要求可现算）"
+            )
+        start_ts = pd.Timestamp(start).normalize()
+        rows: list[dict[str, Any]] = []
+        frame = data.frame
+        for code in codes:
+            group = frame[frame["symbol"].astype(str) == code].sort_values("date").copy()
+            if group.empty:
+                continue
+            adj = pd.to_numeric(group.get("adj_factor"), errors="coerce").fillna(1.0)
+            if "hfq_close" not in group.columns:
+                group["hfq_close"] = group["close"] * adj
+            group["hfq_high"] = group["high"] * adj
+            group["hfq_low"] = group["low"] * adj
+            group["hfq_open"] = group["open"] * adj
+            values = builtin.compute(group)
+            for date_value, value in zip(group["date"], values):
+                if pd.isna(value):
+                    continue
+                stamp = pd.Timestamp(date_value).normalize()
+                if stamp < start_ts:
+                    continue
+                rows.append(
+                    {
+                        "ts": stamp,
+                        "code": code,
+                        "factor_id": factor_id,
+                        "value": float(value),
+                    }
+                )
+        return rows
 
     def _run_engine(self, request, run_id: str, spec: RunSpec) -> BacktestResult:
         result = self.engine.run(request)

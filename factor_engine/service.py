@@ -12,7 +12,7 @@ import pandas as pd
 
 from data_interface.common.config import get_config
 from data_interface.common.timeutil import now_cn
-from factors.registry import register_factor, get as get_spec
+from factors.registry import get as get_spec
 from factors.spec import FactorSpec
 
 from .data import PriceData
@@ -22,6 +22,7 @@ from .definitions import (
     PRICE_FACTORS,
     LegacyComputer,
     builtin_map,
+    register_all,
 )
 from .store import FactorStore
 from .versions import price_source_version
@@ -72,17 +73,16 @@ class FactorEngineService:
         self._registry_synced = True
 
     def register_builtins(self) -> list[str]:
-        registered: list[str] = []
-        for item in PRICE_FACTORS:
-            register_factor(item.spec, replace=True)
-            registered.append(item.spec.factor_id)
-        for spec in LEGACY_SPECS:
-            register_factor(spec, replace=True)
-            registered.append(spec.factor_id)
-        return sorted(registered)
+        return register_all()
 
     def list_factors(self) -> list[FactorSpec]:
         return [item.spec for item in PRICE_FACTORS] + list(LEGACY_SPECS)
+
+    def default_precompute_ids(self) -> list[str]:
+        """默认预计算集合（STORED 必算 + AUTO 默认也算）。"""
+        from factors.registry import default_precompute_ids
+
+        return default_precompute_ids()
 
     # ------------------------------------------------------------------ build
     def build(

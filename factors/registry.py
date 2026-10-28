@@ -8,7 +8,7 @@ import logging
 from collections import deque
 from typing import Any, Iterable
 
-from .spec import FactorSpec
+from .spec import FactorSpec, Materialization
 from .taxonomy import Category, normalize_category
 
 logger = logging.getLogger("Factors.Registry")
@@ -196,6 +196,15 @@ def aliases_of(factor_id: str) -> list[str]:
 
 def registered_factor_ids() -> list[str]:
     return sorted(FACTOR_REGISTRY)
+
+
+def default_precompute_ids() -> list[str]:
+    """默认预计算集合：STORED 必算 + AUTO 默认也算。"""
+    return sorted(
+        factor_id
+        for factor_id, spec in FACTOR_REGISTRY.items()
+        if spec.materialization in (Materialization.STORED, Materialization.AUTO)
+    )
 
 
 def register_many(specs: Iterable[FactorSpec], *, replace: bool = False) -> None:

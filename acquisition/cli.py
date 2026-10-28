@@ -23,6 +23,7 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--start", default="2020-01-01")
     run.add_argument("--end", default=None)
     run.add_argument("--datasets", default=None, help="逗号分隔，默认全部")
+    run.add_argument("--factor", default=None, help="逗号分隔 factor_id，仅预计算这些因子")
 
     update = sub.add_parser("update", help="单代码/板块 + 日期段")
     update.add_argument("--code", default=None)
@@ -30,6 +31,7 @@ def main(argv: list[str] | None = None) -> int:
     update.add_argument("--start", required=True)
     update.add_argument("--end", required=True)
     update.add_argument("--datasets", default=None)
+    update.add_argument("--factor", default=None, help="逗号分隔 factor_id，仅预计算这些因子")
 
     sub.add_parser("status", help="查看各数据集游标")
 
@@ -50,6 +52,7 @@ def main(argv: list[str] | None = None) -> int:
         codes=codes,
         boards=boards,
         datasets=_datasets(args.datasets),
+        factor_ids=_datasets(getattr(args, "factor", None)),
     )
     result = build_orchestrator().run(scope)
     print(json.dumps(result, ensure_ascii=False, default=str))

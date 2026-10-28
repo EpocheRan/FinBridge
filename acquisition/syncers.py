@@ -72,8 +72,9 @@ def factors(scope: Scope) -> dict:
     from factor_engine.service import FactorEngineService
 
     service = FactorEngineService()
+    ids = list(scope.factor_ids) if scope.factor_ids else service.default_precompute_ids()
     return service.build(
-        None,
+        ids,
         scope.start,
         scope.end,
         list(scope.codes) if scope.codes else None,

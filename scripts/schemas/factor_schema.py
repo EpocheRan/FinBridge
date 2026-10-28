@@ -40,6 +40,7 @@ REGISTRY_COLUMNS = [
     "warmup",
     "formula",
     "enabled",
+    "materialization",
 ]
 
 ALIAS_COLUMNS = [
@@ -148,7 +149,8 @@ def _ddl() -> list[str]:
             dependencies STRING,
             warmup INT,
             formula STRING,
-            enabled BOOLEAN
+            enabled BOOLEAN,
+            materialization SYMBOL
         ) TIMESTAMP(updated_at) PARTITION BY YEAR WAL
         DEDUP UPSERT KEYS(updated_at, factor_id)
         """,
