@@ -8,9 +8,13 @@ from .audit import compare_frames
 from .hooks import DATASET_FACTORS, FactorHooks
 from .service import FactorEngineService
 from .store import FactorStore
+from .wide import DAILY_COLUMNS, DailyFactorConfig, FactorEngine
 
 __all__ = [
+    "DAILY_COLUMNS",
     "DATASET_FACTORS",
+    "DailyFactorConfig",
+    "FactorEngine",
     "FactorEngineService",
     "FactorHooks",
     "FactorStore",

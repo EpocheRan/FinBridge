@@ -51,3 +51,16 @@ def test_factors_has_no_forbidden_imports():
         if roots:
             violations.append(f"{rel}: {sorted(roots)}")
     assert not violations, "factors 出现反向依赖:\n" + "\n".join(violations)
+
+
+ENGINE_FORBIDDEN = {"screener", "backtest", "indicator", "acquisition"}
+
+
+def test_factor_engine_does_not_import_screener_or_acquisition():
+    violations: list[str] = []
+    for path in sorted((ROOT / "factor_engine").rglob("*.py")):
+        rel = path.relative_to(ROOT).as_posix()
+        roots = _import_roots(path) & ENGINE_FORBIDDEN
+        if roots:
+            violations.append(f"{rel}: {sorted(roots)}")
+    assert not violations, "factor_engine 出现反向依赖:\n" + "\n".join(violations)
