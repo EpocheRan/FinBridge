@@ -1,6 +1,7 @@
-"""时序因子算子。
+"""因子算子包：纯数学 + 序列计算。
 
-只做取列/清理/调用，公式复用 screener.domain.factors 与 indicator。
+依赖方向：``factors.ops`` 只依赖 ``factors.library`` / ``factors.technical``，
+不得 import screener / indicator / data_interface / backtest。
 """
 
 from __future__ import annotations
@@ -8,11 +9,28 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from indicator.ATR import atr_wilder
-from screener.domain.factors import pct_change, realized_volatility, rolling_mean
-
-from .errors import FactorError
-from .library import CUSTOM_FACTORS, FactorDef
+from ..errors import FactorError
+from ..library import CUSTOM_FACTORS, FactorDef
+from ..technical.atr import atr_wilder
+from .ts import (
+    _clean,
+    _series,
+    atr_pct,
+    gap_pct,
+    intraday_pct,
+    market_cap,
+    pct_change,
+    prior_mean,
+    range_pct,
+    realized_volatility,
+    rolling_beta,
+    rolling_corr,
+    rolling_high,
+    rolling_low,
+    rolling_mean,
+    rolling_std,
+    volume_stats,
+)
 
 
 def _adj_frame(frame: pd.DataFrame) -> pd.DataFrame:
@@ -57,3 +75,25 @@ def compute_series(defn: FactorDef, frame: pd.DataFrame) -> pd.Series:
 
 def clean_series(series: pd.Series) -> pd.Series:
     return series.replace([np.inf, -np.inf], np.nan).astype("float64")
+
+
+__all__ = [
+    "atr_pct",
+    "atr_wilder",
+    "clean_series",
+    "compute_series",
+    "gap_pct",
+    "intraday_pct",
+    "market_cap",
+    "pct_change",
+    "prior_mean",
+    "range_pct",
+    "realized_volatility",
+    "rolling_beta",
+    "rolling_corr",
+    "rolling_high",
+    "rolling_low",
+    "rolling_mean",
+    "rolling_std",
+    "volume_stats",
+]

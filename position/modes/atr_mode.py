@@ -2,8 +2,8 @@ from .base import PositionModeBase
 import logging
 import pandas as pd
 
-# Import directly from indicator module
-from indicator import ATR, IndicatorEngine
+# 指标实现已并入 factors 包；indicator 仅保留兼容 shim
+from factors import ATR, IndicatorEngine
 
 logger = logging.getLogger("ATRMode")
 

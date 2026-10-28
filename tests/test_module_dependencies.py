@@ -25,8 +25,8 @@ FORBIDDEN_ROOTS = {
     "psycopg2",
 }
 
-#: M1 迁移前允许的遗留文件
-LEGACY_ALLOWLIST = {"factors/ops.py"}
+#: M1 起不再有遗留例外
+LEGACY_ALLOWLIST: set[str] = set()
 
 
 def _import_roots(path: Path) -> set[str]:
