@@ -17,11 +17,9 @@ from screener.domain.suspension import Suspension, SuspensionStatus
 from screener.infrastructure.mappers import (
     BASELINE_DB_COLUMNS,
     BUILD_STATE_COLUMNS,
-    DAILY_DB_COLUMNS,
     SUSPENSION_COLUMNS,
     baseline_to_rows,
     build_state_to_row,
-    daily_to_rows,
     row_to_build_state,
     row_to_suspension,
     suspension_to_row,
@@ -132,12 +130,10 @@ class QuestDBFactorRepository:
             time.sleep(0.05)
 
     def upsert_daily(self, frame: pd.DataFrame) -> int:
-        rows = daily_to_rows(frame)
-        if not rows:
-            return 0
-        columns = ", ".join(f'"{column}"' for column in DAILY_DB_COLUMNS)
-        sql = f'INSERT INTO "factor_daily_wide" ({columns}) VALUES %s'
-        return self.db.execute_values(sql, rows, page_size=500)
+        # 写实现归 factor_engine；screener 只做构建编排
+        from factor_engine.wide_store import upsert_wide
+
+        return upsert_wide(self.db, frame)
 
     # ------------------------------------------------------------------ baseline
     def latest_baseline_version(self, code: str, freq: str) -> date | None:

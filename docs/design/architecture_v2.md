@@ -312,7 +312,33 @@ M6 重建 latest / panel 缓存
 - 分钟线：`intraday_baseline` **保留专用表**，暂不并入 `factor_value_intraday`；待有稳定分钟线数据源再调整。
 - 旧表迁移后**直接 DROP，不归档观察**。
 - MCP 启动**不自动** `acquisition.run`，默认手动；`acquisition.auto_run_on_start=true` 可选。
-- `scheduled_tasks` **改名 `acquisition`**。
+- `scheduled_tasks` 入口改名为 `acquisition`；旧模块保留为内部适配器，后续物理删除。
 - `factor_panel_cache` 延后：**P2 先做 latest**，回测出现瓶颈再加。
 
-（无未决项）
+---
+
+## 11. 实施状态（2026-10-28）
+
+| 里程碑 | 状态 | 提交 |
+|---|---|---|
+| M0 新表/registry/alias/协议 | ✅ | `f6c9ce1` |
+| M1 factors 纯库化 + indicator 合并 | ✅ | `295d2df` |
+| M2 factor_engine 计算/存储/latest/钩子 | ✅ | `5dd4d70` |
+| M3 screener_daily → factor_daily_wide 迁移 | ✅（3,522,492 行） | `5a89617` |
+| M4 acquisition 编排/Scope/进度/MCP | ✅ | `bb8baf5` / `754cb22` |
+| M5 stored 回测 + MCP + 文档 | ✅ | `cf5153b` |
+| screener 56 列计算迁入 factor_engine.wide | ✅ | `4d993e2` |
+| factor_daily_wide 写路径归 factor_engine | ✅ | 见最新提交 |
+| scheduled_tasks 完全退役 | ⏳ 保留为内部适配器；`scheduled_sync_a_shares` 标 legacy | — |
+
+已知剩余：`screener` 仍负责构建编排（读/写调度），但不持有因子计算实现；
+`scheduled_tasks` 仍被 acquisition 复用，尚未物理删除。
+
+---
+
+## 12. 后续清理
+
+- 把 `screener/application/build_orchestrator.py` 的写调度改为 `factor_engine.ensure_wide()`；
+- `scheduled_tasks` 的同步方法迁到 `acquisition/datasets/*` 后删除目录；
+- 补迁移/回滚 runbook 与模块依赖图到 README。
+

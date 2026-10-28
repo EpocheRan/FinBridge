@@ -800,7 +800,7 @@ python scripts/migrate_database.py --apply --truncate-ohlc   # 清空旧前复�
 
 | 工具 | 用途 |
 |---|---|
-| `scheduled_sync_a_shares` | 分批拉日线/财务/分档/概念（`dataset=daily\|financial\|moneyflow\|concept_*\|all`） |
+| `scheduled_sync_a_shares` | legacy：分批同步仍可用；新入口请用 `acquisition_run` |
 | `scheduled_task_status` | 查看游标、进度、待补日期 |
 
 ### 9.7 分档与概念
