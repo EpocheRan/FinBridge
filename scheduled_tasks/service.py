@@ -1041,6 +1041,7 @@ class AShareSyncService:
         max_boards: int | None = None,
         cursor: str | None = None,
         reset: bool = False,
+        board_codes: Sequence[str] | None = None,
     ) -> dict[str, Any]:
         start = str(start_date or (now_cn().date() - timedelta(days=30)))[:10]
         end = str(end_date or today_str())[:10]
@@ -1051,6 +1052,7 @@ class AShareSyncService:
             end,
             max_boards=max_boards or 50,
             cursor=current_cursor,
+            board_codes=board_codes,
         )
         self.state.save(
             TASK_NAME,
@@ -1072,6 +1074,7 @@ class AShareSyncService:
         cursor: str | None = None,
         reset: bool = False,
         as_of: str | None = None,
+        board_codes: Sequence[str] | None = None,
     ) -> dict[str, Any]:
         previous = None if reset else self.state.get(TASK_NAME, CONCEPT_MEMBER_STATE)
         current_cursor = cursor or (previous or {}).get("cursor")
@@ -1079,6 +1082,7 @@ class AShareSyncService:
             max_boards=max_boards,
             cursor=current_cursor,
             as_of=as_of,
+            board_codes=board_codes,
         )
         self.state.save(
             TASK_NAME,
