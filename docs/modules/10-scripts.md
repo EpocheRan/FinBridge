@@ -41,6 +41,8 @@
 | `backfill_disclosure.py` | 披露日历与公告 | `python scripts/backfill_disclosure.py` |
 | `backfill_moneyflow.py` | 资金流 | `python scripts/backfill_moneyflow.py` |
 | `backfill_factors.py` | **财务因子物化**（STORED） | `--codes 120 --start 2024-01-01 --chunk 4` |
+| `backfill_history.py` | **历史数据补齐（分阶段）** | 见下表 |
+| `compact-docker-vhdx.ps1` | 压缩 Docker 虚拟磁盘 | 见 §1.3.1 |
 | `factor_report.py` | 单因子 HTML 报告 | `--factor momentum.ret_21d --pool 200` |
 | `factor_scorecard.py` | **全量评级 + 评分卡入库** | `--source price --pool 200 --render` |
 | `calibrate_directions.py` | 用实测 IC 校准方向 | `--min-abs-ic 0.02 --apply` |
@@ -74,6 +76,43 @@ backfill_*.py  →  acquisition/data_interface  →  QuestDB
 factor_*.py    →  factors/research/factor_engine  →  output/factor_reports + factor_scorecard
 research_*.py  →  只读 QuestDB  →  output/research/*.csv
 ```
+
+
+### 1.3.2 历史数据补齐（`backfill_history.py`）
+
+按阶段补齐历史数据，每阶段独立、可中断、幂等重跑。
+
+| 阶段 | 内容 | 数据量 | 耗时 |
+|---|---|---|---|
+| `p0-codefix` | 修 5 只与指数同码的个股（000001/000016/000688/000852/000905） | 3 万行 | 1 分钟 |
+| `p0-daily` | 按交易日补全市场日线（`daily(trade_date=)` 一次拿全市场） | 379 万行 | ~45 分钟 |
+| `p1-delisted` | 退市股历史行情 | 20 万行 | 15 分钟 |
+| `p1-index` | 历史指数成分（`index_weight` 按月切块） | 25.6 万行 | 10 分钟 |
+| `p2-structure` | 龙虎榜/两融/大宗（按日） | 600 万行 | ~60 分钟 |
+| `p2-periodic` | 解禁/回购/股东户数（按月分页） | 86 万行 | 5 分钟 |
+| `p3-financial` | 财务三表 + 指标（按代码，2010 起） | 待测 | ~6 小时 |
+
+```bash
+python scripts/backfill_history.py --phase p0-codefix
+python scripts/backfill_history.py --phase p0-daily --start 2019-01-01 --end 2022-10-09
+python scripts/backfill_history.py --phase p1-delisted
+python scripts/backfill_history.py --phase p1-index
+python scripts/backfill_history.py --phase p2-structure --start 2019-01-01 --end 2026-10-29
+python scripts/backfill_history.py --phase p2-periodic --start 2019-01-01 --end 2026-10-29
+python scripts/backfill_history.py --phase p3-financial --start-year 2010
+```
+
+**实现要点与坑**：
+
+1. **按日拉取**比按代码快 5 倍：`daily(trade_date=...)` 一次返回全市场 4,700 行；
+2. **单位换算**：Tushare `vol`（手）×100 → 股，`amount`（千元）×1000 → 元；
+3. **DDL 响应无 `dataset` 字段**，REST 解析要 `.get("dataset") or []`；
+4. **`_native` 不能把普通字符串当日期解析**：`'000001'` 会被 pandas 解析成 2000-01-01，
+   导致 `TIMESTAMP → SYMBOL` 类型错误；
+5. **退市股 volume 常为 NaN**，QuestDB 的 LONG 列拒绝 NaN，写前要 `fillna(0).astype(int64)`；
+6. **区间类接口单次上限 6,000 行**，解禁/回购/股东户数必须按月分页。
+
+补齐后的数据覆盖见 [../data/coverage.md](../data/coverage.md)。
 
 ## 2. 核心用法与注意事项
 
