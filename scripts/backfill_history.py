@@ -630,9 +630,17 @@ def phase_financial(api: _Api, args) -> int:
     from data_interface.financial.service import FinancialDataService
 
     service = FinancialDataService()
-    rows = _sql(
-        "select distinct code from ohlcv_1d where market='MLCN' order by code"
-    )
+    # 只补「有足够日线」的代码：长期停牌/退市前的空壳没有报表价值
+    min_days = int(getattr(args, "min_days", 0) or 0)
+    if min_days > 0:
+        rows = _sql(
+            "select code from (select code, count() n from ohlcv_1d where market='MLCN' "
+            "group by code) where n >= " + str(min_days) + " order by code"
+        )
+    else:
+        rows = _sql(
+            "select distinct code from ohlcv_1d where market='MLCN' order by code"
+        )
     codes = [str(r[0]) for r in rows]
     logger.info("P3 财务：%s 只，起始年 %s", len(codes), args.start_year)
 
@@ -643,9 +651,14 @@ def phase_financial(api: _Api, args) -> int:
                        "where period_end < '2015-01-01'") or [])
     }
     if have_old:
-        before = len(codes)
         codes = [c for c in codes if c not in have_old]
         logger.info("  已有 2015 前报表 %s 只，跳过；剩余 %s 只", len(have_old), len(codes))
+
+    shards = max(1, int(getattr(args, "shards", 1)))
+    shard = int(getattr(args, "shard", 0))
+    if shards > 1:
+        codes = [c for i, c in enumerate(codes) if i % shards == shard]
+        logger.info("  分片 %s/%s：本片 %s 只", shard + 1, shards, len(codes))
 
     done = 0
     failed = 0
@@ -770,6 +783,9 @@ def main() -> int:
                         help="当日已有行数达到该值则跳过")
     parser.add_argument("--start-year", type=int, default=2010)
     parser.add_argument("--sleep", type=float, default=0.12)
+    parser.add_argument("--min-days", type=int, default=0, help="日线行数下限（过滤空壳）")
+    parser.add_argument("--shard", type=int, default=0, help="分片序号（0 起）")
+    parser.add_argument("--shards", type=int, default=1, help="分片总数")
     args = parser.parse_args()
 
     logging.basicConfig(

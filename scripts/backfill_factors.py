@@ -57,6 +57,8 @@ def main() -> int:
     parser.add_argument("--start", default="2025-01-01")
     parser.add_argument("--end", default=None)
     parser.add_argument("--all", action="store_true", help="回填全部 STORED 因子（含既有 15 个成长/质量）")
+    parser.add_argument("--skip-done", action="store_true",
+                        help="跳过已有 2019 年财务因子的代码（续跑）")
     parser.add_argument("--chunk", type=int, default=4, help="每批代码数（控制内存）")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
@@ -68,13 +70,27 @@ def main() -> int:
     register_all()
     end = args.end or today_str()
 
-    # 用库内最新交易日取样，避免今天无行情时选出 0 只
-    latest = _query("select max(ts) from ohlcv_1d where market='MLCN'")[0][0]
+    # 用「覆盖足够多股票」的最新交易日取样：补数时可能给个别股票写入未来日期，
+    # 直接取 max(ts) 会选到只有几只股票的那天。
+    latest = _query(
+        "select ts from (select ts, count() c from ohlcv_1d where market='MLCN' group by ts) "
+        "where c > 3000 order by ts desc limit 1"
+    )[0][0]
     rows = _query(
         f"""select code from ohlcv_1d where ts = '{latest}' and market='MLCN'
             order by amount desc limit {int(args.codes * 1.5)}"""
     )
     codes = [str(r[0]) for r in rows if str(r[0])[:2] in ("60", "00", "30", "68")][: args.codes]
+
+    if getattr(args, "skip_done", False):
+        done_rows = _query(
+            "select distinct code from factor_value_daily "
+            "where factor_id='quality.roe_ttm' and ts between '2019-01-01' and '2019-03-01'"
+        )
+        done = {str(r[0]) for r in done_rows}
+        before = len(codes)
+        codes = [c for c in codes if c not in done]
+        logger.info("跳过已完成 %s 只，剩余 %s 只", before - len(codes), len(codes))
     logger.info("样本 %s 只，区间 %s ~ %s", len(codes), args.start, end)
 
     ids = [spec.factor_id for spec in FIN_EXT_SPECS]
@@ -88,7 +104,18 @@ def main() -> int:
     started = time.time()
     for i in range(0, len(codes), chunk):
         part = codes[i : i + chunk]
-        result = service.build(ids, args.start, end, part)
+        result = None
+        for attempt in range(3):
+            try:
+                result = service.build(ids, args.start, end, part)
+                break
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("批次 %s 失败（第 %s 次）：%s", i // chunk + 1, attempt + 1,
+                               str(exc)[:90])
+                time.sleep(5 * (attempt + 1))
+        if result is None:
+            logger.error("批次 %s 放弃（%s 只）", i // chunk + 1, len(part))
+            continue
         written = int(result.get("rows_written") or 0)
         total_rows += written
         logger.info(
