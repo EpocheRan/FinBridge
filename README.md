@@ -16,6 +16,8 @@
 - [10. 整合同步](#10-整合同步acquisition)
 - [11. 常见问题](#11-常见问题)
 - [12. 开发约定与测试](#12-开发约定与测试)
+- [13. 因子研究报告与评分卡](#13-因子研究报告与评分卡)
+- [14. 模块文档](#14-模块文档)
 
 ---
 
@@ -89,15 +91,16 @@ shared           data_interface.common / scripts.schemas
 | 数据接口 | `data_interface/` | `common/`（配置、QuestDB、交易日历、限流、代码/板块）、`market/`（loader/fetcher/adjust/adj_factors/sources）、`financial/`（service/repository/normalizer/metrics/fields/sources）、`moneyflow/`（分档 service/repository/sources）、`concept/`（板块/成分/分类 service/repository/sources）、`api/`（runtime 单例、MCP tools） | `data_interface.api.*` |
 | 因子筛股 | `screener/` | domain（模型/字段/停牌）、application（ScreenerService/BackfillService/BaselineService/ports）、infrastructure（QuestDB 仓储/补齐/队列）、interface；**构建编排已迁到 acquisition** | `screener.interface.api`、`python -m screener` |
 | 持仓 | `position/` | `manager`（组合/持仓/交易/盈亏）、`schema`、`modes/`（ATR、GRID）、`llm_tool` | MCP `pm_*` 工具 |
-| 因子库 | `factors/` | `library`（`F` 命名空间/`FactorDef`/注册表）、`ops/`（时序算子）、`cross_section`（rank/zscore）、`panel`（date×symbol 面板）、`stored`（legacy 列元数据）、`technical`（ATR canonical） | `from factors import F` |
-| 因子引擎 | `factor_engine/` | `service`（计算/写库/ensure）、`store`（因子表）、`hooks`（入库事件）、`audit`、`wide`（56 列宽表）、`definitions/`（5 价格 + 23 legacy + 15 基本面）、`valuation`（13 估值 + PEG）、CLI | `python -m factor_engine` |
+| 因子库 | `factors/` | `library`（`F` 命名空间/`FactorDef`/注册表）、`spec`（`FactorSpec` 元数据）、`ops/ts`（时序算子）、`ops/price_factors`（**85 个价量因子**）、`cross_section`（rank/zscore/winsorize/composite/neutralize）、`panel`（date×symbol 面板）、`naming`（自研命名）、`stored`（screener 列元数据）、`technical`（ATR canonical） | `from factors import F` |
+| 因子引擎 | `factor_engine/` | `service`（计算/分批写库/ensure）、`store`（因子表）、`hooks`、`audit`、`wide`（56 列宽表）、`fundamental`（15 成长质量）、**`fin_ext`（61 财务因子）**、`valuation`（13 估值 + PEG）、`definitions/`（内置 + legacy + **`price_factors` 85 价量 spec**）、CLI | `python -m factor_engine` |
 | 整合同步 | `acquisition/` | `Scope`（全市场/单代码/板块 × 日期段）、`Orchestrator`、`datasets/`（daily/financial/benchmark/screener/moneyflow/concept）、`build_orchestrator`、进度条、CLI/MCP | `python -m acquisition run/update/status` |
 | 策略 | `strategies/` | `base`（单股/横截面基类）、`context`（只读上下文 + 订单意图）、`universe`、`weighting`、`models/`（一文件一策略） | `python -m backtest list/validate/run` |
 | 回测 | `backtest/` | `domain`（RunSpec/BacktestResult/报告）、`application`（runner/loader/cross_section/rebalance/run_id/ports/registry）、`infrastructure`（data/engine/execution/output）、`config`/`bootstrap`/`cli`；PyBroker 为 optional extra | `python -m backtest` |
+| 研究报告 | `research/` | `report/metrics`（IC/分层/衰减/可成交性）、`rating`（100 分制 + 否决 + 四象限）、`render`（内联 SVG 的 HTML）、`charts`、`runner`、`scorecard`（评级入库） | `python scripts/factor_report.py`、`python scripts/factor_scorecard.py` |
 | 技术指标 | `factors/technical/` | 纯 pandas/numpy 的 ATR canonical 实现 | `from factors import ATR` |
 | 建表/迁移 | `scripts/` | `init_database.py`、`migrate_database.py`、`migrate_factors.py`、`schemas/`（market/financial/moneyflow/concept/factor/position/screener/task） | 手工执行 |
 | 测试 | `tests/` | 默认离线、不依赖 DB；联网/DB 用例用 `@require_live` + `RUN_LIVE_TESTS=1` | `pytest` |
-| 文档 | `docs/` | 架构设计、因子库、回测/筛股说明、变更备注 | 见 `docs/` |
+| 文档 | `docs/` | `modules/`（**11 篇模块文档**，固定「架构与依赖 + 核心类/方法」两节）、`design/`、`backtest/`、`screener/`、`output_layout.md` | 见 `docs/README.md` |
 | MCP 入口 | `MCPserver.py` | 注册工具、启动 FastMCP（http/sse/stdio） | `python MCPserver.py` |
 
 > 回测的策略/因子写法、设计细节与当前限制见 [`docs/backtest/README.md`](docs/backtest/README.md) 与 [`docs/backtest/ARCHITECTURE.md`](docs/backtest/ARCHITECTURE.md)。
@@ -665,17 +668,25 @@ FinBridge/
 ├── position/                       # 组合/持仓/交易
 │   ├── manager.py / schema.py / llm_tool.py
 │   └── modes/                      # ATR / GRID
-├── factors/                        # 因子库
-│   ├── library.py                  # F 命名空间 / FactorDef / 注册表
-│   ├── ops/                        # 时序算子（ts.py + technical.py）
+├── factors/                        # 因子库（纯计算，不依赖 DB）
+│   ├── library.py                  # F 命名空间 / FactorDef / @factor
+│   ├── spec.py / registry.py       # FactorSpec 元数据 / 全局注册表与拓扑排序
+│   ├── ops/
+│   │   ├── ts.py                   # 时序算子
+│   │   └── price_factors.py        # 85 个价量因子（liquidity/momentum/reversal/risk/size）
+│   ├── cross_section.py            # rank / zscore / winsorize / composite / neutralize / nl_size
+│   ├── panel.py                    # 长表 -> date×symbol 面板（stored + 派生算子）
+│   ├── naming.py                   # 自研命名：category.semantic[_window]
+│   ├── taxonomy.py                 # Category 枚举 + 子维度白名单
 │   ├── technical/                  # ATR canonical
-│   ├── cross_section.py            # rank / zscore / winsorize
-│   ├── panel.py                    # 长表 -> date×symbol 面板（含 stored）
-│   └── stored.py                   # legacy screener 列元数据
+│   └── stored.py                   # screener 列元数据
 ├── factor_engine/                  # 因子计算/存储/缓存/对账
 │   ├── service.py / store.py / data.py / hooks.py / audit.py
 │   ├── wide.py / wide_store.py     # 56 列宽表计算与写路径
-│   └── definitions/                # price.py（5）+ legacy.py（23）
+│   ├── fundamental.py              # 15 个成长/质量因子（PIT + TTM）
+│   ├── fin_ext.py                  # 61 个财务因子（Quality 53 + Value 8）
+│   ├── valuation.py                # 13 个估值因子
+│   └── definitions/                # price.py（内置）+ legacy.py（23）+ price_factors.py（85 spec）
 ├── strategies/                     # 策略 API
 │   ├── base.py / context.py / universe.py / weighting.py
 │   └── models/                     # 一文件一策略
@@ -689,15 +700,29 @@ FinBridge/
 │   │   ├── execution/              # a_share / ledger
 │   │   └── output/                 # console / csv
 │   ├── config.py / bootstrap.py / cli.py / __main__.py
+├── research/                       # 因子研究报告与评分卡
+│   └── report/
+│       ├── metrics.py              # IC/ICIR/NW-t/分层/衰减/可成交性检验
+│       ├── rating.py               # 100 分制 + 一票否决 + 时间×空间象限
+│       ├── render.py / charts.py   # 内联 SVG 的 HTML 报告
+│       ├── runner.py               # 单因子端到端
+│       └── scorecard.py            # factor_scorecard 建表与写入
 ├── scripts/
 │   ├── init_database.py            # 建表
 │   ├── migrate_database.py         # 存量库迁移
 │   ├── migrate_factors.py          # 旧 screener 表迁移
+│   ├── backfill_factors.py         # 财务因子物化（STORED）
+│   ├── factor_report.py            # 单因子报告
+│   ├── factor_scorecard.py         # 全量评级 + 评分卡入库
+│   ├── calibrate_directions.py     # 用实测 IC 校准方向
 │   └── schemas/                    # market/financial/moneyflow/concept/factor/...
 ├── docs/                           # 所有设计/模块/变更文档
-│   ├── design/                     # architecture_v2 / factor_library
+│   ├── README.md                   # 索引：架构图 + 依赖规则 + AI 阅读路径
+│   ├── modules/                    # 11 篇模块文档（架构与依赖 + 核心类/方法）
+│   ├── design/                     # architecture_v2 / factor_library / materialization
 │   ├── backtest/                   # README / ARCHITECTURE
-│   └── screener/                   # README
+│   ├── screener/                   # README
+│   └── output_layout.md            # output 目录约定
 └── tests/                          # 离线单测（默认不联网、不依赖 DB）
 ```
 
@@ -745,6 +770,8 @@ FinBridge/
 | `fin_sync_state` | `updated_at` | `(updated_at, code, dataset)` | 同步状态 |
 | `fin_raw_report` | `fetched_at` | `(fetched_at, report_id, source)` | 原始报文 |
 | `dim_fin_field` / `dim_board` / `map_stock_board` | 见 DDL | — | 字段字典与板块 |
+| `fin_disclosure_calendar` | `report_date` | `(report_date, code)` | 财报披露日历（PIT） |
+| `announcement` | `announce_time` | `(announce_time, code, ann_id)` | 公告列表 |
 
 ### 8.4 Screener / 因子表
 
@@ -758,6 +785,7 @@ FinBridge/
 | `factor_alias` | `updated_at` | YEAR | `(updated_at, alias)` | legacy/简写别名 |
 | `factor_build_state` | `updated_at` | YEAR | `(updated_at, job_id)` | 因子构建/重试状态 |
 | `factor_audit_state` | `updated_at` | YEAR | `(updated_at, audit_id)` | 投影/增量对账 |
+| `factor_scorecard` | `ts` | MONTH | `(ts, run_id, factor_id)` | 因子评级/评分/IC/方向校准 |
 | `intraday_baseline` | `as_of_date` | MONTH | `(as_of_date, code, market, freq, minute_end)` | 分时量能基线 |
 | `screener_build_state` | `updated_at` | YEAR | `(updated_at, build_id)` | 构建状态（append-only） |
 | `market_suspension` | `updated_at` | YEAR | `(updated_at, code, market, status, start_date)` | 停牌/退市/NoData |
@@ -806,6 +834,7 @@ python scripts/migrate_database.py --apply --truncate-ohlc   # 清空旧前复�
 | `get_ohlc_data` | OHLCV（1m/5m/15m/30m/60m/d/w/m），`adjust=none\|qfq\|hfq` |
 | `get_ticker_basic_info` | 股票/ETF/LOF 基础信息 |
 | `get_realtime_quote` | 腾讯单只实时行情（不复权） |
+| `get_intraday_metrics` | 盘中指标：涨跌停价、封板时间、开板次数、集合竞价量、VWAP 偏离、封板质量 |
 | `get_trading_days` | 交易日列表 |
 | `get_today_date` | 今天日期（北京时间） |
 
@@ -821,6 +850,9 @@ python scripts/migrate_database.py --apply --truncate-ohlc   # 清空旧前复�
 | `get_board_membership` | 所属行业/概念/指数 |
 | `sync_board_data` | 同步板块目录或成分股 |
 | `sync_financial_data` | 主动同步财务数据 |
+| `get_disclosure_calendar` | 财报披露日历（按报告期/代码） |
+| `get_upcoming_disclosures` | 未来 N 天将披露的公司 |
+| `get_announcements` | 公告列表（按代码/日期区间） |
 
 ### 9.4 Screener
 
@@ -862,6 +894,7 @@ python scripts/migrate_database.py --apply --truncate-ohlc   # 清空旧前复�
 | `get_concept_members` | 板块成分股（PIT 快照，支持 `as_of`） |
 | `get_concept_ohlc` | 板块日线（OHLC + 成交量 + 成交额） |
 | `get_concept_classification` | Tushare 概念分类树（可按键词过滤） |
+| `get_stock_boards` | 个股所属板块（行业/概念/地域，按 `spt` 分类） |
 
 ### 9.8 因子库
 
@@ -870,6 +903,8 @@ python scripts/migrate_database.py --apply --truncate-ohlc   # 清空旧前复�
 | `get_factor_registry` | 因子目录（分类/来源/频率/窗口） |
 | `get_factor_values` | 因子长表值（`factor_value_daily`） |
 | `get_factor_latest` | 每个代码×因子的最新值 |
+
+> 因子**评级/评分**不通过 MCP 暴露，由 `scripts/factor_scorecard.py` 写入 `factor_scorecard` 表，用 SQL 查询（见 [§13](#13-因子研究报告与评分卡)）。
 
 ### 9.9 整合同步
 
@@ -944,6 +979,13 @@ python -m acquisition update --code 600519 --start 2026-10-01 --end 2026-10-27 -
 # 只预计算指定因子（其余不落库）
 python -m acquisition update --code 600519 --start 2026-10-01 --end 2026-10-27 \
   --datasets factors --factor momentum.ret,technical.atr,technical.pct_chg
+
+# 财务因子物化（61 个 STORED 因子；分批控制内存）
+python scripts/backfill_factors.py --codes 120 --start 2024-01-01 --chunk 4
+
+# 分时（1m/5m）与指数修复
+python scripts/backfill_intraday.py --codes 000949 --freq 5 --start 2026-10-01
+python scripts/repair_index_data.py
 ```
 
 > 概念板块没有历史列表/成分源，`dim` 只能做“当前列表投影”，存在幸存者偏差；
@@ -954,7 +996,7 @@ Screener 不依赖同步任务：批量 CLI、读路径和 inline worker 都能�
 
 ### 10.2 因子引擎
 
-当前 56 个因子：5 个价格因子 + 23 个 screener legacy 列 + 15 个基本面因子（其中 PEG 归入 valuation）+ 13 个 valuation 估值因子（PE/PB/PS/PCF/PFCF/EV 系列/股息率等），全部有 compute。基本面因子走 `fin_income_statement/balance_sheet/cash_flow` 的 TTM + PIT 对齐 + 截面排名；valuation 因子直接读 `fin_valuation_daily`。每个因子带 `materialization` 标记（`stored` 必预计算 / `inline` 逐 bar 现算 / `auto` 默认），决定回测时读库还是现算。
+当前 **202 个因子**：5 个内置价格因子 + 23 个 screener legacy 列 + 15 个成长质量因子（PEG 归入 valuation）+ 13 个 valuation 估值因子 + **85 个价量因子（INLINE）** + **61 个财务因子（STORED）**，全部有 compute。基本面因子走 `fin_income_statement/balance_sheet/cash_flow` 的 TTM + PIT 对齐 + 截面排名；valuation 因子直接读 `fin_valuation_daily`。每个因子带 `materialization` 标记（`stored` 必预计算 / `inline` 逐 bar 现算 / `auto` 默认），决定回测时读库还是现算。
 
 ```bash
 # 列出因子
@@ -1056,13 +1098,17 @@ python -m screener daily --start 2025-01-01 --end 2026-10-23
 
 ### 新增因子
 
-1. 在 `factors/ops/` 增加纯时序函数（无 DB/无 IO）；
-2. 在 `factor_engine/definitions/price.py` 注册 `FactorSpec` + compute；
-3. 若是 screener 宽表列，在 `factor_engine/wide.py` 的 `DAILY_COLUMNS` 增加列并实现；
-4. 若是 legacy 列，在 `factor_engine/legacy.py` 增加元数据；
-5. 需要筛股字段时，在 `screener/domain/fields.py` / `query_builder.py` 注册；
-6. 提升 `formula_version` / factor `version`，让旧值失效并重算；
-7. 补离线单测（`tests/test_factor_*`、`tests/test_screener_*`）。
+1. **计算**：在 `factors/ops/`（或 `ops/price_factors.py` 的 `GROUPS`）写纯函数，无 DB/无 IO；
+2. **命名**：用 `factors/naming.house_id(category, name)` 生成 ID，格式 `category.semantic[_window]`，
+   不复用外部厂商原名；
+3. **元数据**：在 `factor_engine/definitions/` 对应文件里生成 `FactorSpec`（分类/子维度/窗口/单位/
+   方向/formula/materialization），再在 `definitions/__init__.py::register_all()` 注册；
+4. **物化方式**：价量类用 `INLINE`（现算），财务类用 `STORED`（预计算落库，需 `backfill_factors`）；
+5. 若是 screener 宽表列，在 `factor_engine/wide.py` 的 `DAILY_COLUMNS` 增加列并实现；
+6. 需要筛股字段时，在 `screener/domain/fields.py` / `query_builder.py` 注册；
+7. 提升 `formula_version` / factor `version`，让旧值失效并重算；
+8. 补离线单测（`tests/test_price_factors.py`、`tests/test_factor_*`），并跑一次
+   `python scripts/factor_scorecard.py --only <category>` 看评级与方向是否合理。
 
 ### 新增财务字段
 
@@ -1088,6 +1134,137 @@ RUN_LIVE_TESTS=1 python -m pytest # 额外跑真实数据源/QuestDB 用例
 - 响应信封与序列化；
 - Screener 因子、查询 SQL、缺口分类、BuildState 状态机、
   lookback、停牌跳过、查询 limit、北京时间、BaoStock 共享会话。
+
+---
+
+## 13. 因子研究报告与评分卡
+
+### 13.1 它解决什么问题
+
+因子"看起来有信号"和"能用"是两件事。`research/report` 把因子面板 + 行情变成**可评审的报告**
+和**可追踪的评分**，回答两个维度：
+
+| 维度 | 问题 | 对应章节 |
+|---|---|---|
+| **时间** | 信号是否持续（IC 均值 / NW-t）、是否跨周期稳定（分年 / 分市场状态）、衰减多快 | §02 |
+| **空间** | 分层是否单调、多空有无经济意义、在市值/行业子样本中是否成立 | §03 |
+
+评价口径固定为**可执行口径**：T 日收盘出信号、T+1 开盘买入、双边 20bp、非重叠调仓。
+
+### 13.2 单因子报告
+
+```bash
+python scripts/factor_report.py --factor momentum.ret_21d --pool 200 --start 2019-01-01
+```
+
+产物（只写这一个目录，不产出中间图）：
+
+```
+output/factor_reports/<factor_id>.html    # 内联 SVG，A4 打印样式
+output/factor_reports/<factor_id>.json    # 评级与关键指标
+```
+
+报告结构：摘要（评级徽章 + 4 个 KPI）→ 01 概览 → 02 时间维度（3 图 1 表）→ 03 空间维度
+（2 图 2 表 + 可成交性检验）→ 04 评级（四象限 + 评分条 + 否决）→ 05 附录。
+
+### 13.3 评分卡（100 分制）
+
+| 分项 | 分值 | 计算 |
+|---|---|---|
+| 预测力 | 30 | IC 幅度 15 + ICIR 15 |
+| 时间稳定性 | 25 | 分年 IC 同号比例、分年 IC 离散度 |
+| 空间单调性 | 15 | 分组每期收益均值的 Spearman ρ（**有符号**） |
+| 可交易性 | 15 | 覆盖率、换手率、多空夏普 |
+| 增量性 | 15 | 与同类因子相关性（当前为占位 8 分） |
+
+**一票否决**（任一触发即封顶 C）：
+
+| 规则 | 阈值 |
+|---|---|
+| 预测力不足 | `|IC| < 0.02` |
+| 覆盖率不足 | `< 70%` |
+| 跨年不稳定 | 分年同号比例 `< 60%` |
+| 分层反向 | 单调性 ρ `< 0` |
+| 不可交易 | 多空价差 `< 单期成本 0.20%` |
+| 换手过高 | `> 80%` |
+
+评级映射：A ≥ 85 / B ≥ 70 / C ≥ 55 / D < 55。四象限按「时间得分 × 空间得分」划分：
+**核心区**（双高）、**过滤因子**（时间高/空间低）、**择时因子**（时间低/空间高）、**淘汰区**。
+
+### 13.4 全量跑批与评分卡入库
+
+```bash
+# 价量因子（85 个，INLINE 现算）
+python scripts/factor_scorecard.py --source price --pool 200 --start 2019-01-01 --render
+
+# 财务因子（61 个，读物化表，先跑 backfill_factors）
+python scripts/factor_scorecard.py --source financial --pool 200 --start 2024-01-01 --render
+
+# 方向校准（默认只报告，--apply 才写 registry）
+python scripts/calibrate_directions.py --min-abs-ic 0.02
+```
+
+评分写入 `factor_scorecard`：
+
+| 字段 | 说明 |
+|---|---|
+| `ts / run_id / factor_id` | 去重键，同一 run 重跑覆盖，不同 run 保留历史 |
+| `grade / score / time_score / space_score` | 评级与分项 |
+| `ic_mean / icir / nw_t / ic_win / mono / turnover / coverage` | 关键指标 |
+| `direction / calibrated_direction / quadrant / veto` | 设计方向、IC 校准方向、象限、否决原因 |
+
+查询最新一轮：
+
+```sql
+select * from factor_scorecard latest on ts partition by factor_id order by score desc
+```
+
+### 13.5 注意事项
+
+- **单调性用每期收益均值**，不能用复利净值——波动拖累会伪造单调性（曾导致 Q2 看起来比 Q5 好 39pp）；
+- **方向自适应会翻转因子**：设计方向 IC 为负时自动翻，并在 `warnings` 标注；经济逻辑不支持反向时应判无效；
+- **可成交过滤**默认关闭，`exclude_limit_up=True` 会剔除 T+1 开盘一字涨停/停牌样本；
+- **财务因子样本少**（100+ 只 × 2 年），D 级不等于因子坏，先看覆盖率与样本期；
+- IC 计算已**向量化**（整表 `rank(axis=1)` + 逐行 Pearson），比逐日循环快 35 倍，数值差 1e-16。
+
+---
+
+## 14. 模块文档
+
+[docs/README.md](docs/README.md) 是模块级文档入口：全局架构图、实测依赖关系、AI 阅读路径。
+
+每篇模块文档固定两节：
+
+1. **架构与依赖**：职责边界、上下游表、关键文件表、数据流；
+2. **核心类/方法**：类/函数表（签名 + 用途）、可运行示例、注意事项与坑。
+
+| # | 模块 | 文档 |
+|---|---|---|
+| 01 | 数据采集编排 | [docs/modules/01-acquisition.md](docs/modules/01-acquisition.md) |
+| 02 | 数据访问层 | [docs/modules/02-data-interface.md](docs/modules/02-data-interface.md) |
+| 03 | 因子定义与计算 | [docs/modules/03-factors.md](docs/modules/03-factors.md) |
+| 04 | 因子物化与注册 | [docs/modules/04-factor-engine.md](docs/modules/04-factor-engine.md) |
+| 05 | 因子研究报告 | [docs/modules/05-research.md](docs/modules/05-research.md) |
+| 06 | 选股 | [docs/modules/06-screener.md](docs/modules/06-screener.md) |
+| 07 | 回测 | [docs/modules/07-backtest.md](docs/modules/07-backtest.md) |
+| 08 | 策略 | [docs/modules/08-strategies.md](docs/modules/08-strategies.md) |
+| 09 | 持仓 | [docs/modules/09-position.md](docs/modules/09-position.md) |
+| 10 | 运维脚本 | [docs/modules/10-scripts.md](docs/modules/10-scripts.md) |
+| 11 | MCP 服务器 | [docs/modules/11-mcp-server.md](docs/modules/11-mcp-server.md) |
+
+依赖规则（实测 import 关系）：
+
+```
+factors          -> （无内部依赖，纯计算）
+strategies       -> factors
+data_interface   -> （无硬依赖；acquisition/position 为函数内延迟导入）
+factor_engine    -> factors, data_interface
+position         -> factors, data_interface
+screener         -> factors, factor_engine, data_interface, acquisition
+backtest         -> factors, factor_engine, data_interface, strategies
+research         -> data_interface（仅 config/timeutil）
+acquisition      -> data_interface, factor_engine, screener
+```
 
 ---
 
