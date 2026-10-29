@@ -48,6 +48,24 @@
 | `research_reversal_regimes.py` | 分市场状态的最优阈值 | `--codes 500` |
 | `research_composite_demo.py` | 复合因子 + 中性化演示 | — |
 | `research_limitup_check.py` | 涨停可成交性检验 | `--pool 500` |
+| `compact-docker-vhdx.ps1` | **压缩 Docker 虚拟磁盘**（WSL2 vhdx 只增不减） | 管理员 PowerShell 执行，见 §1.3.1 |
+
+### 1.3.1 Docker 磁盘压缩（PowerShell）
+
+QuestDB 跑在 Docker 里，数据存在 WSL2 的 `docker_data.vhdx` 中。该文件**只增不减**：
+删除数据后空间不会自动归还，文件体积会远大于实际占用（实测：文件 211 GB，实际只用 10 GB）。
+
+```powershell
+# 管理员 PowerShell
+powershell -ExecutionPolicy Bypass -File D:\FinBridge\scripts\compact-docker-vhdx.ps1
+```
+
+脚本流程：退出 Docker Desktop → `wsl --shutdown` → vhdx 占用检测 → `diskpart compact vdisk`
+→ 尝试开启稀疏盘 → 打印压缩前后对比。
+
+- 会中断 Docker / QuestDB 约 10~20 分钟，**数据不会丢**（在命名卷里）；
+- 压缩后 Windows 不会自动回收新产生的空洞，建议每季度或大批量回填后重跑一次；
+- 脚本必须存为 **UTF-8 with BOM**，否则 PowerShell 5.1 会把中文读成乱码并报语法错。
 
 ### 1.4 数据流
 
