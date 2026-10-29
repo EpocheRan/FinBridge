@@ -9,6 +9,7 @@ from .daily import DailySyncMixin
 from .financial import FinancialSyncMixin
 from .moneyflow import MoneyflowSyncMixin
 from .screener import ScreenerSyncMixin
+from .valuation import ValuationSyncMixin
 
 
 class AShareSyncService(
@@ -18,6 +19,7 @@ class AShareSyncService(
     ScreenerSyncMixin,
     MoneyflowSyncMixin,
     ConceptSyncMixin,
+    ValuationSyncMixin,
 ):
     def __init__(
         self,
@@ -66,7 +68,6 @@ class AShareSyncService(
         max_boards: int | None = None,
         cursor: str | None = None,
         reset: bool = False,
-        include_valuation: bool | None = None,
         include_funds: bool | None = None,
         include_benchmark: bool = True,
         include_screener: bool = True,
@@ -84,9 +85,6 @@ class AShareSyncService(
             raise ValueError(f"dataset 必须是 {' / '.join(DATASETS)}")
 
         selected_codes = normalize_selected_codes(codes)
-        # 综合更新默认包含估值；财务单独调用时仍可显式关闭。
-        if include_valuation is None:
-            include_valuation = True
 
         result: dict[str, Any] = {
             "dataset": dataset,
@@ -132,7 +130,6 @@ class AShareSyncService(
                 max_stocks=max_stocks,
                 cursor=cursor if dataset == "financial" else None,
                 reset=reset,
-                include_valuation=include_valuation,
                 codes=selected_codes,
                 force=force,
             )
@@ -157,6 +154,14 @@ class AShareSyncService(
                 end_date=end_date,
                 max_trade_days=max_trade_days,
                 cursor=cursor if dataset == "moneyflow" else None,
+                reset=reset,
+            )
+        if dataset in ("valuation", "all"):
+            result["valuation"] = self.sync_valuation(
+                start_date=start_date,
+                end_date=end_date,
+                max_trade_days=max_trade_days,
+                cursor=cursor if dataset == "valuation" else None,
                 reset=reset,
             )
         if dataset in ("concept_meta", "all"):
@@ -186,6 +191,7 @@ class AShareSyncService(
                 "financial",
                 "screener",
                 "moneyflow",
+                "valuation",
                 "concept_meta",
                 "concept_daily",
                 "concept_member",
@@ -224,6 +230,7 @@ class AShareSyncService(
             "benchmark": latest.get(BENCHMARK_STATE),
             "screener": latest.get(SCREENER_STATE),
             "moneyflow": latest.get(MONEYFLOW_STATE),
+            "valuation": latest.get(VALUATION_STATE),
             "concept_meta": latest.get(CONCEPT_META_STATE),
             "concept_daily": latest.get(CONCEPT_DAILY_STATE),
             "concept_member": latest.get(CONCEPT_MEMBER_STATE),

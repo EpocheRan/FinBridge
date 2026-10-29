@@ -1,4 +1,4 @@
-"""财务/估值同步。"""
+"""财务（三大报表/指标）同步。"""
 
 from __future__ import annotations
 
@@ -14,7 +14,6 @@ class FinancialSyncMixin:
         max_stocks: int | None = None,
         cursor: str | None = None,
         reset: bool = False,
-        include_valuation: bool | None = None,
         codes: Sequence[str] | str | None = None,
         force: bool = False,
     ) -> dict[str, Any]:
@@ -56,17 +55,11 @@ class FinancialSyncMixin:
                 else self.settings.get("financial_selected_batch_stocks", 50)
             )
         max_stocks = max(1, int(max_stocks))
-        include_valuation = (
-            bool(self.settings.get("include_valuation", False))
-            if include_valuation is None
-            else include_valuation
-        )
         payload = {
             "start_year": start_year,
             "end_year": end_year,
             "valuation_start": valuation_start,
             "valuation_end": valuation_end,
-            "include_valuation": include_valuation,
             "codes": selected_codes,
         }
 
@@ -91,7 +84,6 @@ class FinancialSyncMixin:
                 or old.get("end_year") != end_year
                 or old_valuation_start != valuation_start
                 or old_valuation_end != valuation_end
-                or bool(old.get("include_valuation")) != include_valuation
                 or old.get("codes") != selected_codes
             ):
                 previous = None
@@ -181,13 +173,6 @@ class FinancialSyncMixin:
                     code, start_year=start_year, end_year=end_year, force=force
                 )
                 self.financial.sync_indicators(code)
-                if include_valuation:
-                    self.financial.sync_valuation(
-                        code,
-                        start_date=valuation_start,
-                        end_date=valuation_end,
-                        force=force,
-                    )
                 stocks_written += 1
             except STOP_ERRORS:
                 self.state.save(

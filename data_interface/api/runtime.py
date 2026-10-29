@@ -84,6 +84,15 @@ def get_concept_service():
     return _get("concept_service", _factory)
 
 
+def get_disclosure_service():
+    def _factory():
+        from data_interface.disclosure.service import DisclosureService
+
+        return DisclosureService()
+
+    return _get("disclosure_service", _factory)
+
+
 def get_position_interface():
     def _factory():
         from position import PositionAgentInterface

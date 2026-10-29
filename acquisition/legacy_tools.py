@@ -25,7 +25,6 @@ def register_scheduled_tools(mcp) -> None:
         max_boards: int | None = None,
         cursor: str | None = None,
         reset: bool = False,
-        include_valuation: bool = True,
         include_funds: bool | None = None,
         include_benchmark: bool = True,
         include_screener: bool = True,
@@ -53,7 +52,6 @@ def register_scheduled_tools(mcp) -> None:
             max_boards: 概念日线/成分本次最多处理多少个板块。
             cursor: 手动指定游标（日期或股票/板块代码）；不传则从数据库状态续跑。
             reset: 是否重置游标，从头开始。
-            include_valuation: 财务是否顺带同步每日估值，默认 True。
             include_funds: 日线是否同时拉取 ETF/LOF；
                 不传时全市场按配置，指定代码时按代码类型自动判断。
             include_benchmark: dataset=all 时是否更新基准指数，默认 True。
@@ -71,7 +69,6 @@ def register_scheduled_tools(mcp) -> None:
                 max_boards=max_boards,
                 cursor=cursor,
                 reset=reset,
-                include_valuation=include_valuation,
                 include_funds=include_funds,
                 include_benchmark=include_benchmark,
                 include_screener=include_screener,

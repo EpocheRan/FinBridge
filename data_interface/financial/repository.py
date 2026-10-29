@@ -166,6 +166,27 @@ class FinancialRepository:
                 latest[key] = row
         return sorted(latest.values(), key=lambda item: item.get("period_end"))
 
+    def get_statements_bulk(
+        self,
+        statement_type: str,
+        as_of: datetime,
+        *,
+        report_type: str = "consolidated",
+    ) -> list[dict[str, Any]]:
+        """一次取回某时点可见的全部报表版本（按 code 分组用）。
+
+        供「按交易日全市场批量估值」使用：用一次查询代替逐只
+        ``get_statements``，避免 5000 次单票往返。
+        """
+        table = STATEMENT_TYPE_TO_TABLE[statement_type]
+        sql = (
+            f'SELECT * FROM "{table}" '
+            "WHERE publish_date <= CAST(%s AS TIMESTAMP) "
+            "AND report_type = %s "
+            "ORDER BY code, period_end, publish_date"
+        )
+        return self._query_dicts(sql, (as_of, report_type))
+
     def get_latest_period(self, code: str, statement_type: str) -> datetime | None:
         table = STATEMENT_TYPE_TO_TABLE[statement_type]
         rows = self._query_dicts(
@@ -253,6 +274,10 @@ class FinancialRepository:
             (code,),
         )
         return {row["period_end"] for row in rows if row.get("period_end")}
+
+    def get_valuation_latest_ts(self) -> datetime | None:
+        rows = self._query_dicts('SELECT max(ts) AS ts FROM "fin_valuation_daily"')
+        return rows[0]["ts"] if rows and rows[0].get("ts") else None
 
     def get_valuation(
         self,

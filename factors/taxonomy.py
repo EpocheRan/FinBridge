@@ -7,6 +7,7 @@ from enum import Enum
 
 class Category(str, Enum):
     VALUE = "value"
+    VALUATION = "valuation"
     QUALITY = "quality"
     GROWTH = "growth"
     MOMENTUM = "momentum"
@@ -23,13 +24,14 @@ class Category(str, Enum):
 #: 二级目录（子维度）白名单；不在表内的子维度由注册时按 category 校验
 SUBCATEGORIES: dict[Category, tuple[str, ...]] = {
     Category.VALUE: ("earnings", "asset", "income", "cash_dividend"),
+    Category.VALUATION: ("earnings", "asset", "income", "cash_dividend"),
     Category.QUALITY: ("profitability", "earnings_quality", "stability", "financial_safety"),
     Category.GROWTH: ("revenue", "profit", "asset_cashflow"),
     Category.MOMENTUM: ("return", "relative_strength", "acceleration"),
     Category.REVERSAL: ("short", "long"),
     Category.SIZE: ("total_mv", "float_mv", "free_float_mv", "log_mv"),
     Category.LIQUIDITY: ("turnover", "amount", "impact_cost", "depth"),
-    Category.RISK: ("total_vol", "idiosyncratic_vol", "beta", "downside"),
+    Category.RISK: ("total_vol", "idiosyncratic_vol", "beta", "downside", "price_level"),
     Category.SENTIMENT: ("moneyflow", "margin", "northbound"),
     Category.ANALYST: ("estimate", "rating", "target_price"),
     Category.LEVERAGE: ("debt", "financial", "operating"),

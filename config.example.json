@@ -29,7 +29,25 @@
             "akshare",
             "tushare"
         ],
+        "intraday_source_priority": [
+            "sina",
+            "baostock"
+        ],
         "default_ohlc_frequency": "d"
+    },
+    "boards": {
+        "source": "eastmoney_slist",
+        "request_interval_seconds": 0.12,
+        "max_retries": 4,
+        "return_weight": "equal"
+    },
+    "disclosure": {
+        "source": "eastmoney",
+        "page_size": 500,
+        "max_pages": 1200,
+        "page_delay_seconds": 0.15,
+        "announcement_page_size": 100,
+        "announcement_max_pages": 5
     },
     "financial": {
         "source_priority": [
@@ -151,10 +169,11 @@
     "acquisition": {
         "daily_start_date": "2020-01-01",
         "moneyflow_start_date": "2020-01-01",
+        "valuation_start_date": "2023-01-01",
         "daily_batch_days": 20,
+        "valuation_batch_days": 5,
         "financial_start_year": 2020,
         "financial_batch_stocks": 15,
-        "include_valuation": false,
         "include_funds": true,
         "fund_universe_min_count": 500,
         "min_universe_size": 1000,

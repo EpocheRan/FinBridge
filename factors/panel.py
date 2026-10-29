@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 import pandas as pd
 
 from . import cross_section
 from .errors import FactorError
-from .library import FactorDef
+from .library import CROSS_SECTION_OPS, FactorDef
 from .ops import clean_series, compute_series
 
 
@@ -103,11 +103,24 @@ class FactorPanelView:
 
 
 def required_warmup(defs: Sequence[FactorDef]) -> int:
-    """计算因子图需要的最大预热窗口。"""
+    """计算因子图需要的最大预热窗口（含合成/中性化的传递依赖）。"""
     by_name = {item.name: item for item in defs}
     warmup = 0
     for item in defs:
-        if item.op in ("rank", "zscore") and item.args:
+        if item.op in CROSS_SECTION_OPS and item.args:
+            if item.op == "composite":
+                spec = item.args[0]
+                for part_name, _direction, _weight in spec[0]:
+                    base = by_name.get(str(part_name))
+                    if base is not None:
+                        warmup = max(warmup, int(base.warmup or 0))
+                continue
+            if item.op == "neutralize":
+                spec = item.args[0]
+                base = by_name.get(str(spec[0]))
+                if base is not None:
+                    warmup = max(warmup, int(base.warmup or 0))
+                continue
             base = by_name.get(str(item.args[0]))
             warmup = max(warmup, int(base.warmup) if base else 0)
         else:
@@ -158,6 +171,7 @@ def build_panel(
     end: date,
     *,
     stored: pd.DataFrame | None = None,
+    reference: Mapping[str, pd.DataFrame] | None = None,
 ) -> FactorPanel:
     if frame.empty:
         raise FactorError("因子面板输入为空")
@@ -170,8 +184,8 @@ def build_panel(
     end_ts = pd.Timestamp(end).normalize()
 
     by_name = {item.name: item for item in defs}
-    base_defs = [item for item in defs if item.op not in ("rank", "zscore")]
-    derived_defs = [item for item in defs if item.op in ("rank", "zscore")]
+    base_defs = [item for item in defs if item.op not in CROSS_SECTION_OPS]
+    derived_defs = [item for item in defs if item.op in CROSS_SECTION_OPS]
 
     values: dict[str, pd.DataFrame] = {}
     meta: dict[str, FactorMeta] = {}
@@ -194,34 +208,124 @@ def build_panel(
             series = group.set_index("date").sort_index()
             per_symbol[str(symbol)] = clean_series(compute_series(defn, series))
         wide = pd.DataFrame(per_symbol).reindex(all_dates).sort_index()
+        wide = wide.reindex(columns=list(symbols))
         values[defn.name] = wide
         meta[defn.name] = _meta(defn, wide, start_ts, end_ts)
 
-    for defn in derived_defs:
-        base_name = str(defn.args[0]) if defn.args else ""
-        if base_name not in values:
-            raise FactorError(
-                f"派生因子 {defn.name!r} 依赖的 {base_name!r} 不在因子列表中"
+    # 派生因子可能互相依赖（如 composite 里含 rank），按依赖顺序求解
+    pending = list(derived_defs)
+    while pending:
+        progressed = False
+        for defn in list(pending):
+            deps = _derived_inputs(defn)
+            if not all(dep in values for dep in deps):
+                continue
+            if defn.op == "rank":
+                wide = cross_section.rank_pct(values[deps[0]])
+            elif defn.op == "zscore":
+                wide = cross_section.zscore(values[deps[0]])
+            elif defn.op == "composite":
+                wide = _composite_wide(defn, values, reference)
+            elif defn.op == "neutralize":
+                base = values[deps[0]]
+                wide = _apply_neutralize(base, reference, _neutralize_by(defn), name=defn.name)
+            else:  # pragma: no cover - CROSS_SECTION_OPS 已穷举
+                raise FactorError(f"未知派生算子: {defn.op!r}")
+            values[defn.name] = wide
+            base_def = by_name.get(deps[0])
+            meta[defn.name] = _meta(
+                defn,
+                wide,
+                start_ts,
+                end_ts,
+                source="computed",
+                warmup=int(base_def.warmup) if base_def else 0,
             )
-        base = values[base_name]
-        if defn.op == "rank":
-            wide = cross_section.rank_pct(base)
-        elif defn.op == "zscore":
-            wide = cross_section.zscore(base)
-        else:
-            raise FactorError(f"未知派生算子: {defn.op!r}")
-        values[defn.name] = wide
-        base_def = by_name.get(base_name)
-        meta[defn.name] = _meta(
-            defn,
-            wide,
-            start_ts,
-            end_ts,
-            source="computed",
-            warmup=int(base_def.warmup) if base_def else 0,
-        )
+            pending.remove(defn)
+            progressed = True
+        if not progressed:
+            raise FactorError(
+                "派生因子存在未解析的依赖（检查 inputs 是否都在 defs 里）: "
+                + ", ".join(item.name for item in pending)
+            )
 
     return FactorPanel(values=values, meta=meta, dates=all_dates, symbols=symbols)
+
+
+def _derived_inputs(defn: FactorDef) -> list[str]:
+    """派生因子依赖的输入名。"""
+    if defn.op == "composite":
+        spec = defn.args[0]
+        return [str(item[0]) for item in spec[0]]
+    if defn.op == "neutralize":
+        spec = defn.args[0]
+        return [str(spec[0])]
+    if defn.args:
+        return [str(defn.args[0])]
+    return []
+
+
+def _neutralize_by(defn: FactorDef) -> tuple[str, ...]:
+    if defn.op != "neutralize":
+        return ()
+    spec = defn.args[0]
+    return tuple(str(x) for x in (spec[1] if len(spec) > 1 else ()))
+
+
+def _apply_neutralize(
+    panel: pd.DataFrame,
+    reference: Mapping[str, pd.DataFrame] | None,
+    by: Sequence[str],
+    *,
+    name: str = "neutralize",
+) -> pd.DataFrame:
+    """按 ``by``（industry / size）做截面回归取残差；缺参照面板直接报错不静默跳过。"""
+    wanted = tuple(str(x) for x in by)
+    if not wanted:
+        return panel
+    if reference is None:
+        raise FactorError(
+            f"因子 {name!r} 要求中性化 {wanted}，但 build_panel 没有传入 reference"
+            "（需提供 date×symbol 宽表：industry / size）"
+        )
+    industry = reference.get("industry")
+    size = reference.get("size")
+    if "industry" in wanted and industry is None:
+        raise FactorError(f"因子 {name!r} 需要 industry 参照面板，未提供")
+    if "size" in wanted and size is None:
+        raise FactorError(f"因子 {name!r} 需要 size 参照面板，未提供")
+    index, columns = panel.index, panel.columns
+    industry = industry.reindex(index=index, columns=columns) if industry is not None else None
+    size = size.reindex(index=index, columns=columns) if size is not None else None
+    return cross_section.neutralize(panel, industry=industry, size=size)
+
+
+def _composite_wide(
+    defn: FactorDef,
+    values: Mapping[str, pd.DataFrame],
+    reference: Mapping[str, pd.DataFrame] | None,
+) -> pd.DataFrame:
+    """等权/加权 rank 合成；逐分量做 winsorize → neutralize → signed_rank。"""
+    spec = defn.args[0]
+    parts, win_q, neu_by, min_parts = spec
+    panels: list[pd.DataFrame] = []
+    weights: list[float] = []
+    directions: list[int] = []
+    for part_name, direction, weight in parts:
+        base = values.get(str(part_name))
+        if base is None:
+            raise FactorError(f"合成因子 {defn.name!r} 缺少分量 {part_name!r}")
+        data = base
+        if win_q:
+            data = cross_section.winsorize(data, float(win_q))
+        if neu_by:
+            data = _apply_neutralize(data, reference, neu_by, name=f"{defn.name}.{part_name}")
+        panels.append(data)
+        weights.append(float(weight))
+        directions.append(int(direction))
+    return cross_section.composite(
+        panels, weights, directions, min_parts=int(min_parts)
+    )
 
 
 def _meta(

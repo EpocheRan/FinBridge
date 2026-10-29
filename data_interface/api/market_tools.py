@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+import pandas as pd
+
 from data_interface.api.runtime import get_market_loader, get_trading_calendar
 from data_interface.api.utils import dataframe_to_records, fail, from_exception, ok
 from data_interface.common.timeutil import now_cn
@@ -14,6 +16,17 @@ from data_interface.market.adjust import (
     frame_adjust_note,
 )
 from data_interface.market.constants import VALID_FREQUENCIES, normalize_frequency
+
+
+def _valid_date(value: str | None) -> bool:
+    """宽松日期校验：None 视为合法（表示「取最新」）。"""
+    if value in (None, ""):
+        return True
+    try:
+        pd.Timestamp(str(value))
+        return True
+    except Exception:
+        return False
 
 
 def register_market_tools(mcp) -> None:
@@ -121,6 +134,66 @@ def register_market_tools(mcp) -> None:
             return ok(
                 f"成功获取 {len(days)} 个交易日",
                 {"data": days, "count": len(days), "start_date": start_date, "end_date": end_date},
+            )
+        except Exception as exc:
+            return from_exception(exc)
+
+    @mcp.tool()
+    def get_intraday_metrics(
+        stock_code: str,
+        trade_date: str | None = None,
+        freq: str = "1min",
+        board: str = "MAIN",
+        is_st: bool = False,
+    ) -> dict[str, Any]:
+        """获取单日分时结构指标（封板时间/炸板次数/尾盘竞价占比/均价线偏离/封板质量分）。
+
+        Args:
+            stock_code: 6 位证券代码。
+            trade_date: 交易日 YYYY-MM-DD；不传取库内最新一根分时。
+            freq: 1min 或 5min（5min 也能算，但封板时点精度下降）。
+            board: MAIN/GEM/STAR/BJ，决定涨跌停幅度。
+            is_st: 是否 ST（5% 涨跌停）。
+        """
+        from data_interface.market.intraday import metrics_to_dict, session_metrics
+
+        if not _valid_date(trade_date):
+            return fail("日期格式错误", "DateFormatError", "请使用 YYYY-MM-DD 格式。")
+        try:
+            db = get_market_loader().fetcher.db
+            table = "ohlcv_1m" if freq == "1min" else "ohlcv_5m"
+            target = trade_date
+            if not target:
+                row = db.query(
+                    f'SELECT max(ts) FROM "{table}" WHERE code = %s', (stock_code,), fetch_all=False
+                )
+                if not row or row[0] is None:
+                    return fail("分时表为空", "NoIntradayData", "请先运行 scripts/backfill_intraday.py。")
+                target = str(pd.Timestamp(row[0]).date())
+            frame = db.query_dataframe(
+                f'SELECT ts, open, high, low, close, volume, amount FROM "{table}" '
+                "WHERE code = %s AND ts BETWEEN %s AND %s ORDER BY ts",
+                (stock_code, f"{target} 00:00:00", f"{target} 23:59:59"),
+            )
+            if frame is None or frame.empty:
+                return fail(
+                    f"{stock_code} 在 {target} 无分时数据",
+                    "NoIntradayData",
+                    "请先运行 scripts/backfill_intraday.py --codes <code>。",
+                )
+            prev = db.query_dataframe(
+                'SELECT close FROM "ohlcv_1d" WHERE code = %s AND ts < %s ORDER BY ts DESC LIMIT 1',
+                (stock_code, f"{target} 00:00:00"),
+            )
+            prev_close = float(prev["close"].iloc[0]) if prev is not None and not prev.empty else float(
+                frame["close"].iloc[0]
+            )
+            metrics = session_metrics(frame, prev_close, board=board, is_st=is_st)
+            if metrics is None:
+                return fail("分时数据不足", "NoIntradayData", "至少需要两根分时。")
+            return ok(
+                f"{stock_code} {target} 分时结构指标",
+                {"trade_date": target, "prev_close": prev_close, **metrics_to_dict(metrics)},
             )
         except Exception as exc:
             return from_exception(exc)

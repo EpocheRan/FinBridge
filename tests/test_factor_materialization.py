@@ -113,7 +113,18 @@ def test_default_precompute_ids_are_stored_or_auto():
     assert "momentum.ret" in ids
     assert "technical.pct_chg" in ids
     assert "growth.yoy_revenue" in ids
-    assert len(ids) == 43
+    assert "valuation.pe_ttm" in ids
+    # 因子库扩容后（Tushare 价量 86 + 财务 62），改为结构断言：
+    # 每个预计算 id 必须是 STORED/AUTO，且与 registry 中标记一致。
+    from factors.registry import list_factors
+
+    expected = {
+        spec.factor_id
+        for spec in list_factors()
+        if spec.materialization in (Materialization.STORED, Materialization.AUTO)
+    }
+    assert set(ids) == expected
+    assert len(ids) >= 100
 
 
 def test_auto_falls_back_to_inline_when_stored_missing():

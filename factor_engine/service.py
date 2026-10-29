@@ -21,8 +21,11 @@ from .definitions import (
     LEGACY_COLUMNS,
     LEGACY_SPECS,
     PRICE_FACTORS,
+    VALUATION_SPECS,
     FundamentalComputer,
+    FIN_EXT_SPECS,
     LegacyComputer,
+    ValuationComputer,
     builtin_map,
     register_all,
 )
@@ -46,8 +49,12 @@ class FactorEngineService:
         self.builtins = builtin_map()
         self.legacy_columns = dict(LEGACY_COLUMNS)
         self.legacy = LegacyComputer(self.data, self.config)
-        self.fundamental_ids = {spec.factor_id for spec in FUNDAMENTAL_SPECS}
+        self.fundamental_ids = {spec.factor_id for spec in FUNDAMENTAL_SPECS} | {
+            spec.factor_id for spec in FIN_EXT_SPECS
+        }
         self.fundamental = FundamentalComputer(self.config)
+        self.valuation_ids = {spec.factor_id for spec in VALUATION_SPECS}
+        self.valuation = ValuationComputer(self.config)
         self.all_ids = [spec.factor_id for spec in self.list_factors()]
         self.register_builtins()
         self._registry_synced = False
@@ -84,6 +91,7 @@ class FactorEngineService:
             [item.spec for item in PRICE_FACTORS]
             + list(LEGACY_SPECS)
             + list(FUNDAMENTAL_SPECS)
+            + list(VALUATION_SPECS)
         )
 
     def default_precompute_ids(self) -> list[str]:
@@ -111,11 +119,15 @@ class FactorEngineService:
         fundamental_specs = [
             spec for spec in specs if spec.factor_id in self.fundamental_ids
         ]
+        valuation_specs = [
+            spec for spec in specs if spec.factor_id in self.valuation_ids
+        ]
         compute_specs = [
             spec
             for spec in specs
             if spec.factor_id not in self.legacy_columns
             and spec.factor_id not in self.fundamental_ids
+            and spec.factor_id not in self.valuation_ids
         ]
         self._ensure_registry()
         # 带 warmup 加载，避免短区间算不出长窗因子；写库时再裁回请求区间
@@ -208,6 +220,41 @@ class FactorEngineService:
                         }
                     )
 
+        if valuation_specs:
+            selected_codes = (
+                list(codes)
+                if codes
+                else sorted(frame["code"].astype(str).unique())
+            )
+            metrics = self.valuation.load_metrics(
+                selected_codes, start_ts, end_date
+            )
+            if not metrics.empty:
+                long = self.valuation.compute(metrics)
+                valuation_source_version = (
+                    f"val:{pd.Timestamp(end_date).strftime('%Y%m%d')}"
+                )
+                for row in long.itertuples(index=False):
+                    stamp = pd.Timestamp(row.ts).normalize()
+                    if stamp < start_ts or pd.isna(row.value):
+                        continue
+                    spec = spec_by_id.get(row.factor_id)
+                    if spec is None:
+                        continue
+                    records.append(
+                        {
+                            "ts": stamp,
+                            "code": str(row.code),
+                            "factor_id": row.factor_id,
+                            "value": float(row.value),
+                            "quality": "ok",
+                            "source": spec.source.dataset,
+                            "source_version": valuation_source_version,
+                            "version": spec.version,
+                            "computed_at": computed_at,
+                        }
+                    )
+
         for spec in compute_specs:
             builtin = self.builtins.get(spec.factor_id)
             if builtin is None:
@@ -244,10 +291,16 @@ class FactorEngineService:
                 "source_version": source_version,
             }
 
-        values = pd.DataFrame(records)
-        written = self.store.upsert_values(values)
-        if write_latest:
-            self.store.upsert_latest(values)
+        # 分批写：records 直接转 DataFrame 时峰值 ≈ 行数×列×8B×3，
+        # 百万行级别会顶满内存，这里每 5 万行冲刷一次并及时释放。
+        written = 0
+        for offset in range(0, len(records), 50_000):
+            part = pd.DataFrame(records[offset : offset + 50_000])
+            written += int(self.store.upsert_values(part) or 0)
+            if write_latest:
+                self.store.upsert_latest(part)
+            del part
+        records.clear()
         job_id = f"build:{uuid.uuid4().hex[:12]}"
         self.store.upsert_build_state(
             {

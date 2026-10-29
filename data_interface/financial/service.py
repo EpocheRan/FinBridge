@@ -634,6 +634,89 @@ class FinancialDataService:
         )
         return count
 
+    def sync_valuation_by_date(
+        self,
+        trade_date: str | date,
+        *,
+        codes: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """按交易日批量补齐全市场估值（``daily_basic`` 全市场 + 报表 PIT）。
+
+        与逐只 ``sync_valuation`` 的区别：一次 Tushare ``daily_basic`` 取全市场，
+        三张报表用 ``get_statements_bulk`` 一次载入后按 code 分组做 PIT，
+        避免 5000 次单票请求。估值倍数口径与逐只路径完全一致
+        （``FinancialMetricsCalculator.build_valuation_row``）。
+        """
+        day = str(trade_date)[:10]
+        as_of = datetime.fromisoformat(day).replace(
+            hour=23, minute=59, second=59, microsecond=0
+        )
+        raw_rows = self.tushare.fetch_daily_basic_all(day.replace("-", ""))
+        if not raw_rows:
+            return {
+                "dataset": "valuation",
+                "date": day,
+                "rows_written": 0,
+                "skipped": 0,
+                "reason": "daily_basic 无数据（未收盘或非交易日）",
+                "done": True,
+            }
+
+        income_by_code = self._statements_by_code("IS", as_of)
+        balance_by_code = self._statements_by_code("BS", as_of)
+        cash_by_code = self._statements_by_code("CF", as_of)
+
+        wanted = (
+            {normalize_code(str(code)) for code in codes} if codes else None
+        )
+        now = now_cn()
+        output: list[dict[str, Any]] = []
+        skipped = 0
+        for raw in raw_rows:
+            code = normalize_code(str(raw.get("ts_code") or ""))
+            if not code or not is_a_share_code(code):
+                skipped += 1
+                continue
+            if wanted is not None and code not in wanted:
+                skipped += 1
+                continue
+            basic = normalize_daily_basic(raw, ingested_at=now)
+            if basic is None:
+                skipped += 1
+                continue
+            row = self.metrics.build_valuation_row(
+                code=code,
+                trade_date=basic["ts"],
+                daily_basic=basic,
+                income_rows=self._visible_as_of(
+                    income_by_code.get(code, []), basic["ts"]
+                ),
+                balance_rows=self._visible_as_of(
+                    balance_by_code.get(code, []), basic["ts"]
+                ),
+                cash_flow_rows=self._visible_as_of(
+                    cash_by_code.get(code, []), basic["ts"]
+                ),
+            )
+            output.append(row)
+
+        written = self.repository.upsert_valuation(output) if output else 0
+        return {
+            "dataset": "valuation",
+            "date": day,
+            "rows_written": written,
+            "skipped": skipped,
+            "done": True,
+        }
+
+    def _statements_by_code(
+        self, statement_type: str, as_of: datetime
+    ) -> dict[str, list[dict[str, Any]]]:
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for row in self.repository.get_statements_bulk(statement_type, as_of):
+            grouped.setdefault(str(row.get("code")), []).append(row)
+        return grouped
+
     def _try_akshare_valuation(
         self, code: str, start_date: str, end_date: str, reason: str
     ) -> int:

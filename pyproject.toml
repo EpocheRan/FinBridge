@@ -33,3 +33,7 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+# 沙箱下 %TEMP% 可能不可写，tempfile 会回退到项目根目录，
+# 这里让 pytest 每轮结束即清理，避免留下 pytest-of-<user> 目录。
+tmp_path_retention_count = 0
+tmp_path_retention_policy = "none"

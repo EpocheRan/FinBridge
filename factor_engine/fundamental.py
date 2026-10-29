@@ -31,6 +31,8 @@ from data_interface.financial.repository import FinancialRepository
 from factors.spec import Dependency, FactorSpec, Materialization, SourceSpec
 from factors.taxonomy import Category
 
+from .fin_ext import FIN_EXT_SPECS, RANK_EXT, compute_ext
+
 logger = logging.getLogger("FactorEngine.Fundamental")
 
 _SOURCE = SourceSpec("fin_income_statement", "questdb", ("net_income",), "available_at")
@@ -53,12 +55,12 @@ RANK_FACTORS = {
 
 FUNDAMENTAL_SPECS: tuple[FactorSpec, ...] = (
     FactorSpec(
-        factor_id="value.peg_252d", name="PEG", category=Category.VALUE,
+        factor_id="valuation.peg_252d", name="PEG", category=Category.VALUATION,
         subcategory="earnings", source=_SOURCE, window=252, freq="1d",
         value_kind="daily", update_mode="event", unit="ratio",
         direction="negative", price_basis="raw", version="v1",
         source_version_policy="fin", warmup=252,
-        formula="PE/(EPS_growth*100)", aliases=("peg_252d",),
+        formula="PE/(EPS_growth*100)", aliases=("value.peg_252d", "peg_252d"),
         materialization=Materialization.STORED,
     ),
     FactorSpec(
@@ -249,6 +251,7 @@ class FundamentalComputer:
                     "period_end": period,
                     "publish_date": publish,
                     "net_income_ttm": itm.get("net_income"),
+                    "net_income_parent_ttm": itm.get("net_income_attributable_to_parent"),
                     "revenue_ttm": itm.get("revenue") or itm.get("total_revenue"),
                     "cost_ttm": itm.get("cost_of_revenue"),
                     "ocf_ttm": ctm.get("operating_cash_flow"),
@@ -256,6 +259,34 @@ class FundamentalComputer:
                     "total_equity": bal.get("total_equity"),
                     "revenue_q": sq.get("revenue"),
                     "net_income_q": sq.get("net_income"),
+                    # ---- 扩展字段（供 Quality 55 / Value 8 使用）
+                    "gross_profit_ttm": itm.get("gross_profit"),
+                    "operating_profit_ttm": itm.get("operating_profit"),
+                    "ebit_ttm": itm.get("ebit"),
+                    "ebitda_ttm": itm.get("ebitda"),
+                    "pretax_profit_ttm": itm.get("pretax_profit"),
+                    "income_tax_ttm": itm.get("income_tax"),
+                    "interest_expense_ttm": itm.get("interest_expense"),
+                    "selling_ttm": itm.get("selling_expense"),
+                    "admin_ttm": itm.get("general_and_admin_expense"),
+                    "finance_expense_ttm": itm.get("finance_expense"),
+                    "operating_profit_q": sq.get("operating_profit"),
+                    "pretax_profit_q": sq.get("pretax_profit"),
+                    "total_current_assets": bal.get("total_current_assets"),
+                    "total_current_liabilities": bal.get("total_current_liabilities"),
+                    "inventory": bal.get("inventory"),
+                    "accounts_receivable": bal.get("accounts_receivable"),
+                    "fixed_assets": bal.get("fixed_assets"),
+                    "cash": bal.get("cash_and_cash_equivalents"),
+                    "short_term_investments": bal.get("short_term_investments"),
+                    "total_liabilities": bal.get("total_liabilities"),
+                    "total_debt": bal.get("total_debt"),
+                    "equity_parent": bal.get("equity_attributable_to_parent"),
+                    "non_current_liabilities": bal.get("total_non_current_liabilities"),
+                    "investing_cf_ttm": ctm.get("investing_cash_flow"),
+                    "financing_cf_ttm": ctm.get("financing_cash_flow"),
+                    "capex_ttm": ctm.get("capital_expenditure"),
+                    "dividends_paid_ttm": ctm.get("dividends_paid"),
                 }
             )
         return snaps
@@ -292,6 +323,18 @@ class FundamentalComputer:
 
     def _align_code(self, code, valuation, snaps, trade_dates):
         dates = pd.DatetimeIndex(pd.to_datetime(trade_dates)).normalize()
+        metric_cols = [
+            "net_income_ttm", "net_income_parent_ttm", "revenue_ttm", "cost_ttm", "ocf_ttm",
+            "total_assets", "total_equity", "revenue_q", "net_income_q",
+            "gross_profit_ttm", "operating_profit_ttm", "ebit_ttm", "ebitda_ttm",
+            "pretax_profit_ttm", "income_tax_ttm", "interest_expense_ttm",
+            "selling_ttm", "admin_ttm", "finance_expense_ttm",
+            "operating_profit_q", "pretax_profit_q",
+            "total_current_assets", "total_current_liabilities", "inventory",
+            "accounts_receivable", "fixed_assets", "cash", "short_term_investments",
+            "total_liabilities", "total_debt", "equity_parent", "non_current_liabilities",
+            "investing_cf_ttm", "financing_cf_ttm", "capex_ttm", "dividends_paid_ttm",
+        ]
         base = pd.DataFrame({"ts": dates, "code": code})
         if valuation is not None and not valuation.empty:
             v = valuation.copy()
@@ -306,10 +349,6 @@ class FundamentalComputer:
             s = pd.DataFrame(snaps)
             s["publish_date"] = pd.to_datetime(s["publish_date"], errors="coerce")
             s = s.dropna(subset=["publish_date"]).sort_values("publish_date")
-            metric_cols = [
-                "net_income_ttm", "revenue_ttm", "cost_ttm", "ocf_ttm",
-                "total_assets", "total_equity", "revenue_q", "net_income_q",
-            ]
             aligned = pd.merge_asof(
                 pd.DataFrame({"ts": dates}).sort_values("ts"),
                 s[["publish_date", *metric_cols]].rename(columns={"publish_date": "ts"}),
@@ -322,6 +361,11 @@ class FundamentalComputer:
             base["close"] = None
         if "total_share" not in base.columns:
             base["total_share"] = None
+        # 无报表快照（新上市/未同步财务）时 snaps 为空，上面不会 merge 出这些列；
+        # 补成 NaN 列，避免 pd.to_numeric(None) 退化成标量后 .div 报 AttributeError。
+        for col in metric_cols:
+            if col not in base.columns:
+                base[col] = float("nan")
         ts = pd.to_numeric(base["total_share"], errors="coerce")
         base["eps_ttm"] = pd.to_numeric(base.get("net_income_ttm"), errors="coerce").div(ts)
         base["net_profit_ttm"] = pd.to_numeric(base.get("net_income_ttm"), errors="coerce")
@@ -335,11 +379,15 @@ class FundamentalComputer:
         base["sps"] = pd.to_numeric(base.get("revenue_q"), errors="coerce").div(ts)
         base["eps_q"] = pd.to_numeric(base.get("net_income_q"), errors="coerce").div(ts)
         base["revenue_q"] = pd.to_numeric(base.get("revenue_q"), errors="coerce")
-        return base[
-            ["ts", "code", "close", "total_share", "eps_ttm", "net_profit_ttm",
-             "ocf_ttm", "revenue_ttm", "cost_ttm", "roa", "roe", "net_asset",
-             "total_asset", "sps", "eps_q", "revenue_q"]
+        ordered: list[str] = [
+            "ts", "code", "close", "total_share", "eps_ttm", "net_profit_ttm",
+            "ocf_ttm", "revenue_ttm", "cost_ttm", "roa", "roe", "net_asset",
+            "total_asset", "sps", "eps_q", "revenue_q",
         ]
+        for column in metric_cols:      # 去重并保序：metric_cols 与显式列表有交集
+            if column not in ordered:
+                ordered.append(column)
+        return base[ordered]
 
     # ------------------------------------------------------------------ 计算
     def compute(self, metrics: pd.DataFrame) -> pd.DataFrame:
@@ -348,12 +396,14 @@ class FundamentalComputer:
             return pd.DataFrame(columns=["ts", "code", "factor_id", "value"])
 
         frames: list[pd.DataFrame] = []
-        factor_ids = [spec.factor_id for spec in FUNDAMENTAL_SPECS]
+        factor_ids = [spec.factor_id for spec in FUNDAMENTAL_SPECS] + [
+            spec.factor_id for spec in FIN_EXT_SPECS
+        ]
         for code, group in metrics.sort_values("ts").groupby("code"):
             g = group.set_index("ts").sort_index()
             eps_growth = g["eps_ttm"] / g["eps_ttm"].shift(252) - 1.0
             values = {
-                "value.peg_252d": (g["close"] / g["eps_ttm"]) / (eps_growth * 100.0),
+                "valuation.peg_252d": (g["close"] / g["eps_ttm"]) / (eps_growth * 100.0),
                 "growth.np_ttm_qoq": g["net_profit_ttm"] / g["net_profit_ttm"].shift(1) - 1.0,
                 "growth.yoy_net_profit": g["net_profit_ttm"] / g["net_profit_ttm"].shift(252) - 1.0,
                 "growth.yoy_ocf": g["ocf_ttm"] / g["ocf_ttm"].shift(252) - 1.0,
@@ -379,6 +429,7 @@ class FundamentalComputer:
                 ),
                 "growth.asset_growth_qoq": g["total_asset"] / g["total_asset"].shift(1) - 1.0,
             }
+            values.update(compute_ext(g))
             for factor_id in factor_ids:
                 frames.append(
                     pd.DataFrame(
@@ -391,7 +442,8 @@ class FundamentalComputer:
         )
 
         # 截面排名（每交易日、每因子，在全体 code 间）
-        rank_mask = long["factor_id"].isin(RANK_FACTORS)
+        rank_ids = set(RANK_FACTORS) | set(RANK_EXT)
+        rank_mask = long["factor_id"].isin(rank_ids)
         ranked = long[rank_mask].copy()
         if not ranked.empty:
             ranked["value"] = ranked.groupby(["ts", "factor_id"])["value"].rank(

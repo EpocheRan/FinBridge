@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Callable, Sequence
@@ -65,6 +66,9 @@ class Orchestrator:
     progress: ProgressReporter | None = None
     order: tuple[str, ...] = DATASET_ORDER
     continue_on_error: bool = True
+    auto_continue: bool = False
+    max_rounds: int = 50
+    timeout_seconds: float = 0.0
 
     def __post_init__(self) -> None:
         if self.progress is None:
@@ -74,7 +78,7 @@ class Orchestrator:
             raise ValueError(f"未编排的数据集: {sorted(unknown)}")
 
     def run(self, scope: Scope) -> dict:
-        selected = tuple(scope.datasets or self.order)
+        selected = tuple(scope.datasets) if scope.datasets is not None else self.order
         unknown = [name for name in selected if name not in self.syncers]
         if unknown:
             raise ValueError(f"未知数据集: {unknown}")
@@ -84,10 +88,37 @@ class Orchestrator:
         for name in selected:
             syncer = self.syncers[name]
             self.progress.start(name, 1, f"{scope.start}..{scope.end}")
+            deadline = (
+                time.monotonic() + self.timeout_seconds
+                if self.timeout_seconds and self.timeout_seconds > 0
+                else None
+            )
+            rounds = 0
+            result: dict = {}
             try:
-                result = syncer(scope)
+                while True:
+                    result = syncer(scope)
+                    rounds += 1
+                    done = bool(result.get("done", True))
+                    if done or not self.auto_continue:
+                        break
+                    if rounds >= self.max_rounds:
+                        print(
+                            f"[acquisition] {name}: 达到 max_rounds={self.max_rounds}，提前停止"
+                        )
+                        break
+                    if deadline is not None and time.monotonic() >= deadline:
+                        print(
+                            f"[acquisition] {name}: 达到 timeout={self.timeout_seconds}s，提前停止"
+                        )
+                        break
                 results[name] = result
-                self.progress.finish(name, 1, f"rows={result.get('rows_written', '?')}")
+                self.progress.finish(
+                    name,
+                    1,
+                    f"rows={result.get('rows_written', '?')} rounds={rounds} "
+                    f"done={result.get('done', True)}",
+                )
             except Exception as exc:
                 errors.append({"dataset": name, "error": f"{type(exc).__name__}: {exc}"})
                 results[name] = {"error": str(exc)}
@@ -97,7 +128,19 @@ class Orchestrator:
         return {"scope": scope, "results": results, "errors": errors}
 
 
-def build_orchestrator(progress: ProgressReporter | None = None) -> Orchestrator:
+def build_orchestrator(
+    progress: ProgressReporter | None = None,
+    *,
+    auto_continue: bool = False,
+    max_rounds: int = 50,
+    timeout_seconds: float = 0.0,
+) -> Orchestrator:
     from .syncers import REAL_SYNCERS
 
-    return Orchestrator(syncers=REAL_SYNCERS, progress=progress)
+    return Orchestrator(
+        syncers=REAL_SYNCERS,
+        progress=progress,
+        auto_continue=auto_continue,
+        max_rounds=max_rounds,
+        timeout_seconds=timeout_seconds,
+    )

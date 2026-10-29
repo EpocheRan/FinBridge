@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import date, datetime, time
 from typing import Any, Sequence
 
@@ -18,6 +19,8 @@ _DAILY_TABLE = '"concept_board_daily"'
 _MEMBER_TABLE = '"concept_member_snapshot"'
 _CLASS_TABLE = '"concept_classification"'
 _ALIAS_TABLE = '"concept_board_alias"'
+_DIM_BOARD_TABLE = '"dim_board"'
+_MAP_BOARD_TABLE = '"map_stock_board"'
 
 BOARD_COLUMNS = [
     "ts",
@@ -78,6 +81,28 @@ ALIAS_COLUMNS = [
     "confidence",
     "verified",
     "notes",
+]
+
+#: ``dim_board``：板块维度（东财 BK 命名空间与同花顺 3000xx **物理隔离**，靠 source 区分）
+DIM_BOARD_COLUMNS = [
+    "ts",
+    "board_id",
+    "board_type",
+    "board_name",
+    "parent_id",
+    "source",
+]
+#: ``map_stock_board``：个股↔板块 PIT 映射
+MAP_BOARD_COLUMNS = [
+    "ts",
+    "code",
+    "board_id",
+    "board_type",
+    "board_name",
+    "is_primary",
+    "effective_from",
+    "effective_to",
+    "source",
 ]
 
 
@@ -156,6 +181,149 @@ class ConceptRepository:
             return 0
         sql = f"INSERT INTO {_ALIAS_TABLE} ({', '.join(ALIAS_COLUMNS)}) VALUES %s"
         return self.db.execute_values(sql, _rows(frame, ALIAS_COLUMNS), page_size=200)
+
+    def upsert_dim_board(self, frame: pd.DataFrame) -> int:
+        """写 ``dim_board``（东财 BK 板块维度）。"""
+        if frame is None or frame.empty:
+            return 0
+        sql = f"INSERT INTO {_DIM_BOARD_TABLE} ({', '.join(DIM_BOARD_COLUMNS)}) VALUES %s"
+        return self.db.execute_values(sql, _rows(frame, DIM_BOARD_COLUMNS), page_size=500)
+
+    def upsert_map_stock_board(self, frame: pd.DataFrame) -> int:
+        """写 ``map_stock_board``（个股↔板块 PIT 映射）。"""
+        if frame is None or frame.empty:
+            return 0
+        sql = f"INSERT INTO {_MAP_BOARD_TABLE} ({', '.join(MAP_BOARD_COLUMNS)}) VALUES %s"
+        return self.db.execute_values(sql, _rows(frame, MAP_BOARD_COLUMNS), page_size=500)
+
+    def stock_boards(
+        self, code: str, as_of: str | date | None = None, *, source: str | None = None
+    ) -> pd.DataFrame:
+        """某只股票在 ``as_of`` 之前最近一次快照里的全部板块归属。"""
+        sql = (
+            f"SELECT * FROM {_MAP_BOARD_TABLE} WHERE code = %s "
+            "AND ts = (SELECT max(ts) FROM "
+            f"{_MAP_BOARD_TABLE} WHERE code = %s"
+        )
+        params: list[Any] = [str(code), str(code)]
+        if as_of is not None:
+            sql += " AND ts <= %s"
+            params.append(_day(as_of))
+        if source:
+            sql += " AND source = %s"
+            params.append(source)
+        sql += ") ORDER BY board_type, board_name"
+        frame = None
+        # QuestDB WAL 异步可见：刚写完立刻查可能为空，短暂重试
+        for attempt in range(3):
+            try:
+                frame = self.db.query_dataframe(sql, params)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("个股板块归属查询失败 %s: %s", code, exc)
+                return pd.DataFrame(columns=MAP_BOARD_COLUMNS)
+            if frame is not None and not frame.empty:
+                break
+            time.sleep(0.3 * (attempt + 1))
+        if frame is None or frame.empty:
+            return pd.DataFrame(columns=MAP_BOARD_COLUMNS)
+        return _with_ts(frame).reset_index(drop=True)
+
+    def board_members(self, board_id: str, as_of: str | date | None = None) -> list[str]:
+        """某板块在 ``as_of`` 之前最近一次快照里的成分股代码。"""
+        sql = (
+            f"SELECT code FROM {_MAP_BOARD_TABLE} WHERE board_id = %s "
+            "AND ts = (SELECT max(ts) FROM "
+            f"{_MAP_BOARD_TABLE} WHERE board_id = %s"
+        )
+        params: list[Any] = [str(board_id), str(board_id)]
+        if as_of is not None:
+            sql += " AND ts <= %s"
+            params.append(_day(as_of))
+        sql += ") ORDER BY code"
+        try:
+            rows = self.db.query(sql, params) or []
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("板块成分查询失败 %s: %s", board_id, exc)
+            return []
+        return [str(row[0]) for row in rows if row and row[0]]
+
+    def dim_boards(self, board_type: str | None = None) -> pd.DataFrame:
+        sql = f"SELECT * FROM {_DIM_BOARD_TABLE} LATEST ON ts PARTITION BY board_id, board_type, source"
+        params: list[Any] = []
+        if board_type:
+            sql += " WHERE board_type = %s"
+            params.append(board_type)
+        try:
+            frame = self.db.query_dataframe(sql, params)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("板块维度查询失败: %s", exc)
+            return pd.DataFrame(columns=DIM_BOARD_COLUMNS)
+        if frame is None or frame.empty:
+            return pd.DataFrame(columns=DIM_BOARD_COLUMNS)
+        return _with_ts(frame).reset_index(drop=True)
+
+    # ------------------------------------------------------- 自算板块收益用
+    def daily_prices(
+        self, codes: Sequence[str], start: str | date, end: str | date, *, chunk: int = 200
+    ) -> pd.DataFrame:
+        """从 ``ohlcv_1d`` 取收盘价（不复权价 + adj_factor 由调用方决定是否复权）。"""
+        codes = [str(code) for code in codes if str(code)]
+        if not codes:
+            return pd.DataFrame(columns=["ts", "code", "close"])
+        frames: list[pd.DataFrame] = []
+        for offset in range(0, len(codes), chunk):
+            batch = codes[offset : offset + chunk]
+            placeholders = ",".join(["%s"] * len(batch))
+            sql = (
+                'SELECT ts, code, close FROM "ohlcv_1d" '
+                f"WHERE code IN ({placeholders}) AND ts BETWEEN %s AND %s"
+            )
+            params: list[Any] = [
+                *batch,
+                _day(start),
+                datetime.combine(pd.Timestamp(end).date(), time.max).replace(microsecond=0),
+            ]
+            try:
+                frame = self.db.query_dataframe(sql, params)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("日线批量查询失败(chunk=%s): %s", offset, exc)
+                continue
+            if frame is not None and not frame.empty:
+                frames.append(_with_ts(frame))
+        if not frames:
+            return pd.DataFrame(columns=["ts", "code", "close"])
+        return pd.concat(frames, ignore_index=True)
+
+    def float_market_caps(
+        self, codes: Sequence[str], start: str | date, end: str | date, *, chunk: int = 200
+    ) -> pd.DataFrame:
+        """从 ``fin_valuation_daily`` 取流通市值（用于市值加权板块收益）。"""
+        codes = [str(code) for code in codes if str(code)]
+        if not codes:
+            return pd.DataFrame(columns=["ts", "code", "float_market_cap"])
+        frames: list[pd.DataFrame] = []
+        for offset in range(0, len(codes), chunk):
+            batch = codes[offset : offset + chunk]
+            placeholders = ",".join(["%s"] * len(batch))
+            sql = (
+                'SELECT ts, code, float_market_cap FROM "fin_valuation_daily" '
+                f"WHERE code IN ({placeholders}) AND ts BETWEEN %s AND %s"
+            )
+            params: list[Any] = [
+                *batch,
+                _day(start),
+                datetime.combine(pd.Timestamp(end).date(), time.max).replace(microsecond=0),
+            ]
+            try:
+                frame = self.db.query_dataframe(sql, params)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("流通市值批量查询失败(chunk=%s): %s", offset, exc)
+                continue
+            if frame is not None and not frame.empty:
+                frames.append(_with_ts(frame))
+        if not frames:
+            return pd.DataFrame(columns=["ts", "code", "float_market_cap"])
+        return pd.concat(frames, ignore_index=True)
 
     # ------------------------------------------------------------------ 查询
     def list_boards(

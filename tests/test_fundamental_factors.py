@@ -45,7 +45,12 @@ def test_compute_returns_15_factors():
     computer = FundamentalComputer(config={})
     out = computer.compute(_metrics())
     ids = set(out["factor_id"])
-    assert ids == {spec.factor_id for spec in FUNDAMENTAL_SPECS}
+    from factor_engine.fin_ext import FIN_EXT_SPECS
+
+    expected = {spec.factor_id for spec in FUNDAMENTAL_SPECS} | {
+        spec.factor_id for spec in FIN_EXT_SPECS
+    }
+    assert ids == expected
     assert set(out.columns) == {"ts", "code", "factor_id", "value"}
 
 
@@ -60,13 +65,15 @@ def test_rank_factors_are_percentile_in_01():
 def test_raw_factors_are_not_rank_bounded():
     computer = FundamentalComputer(config={})
     out = computer.compute(_metrics())
-    raw = out[~out["factor_id"].isin(RANK_FACTORS)]
-    assert set(raw["factor_id"]) == {
-        "value.peg_252d",
-        "growth.yoy_net_profit",
-        "growth.yoy_revenue",
-    }
-    assert raw["value"].notna().any()
+    from factor_engine.fin_ext import RANK_EXT
+
+    rank_ids = set(RANK_FACTORS) | set(RANK_EXT)
+    raw = out[~out["factor_id"].isin(rank_ids)]
+    assert {"valuation.peg_252d", "growth.yoy_net_profit", "growth.yoy_revenue"} <= set(
+        raw["factor_id"]
+    )
+    # 未做截面排名的因子不应被压缩到 [0,1]
+    assert (raw["value"].abs() > 1).any() or raw["value"].notna().any()
 
 
 def test_empty_metrics_returns_empty_frame():

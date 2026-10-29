@@ -44,6 +44,12 @@ def moneyflow(scope: Scope) -> dict:
     )
 
 
+def valuation(scope: Scope) -> dict:
+    return _service().sync_valuation(
+        start_date=scope.start, end_date=scope.end
+    )
+
+
 def concept_meta(scope: Scope) -> dict:
     return _service().sync_concept_meta()
 
@@ -104,21 +110,13 @@ def stock_basic(scope: Scope) -> dict:
     return {"dataset": "stock_basic", "rows_written": int(written), "done": True}
 
 
-#: 未实现的数据集先显式跳过，避免静默成功
-def _not_implemented(name: str):
-    def _run(scope: Scope) -> dict:
-        return {"dataset": name, "skipped": True, "reason": "not implemented yet"}
-
-    return _run
-
-
 REAL_SYNCERS = {
     "trading_calendar": trading_calendar,
     "stock_basic": stock_basic,
     "ohlcv_1d": daily,
     "benchmark": benchmark,
     "financial": financial,
-    "valuation": _not_implemented("valuation"),
+    "valuation": valuation,
     "moneyflow": moneyflow,
     "concept_meta": concept_meta,
     "concept_daily": concept_daily,

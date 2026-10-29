@@ -159,3 +159,47 @@ def register_concept_tools(mcp) -> None:
             )
         except Exception as exc:
             return from_exception(exc)
+
+    @mcp.tool()
+    def get_stock_boards(
+        stock_code: str,
+        board_type: str | None = None,
+        as_of: str | None = None,
+        sync_if_empty: bool = True,
+    ) -> dict[str, Any]:
+        """获取个股的板块归属（东财 BK 命名空间，含行业/概念/地域/指数分类）。
+
+        Args:
+            stock_code: 6 位证券代码。
+            board_type: 过滤 industry / concept / region / index。
+            as_of: 该日期及之前的最近一份映射快照。
+            sync_if_empty: 库内无映射时是否即时抓一次（一次请求即拿到全部归属）。
+        """
+        if not _valid_date(as_of):
+            return fail("日期格式错误", "DateFormatError", "请使用 YYYY-MM-DD 格式。")
+        try:
+            service = get_concept_service()
+            frame = service.stock_boards(stock_code, as_of=as_of)
+            if (frame is None or frame.empty) and sync_if_empty:
+                service.sync_stock_boards([stock_code], as_of=as_of)
+                frame = service.stock_boards(stock_code, as_of=as_of)
+            if frame is None or frame.empty:
+                return fail(
+                    f"未找到 {stock_code} 的板块归属",
+                    "NoBoardMapping",
+                    "请运行 scripts/backfill_boards.py --codes <code>。",
+                )
+            if board_type:
+                frame = frame[frame["board_type"] == board_type]
+            records = dataframe_to_records(frame)
+            return ok(
+                f"{stock_code} 命中 {len(records)} 个板块",
+                {
+                    "count": len(records),
+                    "board_type": board_type,
+                    "data_source": str(frame["source"].iloc[0]) if not frame.empty and "source" in frame.columns else None,
+                    "data": records,
+                },
+            )
+        except Exception as exc:
+            return from_exception(exc)

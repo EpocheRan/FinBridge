@@ -89,11 +89,13 @@ CONCEPT_META_STATE = "concept_meta"
 CONCEPT_DAILY_STATE = "concept_daily"
 CONCEPT_MEMBER_STATE = "concept_member"
 CONCEPT_CLASS_STATE = "concept_class"
+VALUATION_STATE = "valuation"
 
 DATASETS = (
     "daily",
     "benchmark",
     "financial",
+    "valuation",
     "screener",
     "moneyflow",
     "concept_meta",

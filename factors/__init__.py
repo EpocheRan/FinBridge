@@ -25,11 +25,16 @@ from .spec import (
     close_enough,
 )
 from .stored import SCREENER_DAILY_COLUMNS, StoredColumn
+from .ops.price_factors import ALL_NAMES as ALL_PRICE_FACTORS
+from .ops.price_factors import register_price_ops
 from .taxonomy import Category, SUBCATEGORIES, normalize_category, normalize_subcategory
 from .technical import ATR, atr, atr_wilder, true_range
 
+register_price_ops()
+
 __all__ = [
     "ALIASES",
+    "ALL_PRICE_FACTORS",
     "ATR",
     "CUSTOM_FACTORS",
     "Category",

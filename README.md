@@ -90,7 +90,7 @@ shared           data_interface.common / scripts.schemas
 | 因子筛股 | `screener/` | domain（模型/字段/停牌）、application（ScreenerService/BackfillService/BaselineService/ports）、infrastructure（QuestDB 仓储/补齐/队列）、interface；**构建编排已迁到 acquisition** | `screener.interface.api`、`python -m screener` |
 | 持仓 | `position/` | `manager`（组合/持仓/交易/盈亏）、`schema`、`modes/`（ATR、GRID）、`llm_tool` | MCP `pm_*` 工具 |
 | 因子库 | `factors/` | `library`（`F` 命名空间/`FactorDef`/注册表）、`ops/`（时序算子）、`cross_section`（rank/zscore）、`panel`（date×symbol 面板）、`stored`（legacy 列元数据）、`technical`（ATR canonical） | `from factors import F` |
-| 因子引擎 | `factor_engine/` | `service`（计算/写库/ensure）、`store`（因子表）、`hooks`（入库事件）、`audit`、`wide`（56 列宽表）、`definitions/`（5 价格 + 23 legacy + 15 基本面）、CLI | `python -m factor_engine` |
+| 因子引擎 | `factor_engine/` | `service`（计算/写库/ensure）、`store`（因子表）、`hooks`（入库事件）、`audit`、`wide`（56 列宽表）、`definitions/`（5 价格 + 23 legacy + 15 基本面）、`valuation`（13 估值 + PEG）、CLI | `python -m factor_engine` |
 | 整合同步 | `acquisition/` | `Scope`（全市场/单代码/板块 × 日期段）、`Orchestrator`、`datasets/`（daily/financial/benchmark/screener/moneyflow/concept）、`build_orchestrator`、进度条、CLI/MCP | `python -m acquisition run/update/status` |
 | 策略 | `strategies/` | `base`（单股/横截面基类）、`context`（只读上下文 + 订单意图）、`universe`、`weighting`、`models/`（一文件一策略） | `python -m backtest list/validate/run` |
 | 回测 | `backtest/` | `domain`（RunSpec/BacktestResult/报告）、`application`（runner/loader/cross_section/rebalance/run_id/ports/registry）、`infrastructure`（data/engine/execution/output）、`config`/`bootstrap`/`cli`；PyBroker 为 optional extra | `python -m backtest` |
@@ -603,6 +603,9 @@ CSV 默认写入 `output/backtest/<run_id>/`：`metrics.json`、`equity.csv`、`
 
 ## 7. 代码结构
 
+> **模块级文档见 [docs/README.md](docs/README.md)**：每个模块一篇，固定包含「架构与依赖」和「核心类/方法、用法、注意事项」两节，面向 AI 阅读。
+
+
 ```text
 FinBridge/
 ├── MCPserver.py                    # MCP 入口：注册工具 + 启动
@@ -901,8 +904,13 @@ python -m acquisition update --code 600519 --start 2026-10-01 --end 2026-10-27 -
 python -m acquisition status
 ```
 
+> `--loop`：分批数据集（日线/分档/估值/财务/概念日线/成分）自动续跑，直到 `done`、`--max-rounds` 或 `--timeout`。
+> `--no-financial`：显式排除季度财务；`--force-financial`：即使会重置也运行。
+> `run` 默认先检查 `financial` 游标：若本次 `--start` 会改变 `start_year`（触发重置），会自动跳过并告警；日常补数据建议直接加 `--no-financial`。
+
 - **日线**：按交易日调 Tushare `daily` + `daily_basic`（换手率）+ `adj_factor`，可选 `fund_daily` 拉 ETF/LOF；
-- **财务**：按股票池分批，逐只增量拉三大报表、重算指标（可选估值）；
+- **财务**：按股票池分批，逐只增量拉三大报表、重算指标；
+- **估值**：按交易日调 Tushare `daily_basic`（一次全市场）+ 批量报表 PIT，写 `fin_valuation_daily`，产出 `valuation.*` 因子；
 - **分档**：按交易日调 Tushare `moneyflow`（一次全市场），金额万元→元、量手→股；
 - **因子长表**：`factors` 数据集调用 `FactorEngineService`，写 `factor_value_daily` / `factor_value_latest`；
 - **Screener 宽表**：`screener` 数据集调用 `BuildOrchestrator`，写 `factor_daily_wide`（在 factors 之后）；
@@ -946,7 +954,7 @@ Screener 不依赖同步任务：批量 CLI、读路径和 inline worker 都能�
 
 ### 10.2 因子引擎
 
-当前 43 个因子：5 个价格因子 + 23 个 screener legacy 列 + 15 个基本面成长/质量因子（PEG、净利/营收/ROE/ROA 同比、EPS 加速度等），全部有 compute。基本面因子走 `fin_income_statement/balance_sheet/cash_flow` 的 TTM + PIT 对齐 + 截面排名。每个因子带 `materialization` 标记（`stored` 必预计算 / `inline` 逐 bar 现算 / `auto` 默认），决定回测时读库还是现算。
+当前 56 个因子：5 个价格因子 + 23 个 screener legacy 列 + 15 个基本面因子（其中 PEG 归入 valuation）+ 13 个 valuation 估值因子（PE/PB/PS/PCF/PFCF/EV 系列/股息率等），全部有 compute。基本面因子走 `fin_income_statement/balance_sheet/cash_flow` 的 TTM + PIT 对齐 + 截面排名；valuation 因子直接读 `fin_valuation_daily`。每个因子带 `materialization` 标记（`stored` 必预计算 / `inline` 逐 bar 现算 / `auto` 默认），决定回测时读库还是现算。
 
 ```bash
 # 列出因子

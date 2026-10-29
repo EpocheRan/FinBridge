@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Literal
+from typing import Any, Callable, Literal, Sequence
 
 Unit = Literal[
     "ratio",
@@ -21,8 +21,10 @@ Unit = Literal[
 PriceBasis = Literal["raw", "qfq", "hfq", "none"]
 Source = Literal["auto", "stored", "compute"]
 
-_STORED_UNITS = {"ratio", "pct", "bool", "shares", "days", "currency"}
+#: 横截面算子：这些 op 在“宽表”阶段执行，不需要单标的时序输入
+CROSS_SECTION_OPS = ("rank", "zscore", "composite", "neutralize")
 
+_STORED_UNITS = {"ratio", "pct", "bool", "shares", "days", "currency"}
 
 @dataclass(frozen=True)
 class FactorDef:
@@ -53,7 +55,7 @@ class FactorDef:
                 object.__setattr__(self, "stored_column", self.name)
             object.__setattr__(self, "on", "none")
             object.__setattr__(self, "price_basis", "raw" if self.unit in ("currency", "shares") else "none")
-        if self.source == "compute" and self.on == "none" and self.op not in ("rank", "zscore"):
+        if self.source == "compute" and self.on == "none" and self.op not in CROSS_SECTION_OPS:
             raise ValueError(f"factor {self.name!r}: compute 因子必须声明 on")
         materialization = str(self.materialization).strip().lower()
         if materialization not in ("stored", "inline", "auto"):
@@ -77,10 +79,8 @@ class FactorDef:
             "materialization": self.materialization,
         }
 
-
 # 自定义因子注册表：@factor 注册后可用 F.custom(...) 或 FactorDef(op=name)
 CUSTOM_FACTORS: dict[str, Callable[..., Any]] = {}
-
 
 def factor(
     name: str,
@@ -104,7 +104,6 @@ def factor(
         return fn
 
     return decorator
-
 
 class F:
     """策略侧因子命名空间。"""
@@ -251,6 +250,116 @@ class F:
             unit="ratio",
             source="compute",
             price_basis="none",
+        )
+
+    @staticmethod
+    def composite(
+        parts: Sequence[Any],
+        *,
+        name: str = "composite",
+        winsorize: float | None = None,
+        neutralize: Sequence[str] | None = None,
+        min_parts: int = 1,
+        version: str = "v1",
+    ) -> FactorDef:
+        """等权/加权 **rank** 合成（横截面）。
+
+        ``parts`` 支持三种写法：
+
+        - ``"mom20"``：正向、权重 1
+        - ``("mom20", 2.0)``：正向、权重 2
+        - ``("mom20", -1, 2.0)``：负向（越小越好）、权重 2
+
+        三个必须补齐的细节都固化在这里：
+
+        1. **方向统一** —— 分量先转百分位秩，负向取 ``1 - rank``；
+        2. **中性化** —— ``neutralize=("industry", "size")`` 时，先在 ``build_panel``
+           传入的参照面板上做截面回归取残差，再排名；
+        3. **缺失值** —— 不填 0：只在可用分量上重新归一权重，可用分量数
+           < ``min_parts`` 时输出 ``NaN``。
+        """
+        specs: list[tuple[str, int, float]] = []
+        for item in parts:
+            if isinstance(item, str):
+                specs.append((item, 1, 1.0))
+                continue
+            if not isinstance(item, (tuple, list)) or not item:
+                raise ValueError(f"composite 分量格式错误: {item!r}")
+            if len(item) == 2:
+                specs.append((str(item[0]), 1, float(item[1])))
+            elif len(item) == 3:
+                specs.append((str(item[0]), int(item[1]), float(item[2])))
+            else:
+                raise ValueError(f"composite 分量格式错误: {item!r}")
+        if not specs:
+            raise ValueError("composite 至少需要一个分量")
+        if min_parts < 1:
+            raise ValueError("min_parts 必须 >= 1")
+        if winsorize is not None and not (0 < float(winsorize) < 0.5):
+            raise ValueError("winsorize 必须在 (0, 0.5)")
+
+        spec = (
+            tuple(specs),
+            None if winsorize is None else float(winsorize),
+            tuple(str(x) for x in (neutralize or ())),
+            int(min_parts),
+        )
+        return FactorDef(
+            name=name,
+            op="composite",
+            args=(spec,),
+            inputs=tuple(item[0] for item in specs),
+            on="none",
+            window=0,
+            warmup=0,
+            unit="ratio",
+            source="compute",
+            price_basis="none",
+            version=version,
+        )
+
+    @staticmethod
+    def neutralize(
+        factor_name: str,
+        *,
+        by: Sequence[str] = ("industry", "size"),
+        name: str | None = None,
+    ) -> FactorDef:
+        """单因子中性化（研究用）：对指定分量做行业/市值回归取残差。"""
+        spec = (str(factor_name), tuple(str(x) for x in by))
+        return FactorDef(
+            name=name or f"neu_{factor_name}",
+            op="neutralize",
+            args=(spec,),
+            inputs=(str(factor_name),),
+            on="none",
+            window=0,
+            warmup=0,
+            unit="ratio",
+            source="compute",
+            price_basis="none",
+        )
+
+    @staticmethod
+    def ts(name: str) -> FactorDef:
+        """引用价量因子库中的一个因子（见 ``factors.ops.price_factors``）。"""
+        from .ops.price_factors import lookup
+
+        try:
+            _fn, window, unit = lookup(name)
+        except KeyError as exc:
+            raise ValueError(f"未知  价量因子: {name!r}") from exc
+        return FactorDef(
+            name=name,
+            op=name,
+            args=(),
+            inputs=("hfq_close",),
+            on="hfq_close",
+            window=int(window),
+            warmup=int(window),
+            unit=unit,
+            source="compute",
+            price_basis="hfq",
         )
 
     @staticmethod
