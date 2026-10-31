@@ -10,6 +10,7 @@ from typing import Mapping, Sequence
 import pandas as pd
 
 from data_interface.common.questdb_client import QuestDBClient
+from data_interface.common.security_code import instrument_market
 from data_interface.common.trading_calendar import TradingCalendar
 from data_interface.market.adjust import apply_adjust
 from data_interface.market.constants import ohlc_table_name
@@ -224,7 +225,7 @@ class MarketDataAdapter:
             sql = (
                 f'SELECT {fields} FROM "{table}" '
                 "WHERE ts BETWEEN %s AND %s "
-                f"AND market = 'MLCN' AND code IN ({placeholders}) "
+                f"AND type <> 'idx' AND code IN ({placeholders}) "
                 "ORDER BY ts, code"
             )
             params = [
@@ -380,14 +381,15 @@ class MarketDataAdapter:
                     float(row.get("turnover") or 0.0),
                     1.0,
                     str(row.get("code", self.settings.benchmark_code)),
-                    "IDX",
+                    instrument_market(str(row.get("code", self.settings.benchmark_code))),
+                    "idx",
                 )
             )
         if not rows:
             return 0
         sql = (
             'INSERT INTO "ohlcv_1d" '
-            "(ts, open, high, low, close, volume, amount, turnover, adj_factor, code, market) "
+            "(ts, open, high, low, close, volume, amount, turnover, adj_factor, code, market, type) "
             "VALUES %s"
         )
         return self.db.execute_values(sql, rows, page_size=500)
@@ -396,7 +398,7 @@ class MarketDataAdapter:
         sql = (
             'SELECT ts, code, open, high, low, close, volume, amount '
             'FROM "ohlcv_1d" '
-            "WHERE market = 'IDX' AND code = %s "
+            "WHERE type = 'idx' AND code = %s "
             "AND ts BETWEEN %s AND %s ORDER BY ts"
         )
         params = [
@@ -474,7 +476,7 @@ class MarketDataAdapter:
         frame = self.db.query_dataframe(sql)
         if frame is None or frame.empty:
             fallback = self.db.query_dataframe(
-                "SELECT DISTINCT code FROM \"ohlcv_1d\" WHERE market = 'MLCN'"
+                "SELECT DISTINCT code FROM \"ohlcv_1d\" WHERE type <> 'idx'"
             )
             if fallback is None or fallback.empty:
                 return []

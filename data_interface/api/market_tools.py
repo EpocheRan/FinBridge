@@ -182,7 +182,7 @@ def register_market_tools(mcp) -> None:
                     "请先运行 scripts/backfill_intraday.py --codes <code>。",
                 )
             prev = db.query_dataframe(
-                'SELECT close FROM "ohlcv_1d" WHERE code = %s AND ts < %s ORDER BY ts DESC LIMIT 1',
+                "SELECT close FROM \"ohlcv_1d\" WHERE code = %s AND ts < %s AND type <> 'idx' ORDER BY ts DESC LIMIT 1",
                 (stock_code, f"{target} 00:00:00"),
             )
             prev_close = float(prev["close"].iloc[0]) if prev is not None and not prev.empty else float(

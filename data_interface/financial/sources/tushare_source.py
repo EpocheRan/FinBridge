@@ -405,6 +405,18 @@ class TushareSource:
         """个股资金流（四档）。支持 ``trade_date`` 或 ``ts_code+start_date+end_date``。"""
         return self._call("moneyflow", self.pro.moneyflow, **kwargs)
 
+    def fetch_margin_detail(self, trade_date: str) -> list[dict[str, Any]]:
+        """两融明细（按交易日全市场，``trade_date`` 为 YYYYMMDD）。"""
+        return self._call("margin_detail", self.pro.margin_detail, trade_date=trade_date)
+
+    def fetch_top_list(self, trade_date: str) -> list[dict[str, Any]]:
+        """龙虎榜（按交易日全市场，``trade_date`` 为 YYYYMMDD）。"""
+        return self._call("top_list", self.pro.top_list, trade_date=trade_date)
+
+    def fetch_block_trade(self, trade_date: str) -> list[dict[str, Any]]:
+        """大宗交易（按交易日全市场，``trade_date`` 为 YYYYMMDD）。"""
+        return self._call("block_trade", self.pro.block_trade, trade_date=trade_date)
+
     def fetch_concept(self) -> list[dict[str, Any]]:
         """概念分类树（Tushare ``concept``）。"""
         return self._call("concept", self.pro.concept)

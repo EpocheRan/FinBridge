@@ -1,4 +1,4 @@
-# 10 · scripts（运维与研究脚本）
+﻿# 10 · scripts（运维与研究脚本）
 
 ## 1. 架构与依赖
 
@@ -42,31 +42,44 @@
 | `backfill_moneyflow.py` | 资金流 | `python scripts/backfill_moneyflow.py` |
 | `backfill_factors.py` | **财务因子物化**（STORED） | `--codes 120 --start 2024-01-01 --chunk 4` |
 | `backfill_history.py` | **历史数据补齐（分阶段）** | 见下表 |
-| `compact-docker-vhdx.ps1` | 压缩 Docker 虚拟磁盘 | 见 §1.3.1 |
-| `factor_report.py` | 单因子 HTML 报告 | `--factor momentum.ret_21d --pool 200` |
+| `factor_report.py` | 单因子 HTML 报告 | `--factor momentum.return_21d --pool 200` |
 | `factor_scorecard.py` | **全量评级 + 评分卡入库** | `--source price --pool 200 --render` |
 | `calibrate_directions.py` | 用实测 IC 校准方向 | `--min-abs-ic 0.02 --apply` |
 | `research_reversal_density.py` | 反转信号密度阈值研究 | `--codes 500` |
 | `research_reversal_regimes.py` | 分市场状态的最优阈值 | `--codes 500` |
 | `research_composite_demo.py` | 复合因子 + 中性化演示 | — |
 | `research_limitup_check.py` | 涨停可成交性检验 | `--pool 500` |
-| `compact-docker-vhdx.ps1` | **压缩 Docker 虚拟磁盘**（WSL2 vhdx 只增不减） | 管理员 PowerShell 执行，见 §1.3.1 |
+| `compact-docker-vhdx.ps1` | **重建 Docker 数据盘**（回收 vhdx 空转空间） | 管理员 PowerShell，见 §1.3.1 |
 
-### 1.3.1 Docker 磁盘压缩（PowerShell）
+### 1.3.1 Docker 数据盘回收（PowerShell）
 
-QuestDB 跑在 Docker 里，数据存在 WSL2 的 `docker_data.vhdx` 中。该文件**只增不减**：
-删除数据后空间不会自动归还，文件体积会远大于实际占用（实测：文件 211 GB，实际只用 10 GB）。
+QuestDB 跑在 Docker 里，数据存在 WSL2 的数据盘 `docker_data.vhdx`（默认 `D:\DockerData\`）。该文件
+**只增不减**：删除数据后空间不会自动归还，文件体积会远大于实际占用（实测：文件 400 GB，实际只用 13 GB）。
+
+**注意：`diskpart compact` + `wsl --manage --set-sparse` 这套是无效的**：
+
+1. `wsl --manage docker-desktop --set-sparse` 只作用于**发行版根盘**
+   （`C:\Users\<user>\AppData\Local\Docker\wsl\main\ext4.vhdx`，通常 <1 GB），不是那个几百 GB 的数据盘；
+2. 数据盘不是稀疏文件，guest 里的 TRIM/fstrim 会被直接丢弃；
+3. `compact vdisk` 只能回收「内容为零」的块，而 ext4 释放的块里仍是旧数据，对 compact 来说依然算已分配。
+
+唯一可靠的办法是**重建数据盘**（脚本已按此实现）：
 
 ```powershell
-# 管理员 PowerShell
+# 1) 先干跑：只做检查、打印计划与预计回收空间，不停止任何东西
+powershell -ExecutionPolicy Bypass -File D:\FinBridge\scripts\compact-docker-vhdx.ps1 -DryRun
+
+# 2) 管理员 PowerShell 正式执行（需要输入 YES 确认）
 powershell -ExecutionPolicy Bypass -File D:\FinBridge\scripts\compact-docker-vhdx.ps1
 ```
 
-脚本流程：退出 Docker Desktop → `wsl --shutdown` → vhdx 占用检测 → `diskpart compact vdisk`
-→ 尝试开启稀疏盘 → 打印压缩前后对比。
+脚本流程：停容器 → 备份命名卷到 `D:\docker-backup`（带 tar 条目数校验）→ `compose down` /
+退出 Docker Desktop / `wsl --shutdown` → 删除 vhdx → `wsl --unregister docker-desktop` →
+启动 Docker（自动重建约 1 GB 数据盘）→ 恢复卷 → `compose up -d` → 校验 `ohlcv_1d` 行数与压缩前一致。
 
-- 会中断 Docker / QuestDB 约 10~20 分钟，**数据不会丢**（在命名卷里）；
-- 压缩后 Windows 不会自动回收新产生的空洞，建议每季度或大批量回填后重跑一次；
+- 会中断 Docker / QuestDB 约 10~20 分钟，**数据不会丢**（先备份再删，恢复后校验行数）；
+- 备份需要约「卷大小」的空闲空间（当前 QuestDB 卷约 13 GB）；
+- 备份目录**不会自动删除**，确认服务正常后手动清理；
 - 脚本必须存为 **UTF-8 with BOM**，否则 PowerShell 5.1 会把中文读成乱码并报语法错。
 
 ### 1.4 数据流
@@ -132,7 +145,7 @@ python scripts/factor_scorecard.py --source financial --pool 200 --start 2024-01
 python scripts/calibrate_directions.py --min-abs-ic 0.02
 
 # 5) 单因子报告
-python scripts/factor_report.py --factor momentum.ret_21d --pool 200
+python scripts/factor_report.py --factor liquidity.amount_ma_20d --pool 200 --start 2019-01-01
 ```
 
 ### 2.2 注意事项（坑）

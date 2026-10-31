@@ -6,6 +6,7 @@ from .market_schema import create_market_tables
 from .moneyflow_schema import create_moneyflow_tables
 from .position_schema import create_position_tables
 from .screener_schema import create_screener_tables
+from .sentiment_schema import create_sentiment_tables
 from .task_schema import create_task_tables
 
 __all__ = [
@@ -17,5 +18,6 @@ __all__ = [
     "create_factor_tables",
     "create_position_tables",
     "create_screener_tables",
+    "create_sentiment_tables",
     "create_task_tables",
 ]

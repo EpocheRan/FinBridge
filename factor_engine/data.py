@@ -28,7 +28,7 @@ class PriceData:
         end_ts = datetime.combine(pd.Timestamp(end).date(), time.max).replace(microsecond=0)
         sql = (
             "SELECT ts, code, open, high, low, close, volume, amount, turnover, adj_factor "
-            'FROM "ohlcv_1d" WHERE ts BETWEEN %s AND %s'
+            "FROM \"ohlcv_1d\" WHERE ts BETWEEN %s AND %s AND type <> 'idx'"
         )
         params: list[object] = [start_ts, end_ts]
         if codes:
@@ -61,7 +61,7 @@ class PriceData:
         """基准指数日线（IDX 市场），用于 beta/corr。"""
         sql = (
             "SELECT ts, close FROM ohlcv_1d "
-            "WHERE market = 'IDX' AND code = %s AND ts BETWEEN %s AND %s "
+            "WHERE type = 'idx' AND code = %s AND ts BETWEEN %s AND %s "
             "ORDER BY ts"
         )
         params = [

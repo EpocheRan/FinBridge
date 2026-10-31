@@ -23,6 +23,7 @@ from screener.application.ports import (
     MarketDataPort,
 )
 from screener.config import ScreenerSettings
+from data_interface.common.security_code import instrument_market
 from screener.domain.clock import now_local
 from screener.domain.baseline import build_profile
 from screener.domain.build_state import (
@@ -353,7 +354,7 @@ class BuildOrchestrator:
             else:
                 profile = profile.copy()
                 profile["as_of_date"] = datetime.combine(as_of, datetime.min.time())
-                profile["market"] = "MLCN"
+                profile["market"] = instrument_market(code)
                 profile["formula_version"] = formula_version
                 profile["computed_at"] = now_local()
                 written = self.factor_store.upsert_baseline(profile)

@@ -43,7 +43,7 @@ def register_moneyflow_tools(mcp) -> None:
                 return fail(
                     f"未找到 {stock_code} 在 {start_date} ~ {end_date} 的分档数据",
                     "NoMoneyflowData",
-                    "请先调用 scheduled_sync_a_shares(dataset='moneyflow') 回补。",
+                    "请先调用 acquisition_run(datasets='moneyflow') 回补。",
                 )
             records = dataframe_to_records(frame)
             data_source = str(frame["source"].iloc[-1]) if "source" in frame.columns else source

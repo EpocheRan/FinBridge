@@ -29,7 +29,6 @@ from data_interface.api.moneyflow_tools import register_moneyflow_tools
 from data_interface.api.runtime import get_position_interface
 from factor_engine.api import register_factor_tools
 from data_interface.common.config import get_config, project_path
-from acquisition.legacy_tools import register_scheduled_tools
 from screener.interface.api import register_screener_tools
 
 CONFIG = get_config()
@@ -80,7 +79,6 @@ register_concept_tools(mcp)
 register_disclosure_tools(mcp)
 register_factor_tools(mcp)
 register_acquisition_tools(mcp)
-register_scheduled_tools(mcp)
 register_screener_tools(mcp)
 
 

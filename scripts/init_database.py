@@ -52,6 +52,7 @@ from scripts.schemas import (  # noqa: E402
     create_moneyflow_tables,
     create_position_tables,
     create_screener_tables,
+    create_sentiment_tables,
     create_task_tables,
 )
 
@@ -66,6 +67,7 @@ SUB_SCRIPTS = {
     "factor": create_factor_tables,
     "position": create_position_tables,
     "screener": create_screener_tables,
+    "sentiment": create_sentiment_tables,
     "task": create_task_tables,
 }
 
@@ -151,10 +153,10 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="FinBridge QuestDB 初始化主脚本")
     parser.add_argument(
         "--only",
-        default="market,financial,moneyflow,concept,disclosure,factor,position,screener,task",
+        default="market,financial,moneyflow,sentiment,concept,disclosure,factor,position,screener,task",
         help=(
             "只运行指定子脚本，逗号分隔："
-            "market,financial,moneyflow,concept,disclosure,factor,position,screener,task"
+            "market,financial,moneyflow,sentiment,concept,disclosure,factor,position,screener,task"
         ),
     )
     parser.add_argument("--host", default=None, help="覆盖 QuestDB host")

@@ -44,11 +44,8 @@ class QuestDBScreenerQuery:
         ]
         select = "SELECT *, " + ", ".join(derived) + ' FROM "factor_daily_wide"'
 
-        clauses = ["ts = %s", "market = %s"]
-        params: list = [
-            datetime.combine(spec.as_of, time.min),
-            spec.universe.market,
-        ]
+        clauses = ["ts = %s"]
+        params: list = [datetime.combine(spec.as_of, time.min)]
 
         codes = spec.universe.normalized_codes()
         if codes is not None and not spec.universe.all_market:

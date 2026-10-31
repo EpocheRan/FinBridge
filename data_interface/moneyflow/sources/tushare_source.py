@@ -17,7 +17,7 @@ from typing import Any
 
 import pandas as pd
 
-from data_interface.common.security_code import normalize_code, to_ts_code
+from data_interface.common.security_code import instrument_market, normalize_code, to_ts_code
 from data_interface.common.timeutil import now_cn
 
 from ..models import BUCKETS, CANONICAL_COLUMNS, SOURCE_TUSHARE, TUSHARE_META
@@ -115,7 +115,7 @@ class TushareMoneyflowSource:
         frame["code"] = (
             frame["ts_code"].astype(str).str.split(".").str[0].map(normalize_code)
         )
-        frame["market"] = "MLCN"
+        frame["market"] = frame["code"].map(instrument_market)
 
         for bucket in BUCKETS:
             frame[f"buy_{bucket}_vol"] = self._shares(frame, f"buy_{bucket}_vol")

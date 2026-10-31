@@ -37,6 +37,19 @@ def test_all_order_covers_screener_and_factors():
     assert set(REAL_SYNCERS) == set(DATASET_ORDER)
 
 
+def test_sentiment_datasets_follow_moneyflow():
+    for name in ("margin_detail", "top_list", "block_trade"):
+        assert name in DATASET_ORDER
+        assert name in REAL_SYNCERS
+    assert DATASET_ORDER.index("moneyflow") < DATASET_ORDER.index("margin_detail")
+
+
+def test_legacy_service_entry_removed():
+    from acquisition.datasets import AShareSyncService
+
+    assert not hasattr(AShareSyncService, "run")
+
+
 def test_scope_sorts_codes_and_validates_range():
     scope = make_scope(codes=("600519", "000001", "600519"))
     assert scope.codes == ("000001", "600519")

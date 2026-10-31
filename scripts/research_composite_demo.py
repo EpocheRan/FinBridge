@@ -57,12 +57,12 @@ def main() -> int:
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
-    latest = query("select max(ts) m from ohlcv_1d where market='MLCN'")["m"].iloc[0]
+    latest = query("select max(ts) m from ohlcv_1d where type <> 'idx'")["m"].iloc[0]
     start = (pd.Timestamp(latest) - pd.Timedelta(days=args.days)).strftime("%Y-%m-%d")
     logger.info("区间 %s ~ %s", start, latest)
 
     pool = query(
-        f"""select code from ohlcv_1d where ts='{latest}' and market='MLCN'
+        f"""select code from ohlcv_1d where ts='{latest}' and type <> 'idx'
             order by amount desc limit {args.pool}"""
     )
     # 只保留股票（排除 ETF/LOF：51/15/16/58 开头）
@@ -71,7 +71,7 @@ def main() -> int:
 
     frame = query(
         f"""select ts, code, open, high, low, close, volume, amount, adj_factor
-            from ohlcv_1d where market='MLCN' and code in ({inlist}) and ts >= '{start}'"""
+            from ohlcv_1d where type <> 'idx' and code in ({inlist}) and ts >= '{start}'"""
     )
     frame = frame.rename(columns={"ts": "date", "code": "symbol"})
     frame["date"] = pd.to_datetime(frame["date"]).dt.tz_localize(None)

@@ -1,4 +1,4 @@
-"""A 股全量日线/财务数据同步任务。
+"""A 股数据同步的数据集实现。
 
 模块本身不负责定时，只提供可被 Agent 心跳反复调用的「有界批次」：
 
@@ -7,7 +7,11 @@
 - 基准指数：补齐 Beta 所需的基准指数日线；
 - 财务：按股票池分批，逐只拉取三大报表、派生指标与估值；
 - Screener：按日期范围构建/修复日频因子快照；
+- 两融/龙虎榜/大宗：按交易日批量拉取，写入情绪三表；
 - 每次只处理有限数量，返回 next_cursor / next_cursors，下一次心跳从游标继续。
+
+对外编排入口是 ``acquisition.orchestrator``（CLI ``python -m acquisition run``、
+MCP ``acquisition_run``）；本类只提供各数据集的同步方法，不再承担总调度。
 
 2026-10 修订：
 
@@ -17,8 +21,7 @@
 - 支持 ``include_funds``（ETF/LOF 日线 + 基金基础信息）；
 - 支持 ``codes`` 指定股票/ETF 代码（不传则全市场），
   指定代码时任务状态使用独立的 ``daily_codes`` / ``financial_codes`` 游标，
-  不会覆盖全市场回填进度；
-- ``run(dataset="all")`` 可一次编排日线、基准、财务、Screener 四个阶段。
+  不会覆盖全市场回填进度。
 """
 
 from __future__ import annotations
@@ -90,20 +93,6 @@ CONCEPT_DAILY_STATE = "concept_daily"
 CONCEPT_MEMBER_STATE = "concept_member"
 CONCEPT_CLASS_STATE = "concept_class"
 VALUATION_STATE = "valuation"
-
-DATASETS = (
-    "daily",
-    "benchmark",
-    "financial",
-    "valuation",
-    "screener",
-    "moneyflow",
-    "concept_meta",
-    "concept_daily",
-    "concept_member",
-    "concept_class",
-    "all",
-)
 
 
 def normalize_selected_codes(

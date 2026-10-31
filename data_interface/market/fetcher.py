@@ -17,6 +17,8 @@ from data_interface.common.config import get_config
 from data_interface.common.exceptions import DataNotFoundError, SourceUnavailableError
 from data_interface.common.questdb_client import QuestDBClient
 from data_interface.common.security_code import (
+    instrument_market,
+    instrument_type,
     normalize_code,
     ticker_type as _ticker_type,
 )
@@ -186,7 +188,7 @@ class MarketDataFetcher:
         sql = (
             f'SELECT {", ".join(base_fields + ["adj_factor"])} FROM "{table}" '
             "WHERE ts BETWEEN CAST(%s AS TIMESTAMP) AND CAST(%s AS TIMESTAMP) "
-            "AND code = %s ORDER BY ts"
+            "AND code = %s AND type <> 'idx' ORDER BY ts"
         )
         try:
             return self._read_sql_to_df(sql, (start_date, query_end, stock_code))
@@ -196,7 +198,7 @@ class MarketDataFetcher:
             sql = (
                 f'SELECT {", ".join(base_fields)} FROM "{table}" '
                 "WHERE ts BETWEEN CAST(%s AS TIMESTAMP) AND CAST(%s AS TIMESTAMP) "
-                "AND code = %s ORDER BY ts"
+                "AND code = %s AND type <> 'idx' ORDER BY ts"
             )
             frame = self._read_sql_to_df(sql, (start_date, query_end, stock_code))
             frame["adj_factor"] = pd.NA
@@ -212,7 +214,7 @@ class MarketDataFetcher:
         value: float | None = None
         try:
             row = self.db.query(
-                'SELECT adj_factor FROM "ohlcv_1d" WHERE code = %s '
+                "SELECT adj_factor FROM \"ohlcv_1d\" WHERE code = %s AND type <> 'idx' "
                 "LATEST ON ts PARTITION BY code",
                 (code,),
                 fetch_all=False,
@@ -349,7 +351,7 @@ class MarketDataFetcher:
             return self._read_sql_to_df(
                 'SELECT * FROM "concept_boards_ohlc" '
                 "WHERE ts BETWEEN CAST(%s AS TIMESTAMP) AND CAST(%s AS TIMESTAMP) "
-                "AND code = %s ORDER BY ts",
+                "AND code = %s AND type <> 'idx' ORDER BY ts",
                 (start_date, query_end, board_code),
             )
         df = self.akshare.fetch_concept_board_ohlc(board_name, start_date, end_date)
@@ -433,8 +435,11 @@ class MarketDataFetcher:
             if not freq.endswith("min"):
                 values.append(_to_float(row.get("turnover")))
             values.append(_to_float(row.get("adj_factor")))
-            values.append(normalize_code(row.get("code")))
-            values.append(MARKET_CN)
+            code = normalize_code(row.get("code"))
+            values.append(code)
+            # market = 交易所（SSE/SZSE/BSE），type = 品种（stock/etf/lof/fund/idx）
+            values.append(str(row.get("market") or instrument_market(code)))
+            values.append(str(row.get("type") or instrument_type(code)))
             rows.append(tuple(values))
 
         if skipped:

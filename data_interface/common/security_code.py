@@ -15,14 +15,49 @@ from __future__ import annotations
 import re
 
 _BJ_PREFIXES = ("43", "83", "87", "92", "82", "88")
-_SH_PREFIXES = ("60", "68", "90", "50", "51", "52", "56", "58")
+_SH_PREFIXES = ("60", "68", "90", "50", "51", "52", "53", "55", "56", "58")
 _SZ_PREFIXES = ("00", "30", "20", "15", "16", "18", "12", "39")
 
-_ETF_SH_PREFIXES = ("51", "56", "58", "52")
+_ETF_SH_PREFIXES = ("51", "52", "53", "55", "56", "58")
 #: 场内 REITs / 封闭式基金（也是基金，但不是 ETF/LOF 端点能覆盖的品种）
 _FUND_PREFIXES = ("508", "180", "184", "500", "150")
 _ETF_SZ_PREFIXES = ("15", "16", "18")
 _LOF_PREFIXES = ("16", "501", "502", "506")
+
+#: 指数代码 -> 交易所（与 Tushare 口径一致：000xxx 归沪、399xxx 归深）
+INDEX_CODES = {
+    "000001": "SSE",  # 上证指数
+    "000016": "SSE",  # 上证50
+    "000300": "SSE",  # 沪深300
+    "000688": "SSE",  # 科创50
+    "000852": "SSE",  # 中证1000
+    "000905": "SSE",  # 中证500
+    "399001": "SZSE",  # 深证成指
+    "399006": "SZSE",  # 创业板指
+}
+
+
+def is_index_code(code: object) -> bool:
+    normalized = normalize_code(code)
+    return normalized in INDEX_CODES or normalized.startswith("399")
+
+
+def instrument_type(code: object) -> str:
+    """行情表 ``type`` 列：``stock`` / ``etf`` / ``lof`` / ``fund`` / ``idx``。"""
+    normalized = normalize_code(code)
+    if is_index_code(normalized):
+        return "idx"
+    return ticker_type(normalized)
+
+
+def instrument_market(code: object) -> str:
+    """行情表 ``market`` 列：``SSE`` / ``SZSE`` / ``BSE``（指数按发布交易所）。"""
+    normalized = normalize_code(code)
+    if normalized in INDEX_CODES:
+        return INDEX_CODES[normalized]
+    if normalized.startswith("399"):
+        return "SZSE"
+    return exchange_of(normalized)
 
 
 def normalize_code(code: object) -> str:
@@ -132,7 +167,7 @@ def ticker_type(code: object) -> str:
         return "stock"
     if normalized.startswith(("16", "501", "502", "506")):
         return "lof"
-    if normalized.startswith(("51", "56", "58", "159")):
+    if normalized.startswith(("51", "52", "53", "55", "56", "58", "159")):
         return "etf"
     if normalized.startswith(_FUND_PREFIXES):
         return "fund"

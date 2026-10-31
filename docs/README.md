@@ -67,9 +67,11 @@ FinBridge 是 A 股量化研究平台，**QuestDB 是唯一存储**，所有模�
 
 | 文档 | 内容 |
 |---|---|
+| [finbridge_system_map.html](finbridge_system_map.html) | 交互图谱：11 个模块的职责/核心函数 + 57 张表的真实结构、行数与逻辑关系 |
 | [design/architecture_v2.md](design/architecture_v2.md) | 架构演进与设计决策 |
 | [design/factor_library_v1.md](design/factor_library_v1.md) | 因子库设计（分类、命名、版本） |
 | [design/factor_materialization_v1.md](design/factor_materialization_v1.md) | 因子物化设计 |
+| [design/factor_report_v2.md](design/factor_report_v2.md) | 因子报告加固：方向/价差/断言/归因（27 项审计落点） |
 | [backtest/ARCHITECTURE.md](backtest/ARCHITECTURE.md) | 回测引擎详细架构 |
 | [backtest/README.md](backtest/README.md) | 回测用法与现状 |
 | [data/p0_p2_data_pipeline.md](data/p0_p2_data_pipeline.md) | 分时/板块/披露三条数据链路 |

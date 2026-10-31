@@ -69,7 +69,7 @@ def query(sql: str, timeout: int = 300) -> pd.DataFrame:
 
 def build_panel(pool_date: str, pool_size: int, start: str) -> pd.DataFrame:
     pool = query(
-        f"""select code from ohlcv_1d where ts='{pool_date}' and market='MLCN'
+        f"""select code from ohlcv_1d where ts='{pool_date}' and type <> 'idx'
             order by amount desc limit {pool_size}"""
     )
     codes = [str(c) for c in pool["code"]]
@@ -81,7 +81,7 @@ def build_panel(pool_date: str, pool_size: int, start: str) -> pd.DataFrame:
         frames.append(
             query(
                 f"""select code, ts, open, high, low, close, volume from ohlcv_1d
-                    where ts >= '{start}' and market='MLCN' and code in ({inlist})"""
+                    where ts >= '{start}' and type <> 'idx' and code in ({inlist})"""
             )
         )
         logger.info("  pulled %s", i + len(batch))

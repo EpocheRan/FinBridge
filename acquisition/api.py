@@ -1,4 +1,4 @@
-"""acquisition MCP 工具：统一补齐 / 状态。"""
+"""acquisition MCP 工具：整合同步的唯一入口。"""
 
 from __future__ import annotations
 
@@ -29,7 +29,18 @@ def register_acquisition_tools(mcp) -> None:
         codes: str | list[str] | None = None,
         boards: str | list[str] | None = None,
     ) -> dict[str, Any]:
-        """运行整合同步（会阻塞到当前批次完成）。"""
+        """运行整合同步（唯一入口，会阻塞到当前批次完成）。
+
+        Args:
+            datasets: 逗号分隔的数据集；不传则按依赖顺序全跑：
+                trading_calendar, stock_basic, ohlcv_1d, benchmark, financial,
+                valuation, moneyflow, margin_detail, top_list, block_trade,
+                concept_meta, concept_daily, concept_member, concept_class,
+                factors, screener。
+            start_date / end_date: 日期范围，默认 2020-01-01 至今。
+            codes: 指定股票/ETF 代码；不传表示全市场。
+            boards: 指定板块代码（概念日线/成分用）。
+        """
         try:
             start = date.fromisoformat(start_date) if start_date else date(2020, 1, 1)
             end = date.fromisoformat(end_date) if end_date else date.today()

@@ -17,8 +17,30 @@ VALID_FREQUENCIES = tuple(OHLC_TABLE_BY_FREQUENCY.keys())
 INTRADAY_FREQUENCIES = tuple(freq for freq in VALID_FREQUENCIES if freq.endswith("min"))
 DAILY_FREQUENCIES = ("d", "w", "m")
 
-# 行情表 ``market`` 列（也是 DEDUP key 的一部分）；A 股统一取值
+# 行情表 ``market`` 列（也是 DEDUP key 的一部分）
+# 2026-10 起语义变更：market = 交易所（SSE/SZSE/BSE），品种由 ``type`` 区分。
+# 2026-10-30 起：所有表的 ``market`` 都存交易所代码（SSE/SZSE/BSE），不再有 MLCN。
+# ``MARKET_CN`` 仅为兼容旧调用点保留，写入端已不再使用。
 MARKET_CN = "MLCN"
+
+EXCHANGES = ("SSE", "SZSE", "BSE")
+INSTRUMENT_TYPES = ("stock", "etf", "lof", "fund", "idx")
+
+
+def market_scope_predicate(token: str | None, market_col: str = "market", type_col: str = "type") -> str:
+    """把历史上的市场域标记翻译成新 schema 的 SQL 谓词。
+
+    ``MLCN`` -> 非指数（股票 + 场内基金）；``IDX`` -> 指数；
+    其它值按交易所/市场原样匹配。
+    """
+    if token in (None, "", "MLCN", "ALL"):
+        return f"{type_col} <> 'idx'"
+    if token == "IDX":
+        return f"{type_col} = 'idx'"
+    if token in EXCHANGES:
+        return f"{market_col} = '{token}'"
+    raise ValueError(f"未知的市场标记: {token}")
+
 
 #: 写入/建表共用的列顺序（唯一真源，schema 与 fetcher 都从这里取）
 OHLC_COLUMNS_MINUTE = [
@@ -32,6 +54,7 @@ OHLC_COLUMNS_MINUTE = [
     "adj_factor",
     "code",
     "market",
+    "type",
 ]
 OHLC_COLUMNS_DAILY = [
     "ts",
@@ -45,6 +68,7 @@ OHLC_COLUMNS_DAILY = [
     "adj_factor",
     "code",
     "market",
+    "type",
 ]
 
 # 复权相关常量的稳定出口（实现见 data_interface.market.adjust）

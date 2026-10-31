@@ -11,6 +11,7 @@ from typing import Iterable, Sequence
 import pandas as pd
 
 from data_interface.common.questdb_client import QuestDBClient
+from data_interface.common.security_code import instrument_market
 from screener.domain.clock import now_local
 from screener.domain.build_state import BuildState
 from screener.domain.suspension import Suspension, SuspensionStatus
@@ -305,10 +306,10 @@ class QuestDBSuspensionRepository:
         placeholders = ", ".join(["%s"] * len(codes))
         sql = (
             'SELECT * FROM "market_suspension" '
-            f"WHERE market = %s AND code IN ({placeholders}) "
+            f"WHERE code IN ({placeholders}) "
             "LATEST ON updated_at PARTITION BY code, market, status"
         )
-        frame = self.db.query_dataframe(sql, [str(market), *codes])
+        frame = self.db.query_dataframe(sql, list(codes))
         if frame is None or frame.empty:
             return {}
         if isinstance(frame.index, pd.DatetimeIndex):
@@ -332,6 +333,14 @@ class QuestDBSuspensionRepository:
         rows = [suspension_to_row(item) for item in items]
         if not rows:
             return 0
+        # market 统一落交易所（旧数据里的 MLCN 已迁移）
+        code_i = SUSPENSION_COLUMNS.index("code")
+        market_i = SUSPENSION_COLUMNS.index("market")
+        rows = [
+            tuple(instrument_market(row[code_i]) if i == market_i else value
+                  for i, value in enumerate(row))
+            for row in rows
+        ]
         columns = ", ".join(f'"{column}"' for column in SUSPENSION_COLUMNS)
         sql = f'INSERT INTO "market_suspension" ({columns}) VALUES %s'
         return self.db.execute_values(sql, rows, page_size=200)

@@ -45,6 +45,7 @@
 | | `repository.py` | SQL 读写 |
 | | `normalizer.py` / `metrics.py` | 字段归一、季度化、TTM |
 | `moneyflow/` | `service.py` | 资金流同步/排名 |
+| `sentiment/` | `service.py` / `repository.py` | `SentimentService`：两融/龙虎榜/大宗按交易日批量同步 |
 | `concept/` | `service.py` | 板块目录、成分、板块日线、个股↔板块映射 |
 | `disclosure/` | `service.py` | 财报披露日历、公告 |
 | `api/` | `*_tools.py` / `runtime.py` / `utils.py` | MCP 工具注册、单例管理、JSON 序列化 |
@@ -67,7 +68,7 @@ MarketDataLoader.ohlc(codes, start, end, freq, adjust)
 | 类 | 关键方法 | 说明 |
 |---|---|---|
 | `QuestDBClient` | `query_dataframe(sql)` / `execute(sql)` / `execute_values(prefix, rows)` / `execute_ddl(sql)` | 所有 SQL 的入口 |
-| `MarketDataLoader` | `ohlc(codes, start, end, freq, adjust, source_priority)` / `ticker_basic_info` / `concept_boards*` | 行情主入口，含增量与复权 |
+| `MarketDataLoader` | `ohlc(codes, start, end, freq, adjust, source_priority)` / `ticker_basic_info` | 行情主入口，含增量与复权（板块走 `ConceptService`） |
 | `MarketDataFetcher` | `get_ohlc(...)` / `get_realtime_quotes` / `update_ohlc(data, freq)` | 多源调度 + 写库 |
 | `FinancialDataService` | `get_statements` / `get_valuation` / `get_indicators` / `sync_*` / `ensure_stock_universe` | 财务 PIT |
 | `MoneyflowService` | `get_by_code` / `get_by_date` / `rank` / `sync` | 资金流 |

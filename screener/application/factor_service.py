@@ -8,6 +8,7 @@ from typing import Sequence
 
 import pandas as pd
 
+from data_interface.common.security_code import instrument_market
 from screener.domain.clock import now_local
 from screener.domain.factor_engine import FactorEngine
 from screener.application.models import ComputeResult
@@ -50,7 +51,7 @@ class FactorService:
             return ComputeResult(rows_written=0, frame=factors)
 
         factors = factors.copy()
-        factors["market"] = "MLCN"
+        factors["market"] = factors["code"].map(instrument_market)
         factors["formula_version"] = self.engine.config.formula_version
         factors["computed_at"] = now_local()
         if write_start is not None:

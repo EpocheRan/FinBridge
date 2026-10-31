@@ -43,6 +43,7 @@ except Exception:
 import pandas as pd  # noqa: E402
 
 from data_interface.common.config import load_config  # noqa: E402
+from data_interface.common.security_code import instrument_market
 from data_interface.common.questdb_client import QuestDBClient  # noqa: E402
 from data_interface.common.timeutil import today_str  # noqa: E402
 from data_interface.market.sources.index_source import IndexMarketSource  # noqa: E402
@@ -64,7 +65,7 @@ DEFAULT_INDICES = {
 #: 历史遗留：被错标成 MLCN 的指数代码
 MISLABELED_AS_STOCK = ("000001", "000688", "000016", "000300", "000905", "000852", "399001", "399006")
 
-_COLUMNS = ["ts", "open", "high", "low", "close", "volume", "amount", "turnover", "adj_factor", "code", "market"]
+_COLUMNS = ["ts", "open", "high", "low", "close", "volume", "amount", "turnover", "adj_factor", "code", "market", "type"]
 
 
 def _relabel(db: QuestDBClient) -> int:
@@ -80,7 +81,7 @@ def _relabel(db: QuestDBClient) -> int:
         return 0
     for code in codes:
         db.execute_http(
-            f"UPDATE \"ohlcv_1d\" SET market='IDX' WHERE code='{code}' AND market='MLCN'"
+            f"UPDATE \"ohlcv_1d\" SET type='idx', market='{instrument_market(code)}' WHERE code='{code}' AND type <> 'idx'"
         )
         logger.info("重贴标签 %s: MLCN -> IDX", code)
     return len(codes)
@@ -92,7 +93,8 @@ def _fetch_index(source: IndexMarketSource, code: str, start: date, end: date) -
         return pd.DataFrame()
     frame = frame.copy()
     frame["code"] = code
-    frame["market"] = "IDX"
+    frame["market"] = instrument_market(code)
+    frame["type"] = "idx"
     if "adj_factor" not in frame.columns:
         frame["adj_factor"] = 1.0
     if "turnover" not in frame.columns:
@@ -164,7 +166,7 @@ def main() -> int:
 
         summary = db.query(
             'SELECT code, count() c, min(ts) a, max(ts) b FROM "ohlcv_1d" '
-            "WHERE market = 'IDX' GROUP BY code ORDER BY code"
+            "WHERE type = 'idx' GROUP BY code ORDER BY code"
         ) or []
         for code, count, first, last in summary:
             logger.info("  校验 %s: %s 行 %s ~ %s", code, count, str(first)[:10], str(last)[:10])

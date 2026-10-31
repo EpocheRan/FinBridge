@@ -1,0 +1,1778 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>FinBridge · 系统模块与数据模型图谱</title>
+<meta name="description" content="FinBridge A 股量化研究平台：11 个模块的职责与核心函数，57 张 QuestDB 表的真实结构、行数、时间跨度与逻辑关系。">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23070c16'/%3E%3Crect x='10' y='10' width='12' height='12' rx='2' fill='%2367e8f9'/%3E%3C/svg%3E">
+<style>
+  :root{
+    --bg:#05080f;
+    --bg-2:#070c16;
+    --panel:rgba(13,21,35,.72);
+    --panel-solid:#0b1322;
+    --line:rgba(148,163,184,.14);
+    --line-soft:rgba(148,163,184,.08);
+    --text:#e9eef7;
+    --muted:#93a4bd;
+    --dim:#61728c;
+    --cyan:#22d3ee;
+    --amber:#f59e0b;
+    --rose:#fb7185;
+    --violet:#a78bfa;
+    --blue:#60a5fa;
+    --emerald:#34d399;
+    --slate:#94a3b8;
+    --mono:"JetBrains Mono","SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace;
+    --sans:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    --radius:16px;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);
+    font-size:14px;line-height:1.6;-webkit-font-smoothing:antialiased;
+    background-image:
+      radial-gradient(1100px 600px at 12% -8%,rgba(34,211,238,.10),transparent 60%),
+      radial-gradient(900px 520px at 88% 0%,rgba(167,139,250,.10),transparent 62%),
+      radial-gradient(900px 700px at 50% 110%,rgba(59,130,246,.07),transparent 65%),
+      linear-gradient(rgba(148,163,184,.035) 1px,transparent 1px),
+      linear-gradient(90deg,rgba(148,163,184,.035) 1px,transparent 1px);
+    background-size:auto,auto,auto,64px 64px,64px 64px;
+  }
+  a{color:inherit}
+  ::selection{background:rgba(96,165,250,.35)}
+  .mono{font-family:var(--mono);font-variant-ligatures:none}
+  .wrap{max-width:1460px;margin:0 auto;padding:0 30px}
+
+  /* ---------- top bar ---------- */
+  .topbar{
+    position:sticky;top:0;z-index:50;
+    background:rgba(5,8,15,.78);
+    backdrop-filter:blur(20px) saturate(150%);
+    border-bottom:1px solid var(--line-soft);
+  }
+  .topbar-in{display:flex;align-items:center;gap:22px;height:62px;max-width:1460px;margin:0 auto;padding:0 30px}
+  .brand{display:flex;align-items:center;gap:11px;min-width:0}
+  .logo{
+    width:32px;height:32px;border-radius:9px;flex:none;
+    background:conic-gradient(from 210deg,#22d3ee,#3b82f6,#a78bfa,#22d3ee);
+    position:relative;box-shadow:0 0 24px rgba(56,189,248,.35);
+  }
+  .logo::after{
+    content:"";position:absolute;inset:5px;border-radius:5px;background:#070c16;
+    box-shadow:inset 0 0 0 1px rgba(255,255,255,.12);
+  }
+  .logo::before{
+    content:"";position:absolute;inset:11px;border-radius:2px;
+    background:linear-gradient(135deg,#67e8f9,#818cf8);z-index:1;
+  }
+  .brand-name{font-family:var(--mono);font-weight:700;letter-spacing:.04em;font-size:15px;line-height:1.1}
+  .brand-sub{font-size:10.5px;color:var(--dim);letter-spacing:.06em;line-height:1.2}
+  .tabs{display:flex;gap:3px;margin-left:auto;padding:4px;border:1px solid var(--line);border-radius:11px;background:rgba(255,255,255,.03)}
+  .tab{
+    appearance:none;border:0;background:transparent;color:var(--muted);font-family:var(--sans);
+    font-size:13px;padding:6px 15px;border-radius:8px;cursor:pointer;transition:.18s;white-space:nowrap;
+  }
+  .tab:hover{color:var(--text)}
+  .tab.active{color:#fff;background:linear-gradient(180deg,#1c2b44,#131f33);box-shadow:inset 0 1px 0 rgba(255,255,255,.08),0 8px 20px rgba(0,0,0,.35)}
+  .top-meta{display:flex;align-items:center;gap:9px;font-size:11.5px;color:var(--dim);white-space:nowrap}
+  .dot{width:6px;height:6px;border-radius:50%;background:#34d399;box-shadow:0 0 10px #34d399;animation:pulse 2.4s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+  /* ---------- views ---------- */
+  .view{display:none;animation:rise .5s cubic-bezier(.22,.61,.36,1) both}
+  .view.active{display:block}
+  @keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+
+  /* ---------- hero ---------- */
+  .hero{padding:64px 0 18px}
+  .kicker{font-family:var(--mono);font-size:11px;letter-spacing:.2em;color:var(--dim);text-transform:uppercase;display:flex;align-items:center;gap:10px}
+  .kicker::before{content:"";width:26px;height:1px;background:linear-gradient(90deg,var(--cyan),transparent)}
+  h1{
+    font-size:clamp(32px,4.4vw,52px);line-height:1.08;letter-spacing:-.03em;margin:16px 0 0;
+    font-weight:700;max-width:1050px;
+  }
+  h1 .grad{background:linear-gradient(100deg,#67e8f9 0%,#60a5fa 42%,#c4b5fd 100%);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .lede{max-width:760px;color:var(--muted);font-size:15px;margin:18px 0 0}
+  .lede b{color:var(--text);font-weight:600}
+  .statstrip{
+    margin-top:38px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);
+    display:grid;grid-template-columns:repeat(5,1fr);
+  }
+  .stat{padding:20px 4px 20px 22px;border-left:1px solid var(--line-soft);position:relative}
+  .stat:first-child{border-left:0;padding-left:0}
+  .stat-label{font-size:11px;color:var(--dim);letter-spacing:.06em}
+  .stat-value{font-family:var(--mono);font-size:27px;font-weight:600;letter-spacing:-.02em;margin-top:5px;line-height:1.15;font-variant-numeric:tabular-nums}
+  .stat-value small{font-size:12px;color:var(--muted);font-weight:400;margin-left:3px;letter-spacing:0}
+  .stat-note{font-size:11px;color:var(--dim);margin-top:2px}
+
+  /* ---------- sections ---------- */
+  .section{padding:54px 0 10px}
+  .sec-head{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;margin-bottom:20px}
+  .sec-title{font-size:20px;margin:0;letter-spacing:-.01em;font-weight:650}
+  .sec-desc{color:var(--muted);font-size:13px;margin:5px 0 0;max-width:760px}
+  .sec-tag{font-family:var(--mono);font-size:10.5px;color:var(--dim);border:1px solid var(--line);border-radius:999px;padding:4px 10px;white-space:nowrap}
+
+  .arch-shell{
+    position:relative;border:1px solid var(--line);border-radius:22px;overflow:hidden;
+    background:linear-gradient(180deg,rgba(14,23,38,.86),rgba(7,12,21,.92));
+    box-shadow:0 30px 80px -40px rgba(0,0,0,.9),inset 0 1px 0 rgba(255,255,255,.04);
+  }
+  .arch-shell svg{display:block;width:100%;height:auto}
+  .arch-foot{display:flex;flex-wrap:wrap;gap:8px 22px;padding:14px 22px;border-top:1px solid var(--line-soft);font-size:11.5px;color:var(--dim)}
+  .arch-foot span{display:inline-flex;align-items:center;gap:7px}
+  .lg-line{width:20px;height:0;border-top:1.5px solid #64748b}
+  .lg-dash{width:20px;height:0;border-top:1.5px dashed #38bdf8}
+
+  /* architecture svg */
+  .abox{fill:url(#gBox);stroke:rgba(148,163,184,.22);stroke-width:1}
+  .abox-soft{fill:rgba(13,22,37,.6);stroke:rgba(148,163,184,.14);stroke-width:1}
+  .atitle{fill:#e9eef7;font-family:var(--sans);font-size:14px;font-weight:650;letter-spacing:.01em}
+  .asub{fill:#7f91aa;font-family:var(--mono);font-size:10px}
+  .abadge{font-family:var(--mono);font-size:9px;letter-spacing:.08em;fill:#8fa3bf}
+  .achip{fill:rgba(15,25,42,.9);stroke:rgba(148,163,184,.18)}
+  .achiplabel{fill:#b9c6d8;font-family:var(--mono);font-size:11px}
+  .aarrow{fill:none;stroke:#5b6b82;stroke-width:1.2}
+  .aarrow-cyan{fill:none;stroke:#22d3ee;stroke-width:1.3;opacity:.75}
+  .aarrow-amber{fill:none;stroke:#f59e0b;stroke-width:1.3;opacity:.75}
+  .aarrow-blue{fill:none;stroke:#60a5fa;stroke-width:1.3;opacity:.8}
+  .alabel{fill:#7f91aa;font-family:var(--mono);font-size:9.5px}
+  .db-title{fill:#dff6fb;font-family:var(--sans);font-size:15px;font-weight:650}
+  .db-sub{fill:#5f7f92;font-family:var(--mono);font-size:9.5px}
+  .gtitle{fill:#cfe0f0;font-family:var(--sans);font-size:11px;font-weight:600}
+  .gmeta{fill:#5f7288;font-family:var(--mono);font-size:8.5px}
+  .gtab{fill:#8aa0ba;font-family:var(--mono);font-size:8.6px}
+
+  /* ---------- overview lower grid ---------- */
+  .grid-2{display:grid;grid-template-columns:1.15fr .85fr;gap:18px;margin-top:18px}
+  .card{
+    background:linear-gradient(180deg,rgba(16,26,43,.72),rgba(9,15,26,.78));
+    border:1px solid var(--line);border-radius:var(--radius);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.04);
+  }
+  .card-pad{padding:22px 24px}
+  .card-h{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px}
+  .card-t{font-size:14px;font-weight:650;letter-spacing:.01em}
+  .card-s{font-size:11.5px;color:var(--dim)}
+  .bars{display:flex;flex-direction:column;gap:11px}
+  .bar-row{display:grid;grid-template-columns:170px 1fr 84px;align-items:center;gap:12px}
+  .bar-name{font-family:var(--mono);font-size:11.5px;color:#b9c7da;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .bar-track{height:7px;border-radius:99px;background:rgba(148,163,184,.09);overflow:hidden}
+  .bar-fill{height:100%;border-radius:99px;transform-origin:left;animation:grow .9s cubic-bezier(.22,.61,.36,1) both}
+  @keyframes grow{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+  .bar-val{font-family:var(--mono);font-size:11px;color:var(--muted);text-align:right;font-variant-numeric:tabular-nums}
+  .note-list{display:flex;flex-direction:column;gap:12px}
+  .note{display:grid;grid-template-columns:22px 1fr;gap:11px;font-size:12.5px;color:var(--muted);line-height:1.55}
+  .note i{
+    width:20px;height:20px;border-radius:6px;display:grid;place-items:center;font-style:normal;
+    font-size:11px;font-family:var(--mono);border:1px solid var(--line);color:var(--muted);background:rgba(255,255,255,.02)
+  }
+  .note b{color:#c9d6e8;font-weight:600}
+  .note.warn i{color:#fbbf24;border-color:rgba(245,158,11,.3);background:rgba(245,158,11,.08)}
+  .rule-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:1px;background:var(--line-soft);border:1px solid var(--line);border-radius:16px;overflow:hidden;margin-top:18px}
+  .rule{background:#080e19;padding:20px 20px 22px;position:relative}
+  .rule-n{font-family:var(--mono);font-size:10px;color:var(--dim);letter-spacing:.1em}
+  .rule-t{font-size:13px;font-weight:650;margin:8px 0 6px}
+  .rule-d{font-size:11.5px;color:var(--dim);line-height:1.55}
+
+  /* ---------- modules ---------- */
+  .mod-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-top:8px}
+  .mod{
+    position:relative;overflow:hidden;padding:20px 20px 18px;
+    background:linear-gradient(180deg,rgba(16,26,43,.7),rgba(9,15,26,.82));
+    border:1px solid var(--line);border-radius:16px;transition:transform .22s,border-color .22s,box-shadow .22s;
+    display:flex;flex-direction:column;gap:12px;
+  }
+  .mod:hover{transform:translateY(-3px);border-color:rgba(148,163,184,.3);box-shadow:0 24px 50px -28px rgba(0,0,0,.9)}
+  .mod::before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--acc);opacity:.75}
+  .mod::after{
+    content:"";position:absolute;right:-30px;top:-40px;width:150px;height:150px;border-radius:50%;
+    background:radial-gradient(circle,var(--acc),transparent 68%);opacity:.07;pointer-events:none;
+  }
+  .mod-top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+  .mod-idx{font-family:var(--mono);font-size:10px;color:var(--dim);letter-spacing:.1em;padding-top:3px}
+  .mod-layer{font-size:9.5px;font-family:var(--mono);letter-spacing:.08em;color:var(--acc);border:1px solid color-mix(in srgb,var(--acc) 32%,transparent);background:color-mix(in srgb,var(--acc) 8%,transparent);border-radius:999px;padding:2px 8px;white-space:nowrap}
+  .mod-name{font-family:var(--mono);font-size:15.5px;font-weight:700;letter-spacing:-.01em;line-height:1.2}
+  .mod-cn{font-size:11px;color:var(--dim);margin-top:2px;letter-spacing:.04em}
+  .mod-role{font-size:12.5px;color:var(--muted);line-height:1.55;min-height:38px}
+  .mod-funcs{display:flex;flex-direction:column;gap:3px;border-top:1px solid var(--line-soft);padding-top:10px}
+  .fn{display:flex;gap:8px;font-family:var(--mono);font-size:10.8px;color:#9fb2ca;line-height:1.55;align-items:baseline}
+  .fn::before{content:"›";color:var(--acc);opacity:.75;flex:none}
+  .fn span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .mod-foot{display:flex;flex-direction:column;gap:8px;margin-top:auto;padding-top:4px}
+  .mod-tables{display:flex;gap:6px;flex-wrap:wrap}
+  .mod-deps{font-family:var(--mono);font-size:9.5px;color:var(--dim);border-top:1px solid var(--line-soft);padding-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tag{
+    font-family:var(--mono);font-size:10px;color:var(--dim);border:1px solid var(--line);
+    padding:2px 7px;border-radius:6px;background:rgba(255,255,255,.02);white-space:nowrap
+  }
+  .tag.hit{cursor:pointer;color:#a9c3e2;transition:.16s}
+  .tag.hit:hover{color:#fff;border-color:rgba(96,165,250,.5);background:rgba(96,165,250,.1)}
+  .mod-note{font-size:11px;color:var(--dim);border-left:2px solid rgba(148,163,184,.2);padding-left:9px;line-height:1.5}
+  .mod-note b{color:#fca5a5;font-weight:500}
+
+  /* ---------- ER ---------- */
+  .er-shell{border:1px solid var(--line);border-radius:18px;overflow:hidden;background:linear-gradient(180deg,rgba(11,19,33,.92),rgba(6,10,18,.96))}
+  .er-toolbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:11px 14px;border-bottom:1px solid var(--line-soft);background:rgba(8,13,23,.7)}
+  .er-search{position:relative;flex:1 1 220px;max-width:300px}
+  .er-search input{
+    width:100%;background:rgba(255,255,255,.03);border:1px solid var(--line);border-radius:8px;
+    color:var(--text);font-family:var(--mono);font-size:11.5px;padding:7px 10px 7px 29px;outline:none;transition:.16s
+  }
+  .er-search input:focus{border-color:rgba(96,165,250,.5);background:rgba(96,165,250,.05)}
+  .er-search::before{content:"⌕";position:absolute;left:10px;top:50%;transform:translateY(-53%);color:var(--dim);font-size:14px}
+  .er-chips{display:flex;gap:6px;flex-wrap:wrap}
+  .dchip{
+    display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:rgba(255,255,255,.02);
+    color:var(--muted);font-size:11px;padding:5px 9px;border-radius:7px;cursor:pointer;transition:.16s;white-space:nowrap
+  }
+  .dchip:hover{color:var(--text);border-color:rgba(148,163,184,.3)}
+  .dchip.on{color:#fff;background:rgba(255,255,255,.06);border-color:rgba(148,163,184,.4)}
+  .dchip i{width:6px;height:6px;border-radius:2px;background:var(--c);flex:none}
+  .dchip b{font-family:var(--mono);font-weight:400;color:var(--dim);font-size:10px}
+  .er-actions{display:flex;gap:6px;margin-left:auto}
+  .btn{
+    border:1px solid var(--line);background:rgba(255,255,255,.02);color:var(--muted);font-size:11px;
+    padding:6px 10px;border-radius:7px;cursor:pointer;transition:.16s;font-family:var(--sans);white-space:nowrap
+  }
+  .btn:hover{color:#fff;border-color:rgba(148,163,184,.35);background:rgba(255,255,255,.05)}
+  .btn.on{color:#dbeafe;border-color:rgba(96,165,250,.45);background:rgba(96,165,250,.12)}
+  .er-canvas{position:relative;height:calc(100vh - 240px);min-height:520px;overflow:hidden;cursor:grab;touch-action:none}
+  .er-canvas:active{cursor:grabbing}
+  .er-canvas svg{display:block;width:100%;height:100%;user-select:none}
+  .er-hint{position:absolute;left:14px;bottom:12px;font-size:10.5px;color:var(--dim);background:rgba(5,9,16,.7);border:1px solid var(--line-soft);padding:5px 9px;border-radius:7px;pointer-events:none;backdrop-filter:blur(6px)}
+  .er-zoom{position:absolute;right:12px;bottom:12px;display:flex;gap:5px}
+  .er-zoom button{
+    width:28px;height:28px;border-radius:7px;border:1px solid var(--line);background:rgba(9,15,26,.85);
+    color:var(--muted);cursor:pointer;font-size:14px;line-height:1;backdrop-filter:blur(6px)
+  }
+  .er-zoom button:hover{color:#fff;border-color:rgba(148,163,184,.35)}
+
+  .lane-bg{stroke-width:1;cursor:pointer}
+  #erLanes .lane{transition:opacity .28s}
+  .lane-title{font-family:var(--sans);font-size:14.5px;font-weight:650;letter-spacing:.01em;cursor:pointer}
+  .lane-meta{font-family:var(--mono);font-size:10px;fill:#5f7288}
+  .lane-rule{stroke-width:1;opacity:.5}
+
+  .node{cursor:pointer}
+  .node-bg{fill:url(#nodeGrad);stroke:rgba(148,163,184,.16);stroke-width:1;transition:stroke .18s,opacity .18s}
+  .node:hover .node-bg{stroke:rgba(226,232,240,.55)}
+  .node.faded{opacity:.18;pointer-events:none}
+  .node.spot-off{opacity:.2}
+  .node.hot .node-bg{stroke:rgba(226,232,240,.65)}
+  .n-name{font-family:var(--mono);font-size:14px;font-weight:700;fill:#eaf1fa;letter-spacing:-.01em}
+  .n-cn{font-family:var(--sans);font-size:10.5px;fill:#8ea2ba}
+  .n-rows{font-family:var(--mono);font-size:9.5px;fill:#6e8199}
+  .n-div{stroke:rgba(148,163,184,.13);stroke-width:1}
+  .n-field{font-family:var(--mono);font-size:11.2px;fill:#b3c4d9}
+  .n-foot{font-family:var(--mono);font-size:9.2px;fill:#647891}
+  .n-badge{font-family:var(--mono);font-size:8px;letter-spacing:.06em}
+  .lane-empty{font-family:var(--sans);font-size:11px;fill:#4b5b71}
+
+  .edge{fill:none;stroke-linecap:round;opacity:.46;stroke-width:1.45;transition:opacity .18s,stroke-width .18s}
+  .edge.hot{opacity:1;stroke-width:2.2}
+  .edge.dim{opacity:.07}
+  .edge-hit{fill:none;stroke:transparent;stroke-width:14;pointer-events:stroke;cursor:pointer}
+  .edge-label{
+    font-family:var(--mono);font-size:9.5px;fill:#a9bcd4;opacity:0;pointer-events:none;
+    paint-order:stroke;stroke:#060a12;stroke-width:3px;stroke-linejoin:round;transition:opacity .18s
+  }
+  .edge-label.show{opacity:.8}
+  #erSvg.show-labels .edge-label{opacity:.8}
+  .edge-label.hot{opacity:1;fill:#e2ecf9}
+
+  .er-legend{display:flex;flex-wrap:wrap;align-items:center;gap:8px 20px;margin-top:12px;font-size:11px;color:var(--dim)}
+  .er-legend span{display:inline-flex;align-items:center;gap:7px}
+  .er-legend i{width:20px;height:0;border-top:1.5px solid}
+  .er-legend i.dash{border-top-style:dashed}
+  .er-legend i.dot{border-top-style:dotted}
+  .er-legend code{font-family:var(--mono);font-size:10.5px;color:#8ea3bd}
+  .er-legend .sp{flex:1}
+
+  /* ---------- drawer ---------- */
+  #dwScrim{position:fixed;inset:0;background:rgba(2,5,10,.48);backdrop-filter:blur(1px);opacity:0;pointer-events:none;transition:opacity .25s;z-index:70}
+  #dwScrim.on{opacity:1;pointer-events:auto}
+  .drawer{
+    position:fixed;top:0;right:0;height:100%;width:min(470px,94vw);z-index:80;
+    background:linear-gradient(180deg,#0d1829 0%,#080f1b 100%);border-left:1px solid rgba(148,163,184,.2);
+    box-shadow:-40px 0 100px rgba(0,0,0,.7),inset 1px 0 0 rgba(255,255,255,.05);transform:translateX(103%);
+    transition:transform .3s cubic-bezier(.22,.61,.36,1);display:flex;flex-direction:column
+  }
+  .drawer.open{transform:none}
+  .dw-head{padding:20px 22px 16px;border-bottom:1px solid var(--line-soft);position:relative}
+  .dw-close{position:absolute;right:14px;top:14px;width:30px;height:30px;border-radius:8px;border:1px solid var(--line);background:rgba(255,255,255,.03);color:var(--muted);cursor:pointer;font-size:16px;line-height:1}
+  .dw-close:hover{color:#fff}
+  .dw-dom{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;color:var(--acc);border:1px solid color-mix(in srgb,var(--acc) 30%,transparent);background:color-mix(in srgb,var(--acc) 8%,transparent);padding:2px 8px;border-radius:999px}
+  .dw-name{font-family:var(--mono);font-size:21px;font-weight:700;margin:12px 0 2px;letter-spacing:-.02em;word-break:break-all;line-height:1.25;color:#fff}
+  .dw-cn{font-size:12px;color:#9db0c8}
+  .dw-body{overflow:auto;padding:20px 22px 40px;flex:1}
+  .dw-desc{font-size:12.5px;color:#c6d4e6;line-height:1.7;margin:0 0 20px}
+  .dmgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:1px;background:var(--line-soft);border:1px solid var(--line-soft);border-radius:10px;overflow:hidden;margin-bottom:22px}
+  .dm{background:#0a1421;padding:10px 12px}
+  .dm-k{font-size:9.5px;color:#7b8ea6;letter-spacing:.05em}
+  .dm-v{font-family:var(--mono);font-size:11.5px;color:#d5e2f2;margin-top:2px;word-break:break-all}
+  .dw-h{font-size:10.5px;letter-spacing:.1em;color:var(--dim);font-family:var(--mono);text-transform:uppercase;margin:22px 0 9px;display:flex;align-items:center;gap:8px}
+  .dw-h::after{content:"";flex:1;height:1px;background:var(--line-soft)}
+  table.ft{width:100%;border-collapse:collapse;font-size:11.5px}
+  table.ft th{text-align:left;font-weight:500;font-size:9.5px;color:var(--dim);letter-spacing:.06em;padding:0 0 6px;border-bottom:1px solid var(--line-soft)}
+  table.ft td{padding:6px 0;border-bottom:1px solid rgba(148,163,184,.06);vertical-align:top;line-height:1.5}
+  table.ft td:first-child{font-family:var(--mono);font-size:10.8px;color:#cfe0f4;white-space:nowrap;padding-right:8px}
+  table.ft td:nth-child(2){font-family:var(--mono);font-size:9px;color:#5f7288;white-space:nowrap;padding-right:8px}
+  table.ft td:nth-child(3){color:#8fa2ba;font-size:11px}
+  .kdot{display:inline-block;width:5px;height:5px;border-radius:50%;margin-right:5px;vertical-align:middle}
+  .colslist{display:flex;flex-wrap:wrap;gap:5px}
+  .colchip{font-family:var(--mono);font-size:9.5px;color:#8ea3bd;border:1px solid var(--line-soft);background:rgba(255,255,255,.015);border-radius:5px;padding:3px 6px}
+  .colchip i{font-style:normal;color:#4e5f75;margin-left:4px;font-size:8.5px}
+  .rel{display:flex;align-items:flex-start;gap:9px;padding:7px 0;border-bottom:1px solid rgba(148,163,184,.06);font-size:11.5px;color:#adc0d6}
+  .rel .dir{font-family:var(--mono);font-size:10px;color:#60a5fa;flex:none;padding-top:1px}
+  .rel .t{font-family:var(--mono);color:#d5e3f4}
+  .rel .lab{color:#5f7288;font-size:10px;margin-left:6px}
+  .rel[data-goto]{cursor:pointer;border-radius:7px;padding-left:6px;padding-right:6px;margin-left:-6px;transition:background .15s}
+  .rel[data-goto]:hover{background:rgba(96,165,250,.07)}
+  .rel[data-goto]:hover .t{color:#93c5fd}
+  .sqlbox{position:relative;background:#061019;border:1px solid var(--line-soft);border-radius:8px;padding:11px 12px;font-family:var(--mono);font-size:10px;line-height:1.65;color:#8fd3e8;overflow:auto;white-space:pre-wrap;word-break:break-all}
+  .copybtn{position:absolute;right:7px;top:7px;font-size:9.5px;border:1px solid var(--line);background:rgba(255,255,255,.04);color:var(--muted);border-radius:5px;padding:2px 7px;cursor:pointer}
+  .copybtn:hover{color:#fff}
+  .pulse-node{animation:npulse 1.2s ease-out 2}
+  @keyframes npulse{0%{opacity:.2}50%{opacity:1}100%{opacity:1}}
+
+  /* ---------- misc ---------- */
+  .foot{padding:34px 0;color:var(--dim);font-size:11px;border-top:1px solid var(--line-soft);margin-top:56px}
+  .foot-in{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
+  .foot .mono{color:#7c8faa}
+  .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+
+  @media (max-width:1180px){
+    .mod-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .rule-grid{grid-template-columns:repeat(3,1fr)}
+    .grid-2{grid-template-columns:1fr}
+  }
+  @media (max-width:860px){
+    body{overflow-x:hidden}
+    .wrap{padding:0 18px}
+    .topbar-in{padding:0 18px;height:auto;flex-wrap:wrap;padding-top:10px;padding-bottom:10px;gap:10px}
+    .tabs{margin-left:0;order:3;width:100%;overflow:auto}
+    .top-meta{display:none}
+    .statstrip{grid-template-columns:repeat(2,1fr)}
+    .stat:nth-child(3){border-left:0;padding-left:0}
+    .stat{padding:14px 0 14px 16px}
+    .mod-grid{grid-template-columns:1fr}
+    .rule-grid{grid-template-columns:1fr}
+    .er-search{max-width:none;flex:1 1 100%}
+    .er-chips{order:3;width:100%;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;padding-bottom:2px}
+    .er-chips::-webkit-scrollbar{display:none}
+    .er-actions{order:4;width:100%;margin-left:0;flex-wrap:wrap}
+    .er-canvas{height:64vh}
+    .hero{padding-top:40px}
+  }
+  @media (prefers-reduced-motion:reduce){
+    *{animation:none!important;transition:none!important}
+  }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-in">
+    <div class="brand">
+      <div class="logo" aria-hidden="true"></div>
+      <div>
+        <div class="brand-name">FinBridge</div>
+        <div class="brand-sub">SYSTEM &amp; DATA MAP</div>
+      </div>
+    </div>
+    <nav class="tabs" role="tablist" aria-label="视图切换">
+      <button class="tab active" data-view="overview" role="tab">总览</button>
+      <button class="tab" data-view="modules" role="tab">模块</button>
+      <button class="tab" data-view="model" role="tab">数据模型</button>
+    </nav>
+    <div class="top-meta"><span class="dot"></span>QuestDB 在线 · 数据截至 2026-10-29</div>
+  </div>
+</header>
+
+<main>
+  <!-- ============ OVERVIEW ============ -->
+  <section class="view active" id="view-overview">
+    <div class="wrap">
+      <div class="hero">
+        <div class="kicker">A-Share Quant Research Platform · v2.1</div>
+        <h1>一套围绕 <span class="grad">QuestDB</span> 构建的<br>A 股量化研究系统</h1>
+        <p class="lede">
+          从外部数据源采集，到 <b>raw 表 → 因子长表 → 选股 / 回测 / 研究报告</b>，
+          11 个模块以单向依赖串联。本图谱把<b>模块职责、核心函数</b>与<b>57 张表的真实结构、行数、时间跨度</b>
+          放在同一张交互地图里。
+        </p>
+        <div class="statstrip" id="statStrip"></div>
+      </div>
+
+      <div class="section" style="padding-top:34px">
+        <div class="sec-head">
+          <div>
+            <h2 class="sec-title">系统架构与数据流</h2>
+            <p class="sec-desc">自上而下：数据源 → 采集编排 → 数据访问 → 唯一存储 → 计算/应用 → 工具出口。虚线表示事件、派生或无强耦合的读取。</p>
+          </div>
+          <span class="sec-tag">ARCHITECTURE / v2.1</span>
+        </div>
+
+        <div class="arch-shell">
+          <svg viewBox="0 0 1240 830" role="img" aria-label="FinBridge 分层架构图">
+            <defs>
+              <linearGradient id="gBox" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stop-color="#121d30"/><stop offset="1" stop-color="#0a1321"/>
+              </linearGradient>
+              <linearGradient id="gDb" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stop-color="rgba(34,211,238,.09)"/><stop offset="1" stop-color="rgba(59,130,246,.05)"/>
+              </linearGradient>
+              <linearGradient id="gAcq" x1="0" y1="0" x2="1" y2="0">
+                <stop offset="0" stop-color="rgba(245,158,11,.10)"/><stop offset="1" stop-color="rgba(245,158,11,.03)"/>
+              </linearGradient>
+              <linearGradient id="gDi" x1="0" y1="0" x2="1" y2="0">
+                <stop offset="0" stop-color="rgba(34,211,238,.10)"/><stop offset="1" stop-color="rgba(34,211,238,.03)"/>
+              </linearGradient>
+              <marker id="arw" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0 0 L10 5 L0 10 Z" fill="#5b6b82"/>
+              </marker>
+              <marker id="arwC" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0 0 L10 5 L0 10 Z" fill="#22d3ee"/>
+              </marker>
+              <marker id="arwA" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0 0 L10 5 L0 10 Z" fill="#f59e0b"/>
+              </marker>
+              <marker id="arwB" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0 0 L10 5 L0 10 Z" fill="#60a5fa"/>
+              </marker>
+            </defs>
+
+            <!-- sources -->
+            <g id="srcRow">
+              <!-- chips generated by JS -->
+            </g>
+
+            <!-- acquisition -->
+            <g>
+              <rect class="abox" x="65" y="86" width="1110" height="62" rx="12" fill="url(#gAcq)"/>
+              <rect x="65" y="86" width="3.5" height="62" rx="1.7" fill="#f59e0b"/>
+              <text class="atitle" x="86" y="113">acquisition · 采集编排</text>
+              <text class="asub" x="86" y="131">Scope → Orchestrator.run(REAL_SYNCERS) · BuildOrchestrator.ensure_snapshot</text>
+              <text class="abadge" x="1159" y="113" text-anchor="end">增量 · 断点续跑 · 快照调度</text>
+            </g>
+
+            <!-- data interface -->
+            <g>
+              <rect class="abox" x="65" y="182" width="1110" height="62" rx="12" fill="url(#gDi)"/>
+              <rect x="65" y="182" width="3.5" height="62" rx="1.7" fill="#22d3ee"/>
+              <text class="atitle" x="86" y="209">data_interface · 唯一数据访问层</text>
+              <text class="asub" x="86" y="227">QuestDBClient · MarketDataLoader.ohlc · FinancialDataService.get_statements · PIT 对齐</text>
+              <text class="abadge" x="1159" y="209" text-anchor="end">raw 表唯一写者 · 归一化 · 复权</text>
+            </g>
+
+            <!-- questdb -->
+            <g>
+              <rect x="65" y="278" width="1110" height="196" rx="16" fill="url(#gDb)" stroke="rgba(34,211,238,.32)"/>
+              <text class="db-title" x="86" y="305">QuestDB · 唯一事实存储</text>
+              <text class="db-sub" id="dbTotal" x="1130" y="305" text-anchor="end">WAL + DEDUP UPSERT · 57 张表 / 5,847 万行</text>
+              <g id="dbGroups"><!-- groups generated by JS --></g>
+            </g>
+
+            <!-- layer E -->
+            <g>
+              <rect class="abox" x="65" y="516" width="300" height="74" rx="12"/>
+              <rect x="65" y="516" width="3.5" height="74" rx="1.7" fill="#3b82f6"/>
+              <text class="atitle" x="85" y="542">factors · 纯计算</text>
+              <text class="asub" x="85" y="560">F.* 声明 · build_panel · compute_series</text>
+              <text class="abadge" x="352" y="542" text-anchor="end">0 DB 依赖</text>
+              <text class="abadge" x="85" y="578" style="fill:#5f7288">pandas / numpy only</text>
+
+              <rect class="abox" x="395" y="516" width="350" height="74" rx="12"/>
+              <rect x="395" y="516" width="3.5" height="74" rx="1.7" fill="#6366f1"/>
+              <text class="atitle" x="415" y="542">factor_engine · 因子物化</text>
+              <text class="asub" x="415" y="560">build / ensure / read_latest · FactorStore</text>
+              <text class="abadge" x="732" y="542" text-anchor="end">factor 表唯一写者</text>
+              <text class="abadge" x="415" y="578" style="fill:#5f7288">registry · 长表 · latest · 对账</text>
+
+              <rect class="abox" x="775" y="516" width="400" height="74" rx="12"/>
+              <rect x="775" y="516" width="3.5" height="74" rx="1.7" fill="#34d399"/>
+              <text class="atitle" x="795" y="542">position · 持仓与交易台账</text>
+              <text class="asub" x="795" y="560">PositionManager · ATR / Grid 模式 · compute_ledger</text>
+              <text class="abadge" x="1162" y="542" text-anchor="end">行情经 data_interface</text>
+              <text class="abadge" x="795" y="578" style="fill:#5f7288">组合 → 持仓 → 逐笔成交</text>
+            </g>
+
+            <!-- layer F -->
+            <g>
+              <rect class="abox" x="65" y="630" width="255" height="74" rx="12"/>
+              <text class="atitle" x="85" y="656">strategies · 策略基类</text>
+              <text class="asub" x="85" y="674">rank / weights / target_weight</text>
+              <text class="abadge" x="307" y="656" text-anchor="end">仅依赖 factors</text>
+              <text class="abadge" x="85" y="692" style="fill:#5f7288">STRATEGY 模块变量</text>
+
+              <rect class="abox" x="350" y="630" width="255" height="74" rx="12"/>
+              <text class="atitle" x="370" y="656">backtest · 回测撮合</text>
+              <text class="asub" x="370" y="674">run / optimize / walkforward</text>
+              <text class="abadge" x="592" y="656" text-anchor="end">T+1 · 涨跌停</text>
+              <text class="abadge" x="370" y="692" style="fill:#5f7288">PyBroker · 自建账本</text>
+
+              <rect class="abox" x="635" y="630" width="255" height="74" rx="12"/>
+              <text class="atitle" x="655" y="656">screener · 选股</text>
+              <text class="asub" x="655" y="674">ScreenSpec · screen() · rebuild</text>
+              <text class="abadge" x="877" y="656" text-anchor="end">0 直连 DB</text>
+              <text class="abadge" x="655" y="692" style="fill:#5f7288">覆盖率 · 停牌过滤</text>
+
+              <rect class="abox" x="920" y="630" width="255" height="74" rx="12"/>
+              <text class="atitle" x="940" y="656">research · 因子研究</text>
+              <text class="asub" x="940" y="674">build_report · rate · render</text>
+              <text class="abadge" x="1162" y="656" text-anchor="end">评分卡入库</text>
+              <text class="abadge" x="940" y="692" style="fill:#5f7288">IC / 分层 / 四象限</text>
+            </g>
+
+            <!-- MCP -->
+            <g>
+              <rect class="abox" x="65" y="742" width="1110" height="56" rx="12" fill="rgba(148,163,184,.05)"/>
+              <rect x="65" y="742" width="3.5" height="56" rx="1.7" fill="#94a3b8"/>
+              <text class="atitle" x="86" y="766">MCPserver · 统一工具出口</text>
+              <text class="asub" x="86" y="784">HTTP / stdio · market · financial · moneyflow · concept · disclosure · factor · acquisition · screener · position</text>
+              <text class="abadge" x="1159" y="766" text-anchor="end">FastMCP</text>
+            </g>
+
+            <!-- arrows -->
+            <g>
+              <!-- sources to acquisition -->
+              <g id="srcArrows"></g>
+
+              <!-- acquisition -> data_interface -->
+              <path class="aarrow-amber" marker-end="url(#arwA)" d="M620 148 V182"/>
+              <text class="alabel" x="630" y="170">触发 sync_* · 发 DataWritten</text>
+
+              <!-- di <-> db -->
+              <path class="aarrow-cyan" marker-end="url(#arwC)" d="M470 244 V278"/>
+              <text class="alabel" x="480" y="266">UPSERT 写入</text>
+              <path class="aarrow-cyan" marker-end="url(#arwC)" d="M770 278 V244"/>
+              <text class="alabel" x="700" y="266" text-anchor="end">SQL 读取</text>
+
+              <!-- db -> factor_engine -->
+              <path class="aarrow-blue" marker-end="url(#arwB)" d="M620 474 V516"/>
+              <text class="alabel" x="630" y="500">读 raw 表 · 写 factor_* 表</text>
+
+              <!-- factors -> factor_engine -->
+              <path class="aarrow" marker-end="url(#arw)" d="M365 553 H395"/>
+
+              <!-- factor_engine -> apps -->
+              <path class="aarrow" marker-end="url(#arw)" d="M560 590 L495 630"/>
+              <text class="alabel" x="470" y="612">stored 因子</text>
+              <path class="aarrow" marker-end="url(#arw)" d="M720 590 L750 630"/>
+              <text class="alabel" x="736" y="612">read_latest</text>
+
+              <!-- strategies -> backtest -->
+              <path class="aarrow" marker-end="url(#arw)" d="M320 667 H350"/>
+
+              <!-- apps -> MCP -->
+              <path class="aarrow" marker-end="url(#arw)" d="M192 704 V742"/>
+              <path class="aarrow" marker-end="url(#arw)" d="M477 704 V742"/>
+              <path class="aarrow" marker-end="url(#arw)" d="M762 704 V742"/>
+              <path class="aarrow" marker-end="url(#arw)" d="M1047 704 V742"/>
+              <text class="alabel" x="790" y="727">注册为 MCP 工具</text>
+            </g>
+          </svg>
+          <div class="arch-foot">
+            <span><i class="lg-line"></i>同步调用</span>
+            <span><i class="lg-dash"></i>事件 / 派生 / 弱耦合读取</span>
+            <span>所有 DB 访问仅限 <b class="mono" style="color:#9fb2ca">data_interface</b> 与 <b class="mono" style="color:#9fb2ca">factor_engine</b></span>
+            <span>持仓表非 WAL（支持原地 UPDATE）</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="sec-head">
+          <div>
+            <h2 class="sec-title">存储画像与数据观察</h2>
+            <p class="sec-desc">行数与时间范围直接取自运行中的 QuestDB（<span class="mono">tables()</span>），不是文档估算值。</p>
+          </div>
+          <span class="sec-tag" id="rowTag"></span>
+        </div>
+        <div class="grid-2">
+          <div class="card card-pad">
+            <div class="card-h"><div class="card-t">数据规模 TOP 10</div><div class="card-s">按行数</div></div>
+            <div class="bars" id="barList"></div>
+          </div>
+          <div class="card card-pad">
+            <div class="card-h"><div class="card-t">观察与缺口</div><div class="card-s">基于当前库</div></div>
+            <div class="note-list" id="noteList"></div>
+          </div>
+        </div>
+
+        <div class="rule-grid">
+          <div class="rule"><div class="rule-n">RULE 01</div><div class="rule-t">单一存储</div><div class="rule-d">QuestDB 是唯一事实源，不引入第二套缓存库；缓存也只是同库读模型或 Parquet 投影。</div></div>
+          <div class="rule"><div class="rule-n">RULE 02</div><div class="rule-t">双写者</div><div class="rule-d">raw 表只由 data_interface 写，factor 表只由 factor_engine 写；screener 等一律 0 直连。</div></div>
+          <div class="rule"><div class="rule-n">RULE 03</div><div class="rule-t">单向依赖</div><div class="rule-d">factors 不 import 任何业务模块；factor_engine 永不 import acquisition，共享协议下沉到 common。</div></div>
+          <div class="rule"><div class="rule-n">RULE 04</div><div class="rule-t">幂等写入</div><div class="rule-d">WAL + DEDUP UPSERT KEYS 覆盖业务键；QuestDB 不支持 DELETE，删除即整分区重建。</div></div>
+          <div class="rule"><div class="rule-n">RULE 05</div><div class="rule-t">时点正确</div><div class="rule-d">财务按 publish_date 过滤；板块成分按 as_of 取最近整组快照，避免未来函数与幸存者偏差。</div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ MODULES ============ -->
+  <section class="view" id="view-modules">
+    <div class="wrap">
+      <div class="hero" style="padding-bottom:6px">
+        <div class="kicker">11 Modules · Responsibility &amp; Public API</div>
+        <h1 style="font-size:clamp(28px,3.4vw,40px)">模块职责、核心函数与依赖</h1>
+        <p class="lede">每个模块只做一件事，并用明确的读写边界与相邻模块连接。点击底部的表名可直接跳转到数据模型并打开字段详情。</p>
+      </div>
+      <div class="section" style="padding-top:26px">
+        <div class="sec-head">
+          <div><h2 class="sec-title">模块卡片</h2><p class="sec-desc">函数名为代码中的真实入口（类名 + 方法名），不是概念描述。</p></div>
+          <span class="sec-tag" id="modTag"></span>
+        </div>
+        <div class="mod-grid" id="modGrid"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ MODEL ============ -->
+  <section class="view" id="view-model">
+    <div class="wrap">
+      <div class="hero" style="padding:46px 0 10px">
+        <div class="kicker">Entity Map · 39 tables in 7 domains</div>
+        <h1 style="font-size:clamp(28px,3.4vw,40px)">数据库关系图</h1>
+        <p class="lede">按数据域分列布局。连线是<b>逻辑关系</b>（QuestDB 无外键约束），虚线表示派生 / 投影。点击任意表查看完整字段、时间跨度与上下游。</p>
+      </div>
+      <div class="section" style="padding-top:16px">
+        <div class="er-shell">
+          <div class="er-toolbar">
+            <div class="er-search"><input id="erSearch" type="search" placeholder="搜索表名 / 字段 / 说明" autocomplete="off" aria-label="搜索表"></div>
+            <div class="er-chips" id="domainChips"></div>
+            <div class="er-actions">
+              <button class="btn" id="btnLabels">关系标签</button>
+              <button class="btn" id="btnCore">显示全部表</button>
+              <button class="btn" id="btnFit">适应画布</button>
+            </div>
+          </div>
+          <div class="er-canvas" id="erCanvas">
+            <svg id="erSvg" aria-label="数据库实体关系图">
+              <defs id="erDefs">
+                <linearGradient id="nodeGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0" stop-color="#111d31"/><stop offset="1" stop-color="#0a1220"/>
+                </linearGradient>
+              </defs>
+              <g id="erRoot">
+                <g id="erLanes"></g>
+                <g id="erEdges"></g>
+                <g id="erNodes"></g>
+              </g>
+            </svg>
+            <div class="er-hint">滚轮缩放 · 拖拽平移 · 点击表看字段 · 点击数据域聚焦</div>
+            <div class="er-zoom">
+              <button id="zIn" aria-label="放大">+</button>
+              <button id="zOut" aria-label="缩小">−</button>
+              <button id="zFit" aria-label="适应">⤢</button>
+            </div>
+          </div>
+        </div>
+        <div class="er-legend">
+          <span><i style="border-color:#7c8ba1"></i>逻辑外键</span>
+          <span><i class="dash" style="border-color:#38bdf8"></i>派生 / 投影</span>
+          <span><i class="dot" style="border-color:#94a3b8"></i>状态 / 作业</span>
+          <span class="sp"></span>
+          <span>其余表以 <code>code</code> 关联主数据；<code>ts</code> 为 designated timestamp</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="foot">
+    <div class="wrap foot-in">
+      <div>FinBridge · 系统模块与数据模型图谱　|　数据源：运行中的 QuestDB（57 表）＋ 代码与文档交叉核对</div>
+      <div class="mono">generated 2026-10-30 · Asia/Shanghai</div>
+    </div>
+  </footer>
+</main>
+
+<div id="dwScrim"></div>
+<aside class="drawer" id="drawer" aria-hidden="true" aria-label="表详情">
+  <div class="dw-head">
+    <button class="dw-close" id="dwClose" aria-label="关闭">×</button>
+    <div id="dwDom"></div>
+    <div class="dw-name" id="dwName"></div>
+    <div class="dw-cn" id="dwCn"></div>
+  </div>
+  <div class="dw-body" id="dwBody"></div>
+</aside>
+
+<script>
+/* ============================================================
+   DATA
+   ============================================================ */
+const DB = {"announcement":{"rows":22860,"ts":"ts","min":"2024-11-05T00:00:00.000000Z","max":"2026-10-29T00:00:00.000000Z","part":"YEAR","wal":true,"cols":[["ts","TIMESTAMP"],["code","SYMBOL"],["art_code","SYMBOL"],["title","STRING"],["ann_type","STRING"],["column_code","STRING"],["column_name","STRING"],["display_time","TIMESTAMP"],["source","SYMBOL"],["fetched_at","TIMESTAMP"]]},"block_trade":{"rows":305595,"ts":"ts","min":"2019-01-02T00:00:00.000000Z","max":"2026-10-29T00:00:00.000000Z","part":"YEAR","wal":true,"cols":[["ts","TIMESTAMP"],["code","SYMBOL"],["price","DOUBLE"],["vol","DOUBLE"],["amount","DOUBLE"],["buyer","VARCHAR"],["seller","VARCHAR"]]},"concept_board_alias":{"rows":0,"ts":"updated_at","min":null,"max":null,"part":"YEAR","wal":true,"cols":[["updated_at","TIMESTAMP"],["board_code","SYMBOL"],["source","SYMBOL"],["source_code","SYMBOL"],["source_name","STRING"],["confidence","DOUBLE"],["verified","BOOLEAN"],["notes","STRING"]]},"concept_board_daily":{"rows":338439,"ts":"ts","min":"2022-10-10T00:00:00.000000Z","max":"2026-10-28T00:00:00.000000Z","part":"MONTH","wal":true,"cols":[["ts","TIMESTAMP"],["board_code","SYMBOL"],["board_name","STRING"],["open","DOUBLE"],["high","DOUBLE"],["low","DOUBLE"],["close","DOUBLE"],["volume","LONG"],["amount","DOUBLE"],["pct_chg","DOUBLE"],["quality","SYMBOL"],["source","SYMBOL"],["fetched_at","TIMESTAMP"]]},"concept_board_dim":{"rows":1125,"ts":"ts","min":"2022-10-10T00:00:00.000000Z","max":"2026-10-28T00:00:00.000000Z","part":"YEAR","wal":true,"cols":[["ts","TIMESTAMP"],["board_code","SYMBOL"],["name","STRING"],["board_type","SYMBOL"],["source","SYMBOL"],["source_code","SYMBOL"],["status","SYMBOL"],["updated_at","TIMESTAMP"]]},"concept_classification":{"rows":3000,"ts":"ts","min":"2026-10-26T00:00:00.000000Z","max":"2026-10-28T00:00:00.000000Z","part":"YEAR","wal":true,"cols":[["ts","TIMESTAMP"],["concept_code","SYMBOL"],["name","STRING"],["class1_code","SYMBOL"],["class1_name","STRING"],["class2_code","SYMBOL"],["class2_name","STRING"],["class3_code","SYMBOL"],["class3_name","STRING"],["item_size","INT"],["source","SYMBOL"],["fetched_at","TIMESTAMP"]]},"concept_member_snapshot":{"rows":181,"ts":"ts","min":"2026-10-28T00:00:00.000000Z","max":"2026-10-28T00:00:00.000000Z","part":"YEAR","wal":true,"cols":[["ts","TIMESTAMP"],["board_code","SYMBOL"],["stock_code","SYMBOL"],["stock_name","STRING"],["weight","DOUBLE"],["in_date","TIMESTAMP"],["quality","SYMBOL"],["source","SYMBOL"],["fetched_at","TIMESTAMP"]]},"dim_board":{"rows":763,"ts":"ts","min":"2026-10-28T00:00:00.000000Z","max":"2026-10-29T00:00:00.000000Z","part":"YEAR","wal":true,"cols":[["ts","TIMESTAMP"],["board_id","SYMBOL"],["board_type","SYMBOL"],["board_name","STRING"],["parent_id","SYMBOL"],["source","SYMBOL"]]},"dim_fin_field":{"rows":53,"ts":"updated_at","min":"2026-10-30T13:48:51.315161Z","max":"2026-10-30T13:48:51.315161Z","part":"YEAR","wal":true,"cols":[["updated_at","TIMESTAMP"],["canonical_name","SYMBOL"],["display_cn","STRING"],["statement_type","SYMBOL"],["data_type","SYMBOL"],["unit","SYMBOL"],["sign_convention","SYMBOL"],["formula","STRING"],["aliases","STRING"],["description","STRING"]]},"factor_alias":{"rows":1890,"ts":"updated_at","min":"2026-10-28T16:47:10.307496Z","max":"2026-10-30T13:00:55.748723Z","part":"YEAR","wal":true,"cols":[["updated_at","TIMESTAMP"],["alias","SYMBOL"],["factor_id","SYMBOL"],["window","INT"],["params","STRING"],["notes","STRING"]]},"factor_audit_state":{"rows":0,"ts":"updated_at","min":null,"max":null,"part":"YEAR","wal":true,"cols":[["updated_at","TIMESTAMP"],["audit_id","SYMBOL"],["dataset","SYMBOL"],["factor_ids","STRING"],["window_start","TIMESTAMP"],["window_end","TIMESTAMP"],["status","SYMBOL"],["checked","LONG"],["failed","LONG"],["max_abs_diff","DOUBLE"],["max_rel_diff","DOUBLE"],["details","STRING"],["payload","STRING"]]},"factor_build_state":{"rows":124,"ts":"updated_at","min":"2026-10-28T16:47:10.355465Z","max":"2026-10-30T13:02:25.987880Z","part":"YEAR","wal":true,"cols":[["updated_at","TIMESTAMP"],["job_id","SYMBOL"],["dataset","SYMBOL"],["factor_ids","STRING"],["window_start","TIMESTAMP"],["window_end","TIMESTAMP"],["cursor","TIMESTAMP"],["status","SYMBOL"],["attempts","INT"],["retry_at","TIMESTAMP"],["rows_written","LONG"],["last_error","STRING"],["payload","STRING"]]},"factor_daily_wide":{"rows":3533248,"ts":"ts","min":"2024-01-02T00:00:00.000000Z","max":"2026-10-29T00:00:00.000000Z","part":"MONTH","wal":true,"cols":[["ts","TIMESTAMP"],["code","SYMBOL"],["market","SYMBOL"],["open","DOUBLE"],["high","DOUBLE"],["low","DOUBLE"],["close","DOUBLE"],["raw_close","DOUBLE"],["adj_factor","DOUBLE"],["prev_close","DOUBLE"],["volume","LONG"],["amount","DOUBLE"],["turnover","DOUBLE"],["pct_chg","DOUBLE"],["gap_pct","DOUBLE"],["intraday_pct","DOUBLE"],["range_pct","DOUBLE"],["avg_volume_5d","DOUBLE"],["avg_volume_20d","DOUBLE"],["avg_volume_60d","DOUBLE"],["avg_amount_20d","DOUBLE"],["volume_ratio_20d","DOUBLE"],["volume_chg_pct","DOUBLE"],["amount_ratio_20d","DOUBLE"],["atr14","DOUBLE"],["atr_pct","DOUBLE"],["volatility_20d","DOUBLE"],["volatility_60d","DOUBLE"],["ma5","DOUBLE"],["ma10","DOUBLE"],["ma20","DOUBLE"],["ma60","DOUBLE"],["ma120","DOUBLE"],["ma250","DOUBLE"],["close_vs_ma20_pct","DOUBLE"],["close_vs_ma60_pct","DOUBLE"],["close_vs_ma250_pct","DOUBLE"],["high_20d","DOUBLE"],["low_20d","DOUBLE"],["high_52w","DOUBLE"],["low_52w","DOUBLE"],["dist_high_52w_pct","DOUBLE"],["dist_low_52w_pct","DOUBLE"],["is_new_high_52w","BOOLEAN"],["is_new_low_52w","BOOLEAN"],["benchmark_code","SYMBOL"],["beta_252","DOUBLE"],["corr_252","DOUBLE"],["beta_window","INT"],["total_share","DOUBLE"],["float_share","DOUBLE"],["total_mv","DOUBLE"],["float_mv","DOUBLE"],["lookback_days","INT"],["is_partial","BOOLEAN"],["core_ready","BOOLEAN"],["full_ready","BOOLEAN"],["formula_version","STRING"],["computed_at","TIMESTAMP"]]},"factor_registry":{"rows":1864,"ts":"updated_at","min":"2026-10-28T16:47:10.292129Z","max":"2026-10-30T13:00:55.664953Z","part":"YEAR","wal":true,"cols":[["updated_at","TIMESTAMP"],["factor_id","SYMBOL"],["name","STRING"],["category","SYMBOL"],["subcategory","SYMBOL"],["source_dataset","SYMBOL"],["source_vendor","SYMBOL"],["source_fields","STRING"],["freq","SYMBOL"],["window","INT"],["lag","INT"],["value_kind","SYMBOL"],["update_mode","SYMBOL"],["unit","SYMBOL"],["direction","SYMBOL"],["price_basis","SYMBOL"],["version","SYMBOL"],["source_version_policy","STRING"],["dependencies","STRING"],["warmup","INT"],["formula","STRING"],["enabled","BOOLEAN"],["materialization","SYMBOL"]]},"factor_scorecard":{"rows":764,"ts":"ts","min":"2026-10-29T16:00:52.000000Z","max":"2026-10-30T19:51:40.000000Z","part":"MONTH","wal":true,"cols":[["ts","TIMESTAMP"],["run_id","SYMBOL"],["factor_id","SYMBOL"],["category","SYMBOL"],["grade","SYMBOL"],["score","DOUBLE"],["time_score","DOUBLE"],["space_score","DOUBLE"],["ic_mean","DOUBLE"],["icir","DOUBLE"],["nw_t","DOUBLE"],["ic_win","DOUBLE"],["mono","DOUBLE"],["turnover","DOUBLE"],["coverage","DOUBLE"],["direction","LONG"],["calibrated_direction","LONG"],["quadrant","SYMBOL"],["veto","VARCHAR"],["sample_start","TIMESTAMP"],["sample_end","TIMESTAMP"],["computed_at","TIMESTAMP"]]},"factor_value_announce":{"rows":0,"ts":"ts","min":null,"max":null,"part":"YEAR","wal":true,"cols":[["ts","TIMESTAMP"],["code","SYMBOL"],["factor_id","SYMBOL"],["report_period","TIMESTAMP"],["announce_date","TIMESTAMP"],["lag_days","INT"],["value","DOUBLE"],["quality","SYMBOL"],["source","SYMBOL"],["source_version","SYMBOL"],["version","SYMBOL"],["computed_at","TIMESTAMP"]]},"factor_value_daily":{"rows":11623666,"ts":"ts","min":"2019-01-02T00:00:00.000000Z","max":"2026-10-29T00:00:00.000000Z","part":"MONTH","wal":true,"cols":[["ts","TIMESTAMP"],["code","SYMBOL"],["factor_id","SYMBOL"],["value","DOUBLE"],["quality","SYMBOL"],["source","SYMBOL"],["source_version","SYMBOL"],["version","SYMBOL"],["computed_at","TIMESTAMP"]]},"factor_value_latest":{"rows":11623666,"ts":"ts","min":"2019-01-02T00:00:00.000000Z","max":"2026-10-29T00:00:00.000000Z","part":"YEAR","wal":true,"cols":[["ts","TIMESTAMP"],["code","SYMBOL"],["factor_id","SYMBOL"],["value","DOUBLE"],["quality","SYMBOL"],["source","SYMBOL"],["source_version","SYMBOL"],["version","SYMBOL"],["computed_at","TIMESTAMP"]]},"fin_balance_sheet":{"rows":263300,"ts":"period_end","min":"2001-12-31T00:00:00.000000Z","max":"2026-09-30T00:00:00.000000Z","part":"YEAR","wal":true,"cols":[["period_end","TIMESTAMP"],["report_id","SYMBOL"],["code","SYMBOL"],["publish_date","TIMESTAMP"],["period_type","SYMBOL"],["report_type","SYMBOL"],["fiscal_year","INT"],["cash_and_cash_equivalents","DOUBLE"],["short_term_investments","DOUBLE"],["cash_and_short_term_investments","DOUBLE"],["accounts_receivable","DOUBLE"],["inventory","DOUBLE"],["total_current_assets","DOUBLE"],["goodwill","DOUBLE"],["intangible_assets","DOUBLE"],["fixed_assets","DOUBLE"],["total_non_current_assets","DOUBLE"],["total_assets","DOUBLE"],["short_term_debt","DOUBLE"],["current_portion_of_long_term_debt","DOUBLE"],["accounts_payable","DOUBLE"],["total_current_liabilities","DOUBLE"],["long_term_debt","DOUBLE"],["bonds_payable","DOUBLE"],["total_non_current_liabilities","DOUBLE"],["total_liabilities","DOUBLE"],["total_debt","DOUBLE"],["net_debt","DOUBLE"],["total_equity","DOUBLE"],["equity_attributable_to_parent","DOUBLE"],["minority_equity","DOUBLE"],["retained_earnings","DOUBLE"],["source","SYMBOL"],["quality_status","SYMBOL"],["ingested_at","TIMESTAMP"]]},"fin_cash_flow":{"rows":270233,"ts":"period_end","min":"2006-12-31T00:00:00.000000Z","max":"2026-09-30T00:00:00.000000Z","part":"YEAR","wal":true,"cols":[["period_end","TIMESTAMP"],["report_id","SYMBOL"],["code","SYMBOL"],["publish_date","TIMESTAMP"],["period_type","SYMBOL"],["report_type","SYMBOL"],["fiscal_year","INT"],["operating_cash_flow","DOUBLE"],["investing_cash_flow","DOUBLE"],["financing_cash_flow","DOUBLE"],["capital_expenditure","DOUBLE"],["free_cash_flow","DOUBLE"],["depreciation_and_amortization","DOUBLE"],["change_in_working_capital","DOUBLE"],["dividends_paid","DOUBLE"],["net_change_in_cash","DOUBLE"],["cash_at_beginning","DOUBLE"],["cash_at_end","DOUBLE"],["source","SYMBOL"],["quality_status","SYMBOL"],["ingested_at","TIMESTAMP"]]},"fin_disclosure_calendar":{"rows":5581,"ts":"ts","min":"2026-10-28T00:00:00.000000Z","max":"2026-10-28T00:00:00.000000Z","part":"YEAR","wal":true,"cols":[["ts","TIMESTAMP"],["code","SYMBOL"],["report_date","TIMESTAMP"],["report_type","STRING"],["appoint_date","TIMESTAMP"],["first_appoint_date","TIMESTAMP"],["first_change_date","TIMESTAMP"],["second_change_date","TIMESTAMP"],["third_change_date","TIMESTAMP"],["actual_date","TIMESTAMP"],["residual_days","INT"],["is_published","BOOLEAN"],["market","SYMBOL"],["source","SYMBOL"],["fetched_at","TIMESTAMP"]]},"fin_estimate":{"rows":0,"ts":"as_of","min":null,"max":null,"part":"MONTH","wal":true,"cols":[["as_of","TIMESTAMP"],["code","SYMBOL"],["metric","SYMBOL"],["fiscal_year","INT"],["fiscal_period","SYMBOL"],["horizon","SYMBOL"],["value_mean","DOUBLE"],["value_median","DOUBLE"],["value_high","DOUBLE"],["value_low","DOUBLE"],["analyst_count","INT"],["unit","SYMBOL"],["source","SYMBOL"],["source_updated_at","TIMESTAMP"],["ingested_at","TIMESTAMP"]]},"fin_income_statement":{"rows":271152,"ts":"period_end","min":"2001-12-31T00:00:00.000000Z","max":"2026-09-30T00:00:00.000000Z","part":"YEAR","wal":true,"cols":[["period_end","TIMESTAMP"],["report_id","SYMBOL"],["code","SYMBOL"],["publish_date","TIMESTAMP"],["period_type","SYMBOL"],["report_type","SYMBOL"],["fiscal_year","INT"],["total_revenue","DOUBLE"],["revenue","DOUBLE"],["cost_of_revenue","DOUBLE"],["gross_profit","DOUBLE"],["research_and_development_expense","DOUBLE"],["selling_expense","DOUBLE"],["general_and_admin_expense","DOUBLE"],["selling_general_admin_expense","DOUBLE"],["finance_expense","DOUBLE"],["interest_expense","DOUBLE"],["depreciation_and_amortization","DOUBLE"],["operating_profit","DOUBLE"],["ebit","DOUBLE"],["ebitda","DOUBLE"],["pretax_profit","DOUBLE"],["income_tax","DOUBLE"],["net_income","DOUBLE"],["net_income_attributable_to_parent","DOUBLE"],["minority_interest","DOUBLE"],["continuing_operations_net_income","DOUBLE"],["discontinued_operations_net_income","DOUBLE"],["basic_eps","DOUBLE"],["diluted_eps","DOUBLE"],["dividend_per_share","DOUBLE"],["source","SYMBOL"],["quality_status","SYMBOL"],["ingested_at","TIMESTAMP"]]},"fin_indicator":{"rows":268922,"ts":"period_end","min":"2001-12-31T00:00:00.000000Z","max":"2026-09-30T00:00:00.000000Z","part":"YEAR","wal":true,"cols":[["period_end","TIMESTAMP"],["code","SYMBOL"],["report_type","SYMBOL"],["fiscal_year","INT"],["period_type","SYMBOL"],["revenue","DOUBLE"],["net_income","DOUBLE"],["gross_margin","DOUBLE"],["net_margin","DOUBLE"],["roe","DOUBLE"],["roa","DOUBLE"],["debt_to_assets","DOUBLE"],["current_ratio","DOUBLE"],["ocf","DOUBLE"],["free_cash_flow","DOUBLE"],["revenue_yoy","DOUBLE"],["net_income_yoy","DOUBLE"],["source","SYMBOL"],["ingested_at","TIMESTAMP"]]},"fin_raw_report":{"rows":804685,"ts":"fetched_at","min":"2026-10-26T09:47:41.211905Z","max":"2026-10-30T03:39:18.233536Z","part":"YEAR","wal":true,"cols":[["fetched_at","TIMESTAMP"],["report_id","SYMBOL"],["code","SYMBOL"],["statement_type","SYMBOL"],["period_end","TIMESTAMP"],["source","SYMBOL"],["payload","STRING"]]},"fin_report_meta":{"rows":804685,"ts":"period_end","min":"2001-12-31T00:00:00.000000Z","max":"2026-09-30T00:00:00.000000Z","part":"YEAR","wal":true,"cols":[["period_end","TIMESTAMP"],["report_id","SYMBOL"],["code","SYMBOL"],["statement_type","SYMBOL"],["period_type","SYMBOL"],["report_type","SYMBOL"],["fiscal_year","INT"],["publish_date","TIMESTAMP"],["currency","SYMBOL"],["unit_scale","DOUBLE"],["source","SYMBOL"],["source_version","STRING"],["is_restated","BOOLEAN"],["quality_status","SYMBOL"],["ingested_at","TIMESTAMP"]]},"fin_sync_state":{"rows":20479,"ts":"updated_at","min":"2026-10-26T09:47:41.567877Z","max":"2026-10-30T03:39:17.374101Z","part":"YEAR","wal":true,"cols":[["updated_at","TIMESTAMP"],["code","SYMBOL"],["dataset","SYMBOL"],["last_period_end","TIMESTAMP"],["last_publish_date","TIMESTAMP"],["last_success_at","TIMESTAMP"],["status","SYMBOL"],["message","STRING"]]},"fin_valuation_daily":{"rows":4959453,"ts":"ts","min":"2020-01-02T00:00:00.000000Z","max":"2026-10-29T00:00:00.000000Z","part":"MONTH","wal":true,"cols":[["ts","TIMESTAMP"],["code","SYMBOL"],["close","DOUBLE"],["total_share","DOUBLE"],["market_cap","DOUBLE"],["float_market_cap","DOUBLE"],["enterprise_value","DOUBLE"],["pe_ttm","DOUBLE"],["pb_mrq","DOUBLE"],["ps_ttm","DOUBLE"],["pcf_ttm","DOUBLE"],["pfcf","DOUBLE"],["ev_ebitda","DOUBLE"],["ev_ebit","DOUBLE"],["ev_sales","DOUBLE"],["ev_gross_profit","DOUBLE"],["ev_fcf","DOUBLE"],["p_nwc","DOUBLE"],["earnings_yield","DOUBLE"],["dividend_yield","DOUBLE"],["market_cap_change_pct","DOUBLE"],["source","SYMBOL"],["formula_version","STRING"],["ingested_at","TIMESTAMP"]]},"fund_basic_info":{"rows":2345,"ts":"ts","min":"2026-10-25T00:00:00.000000Z","max":"2026-10-25T00:00:00.000000Z","part":"MONTH","wal":true,"cols":[["ts","TIMESTAMP"],["code","SYMBOL"],["name","STRING"],["fullname","STRING"],["found_date","TIMESTAMP"],["total_asset","STRING"],["management","STRING"],["fund_type","SYMBOL"],["rating_agency","STRING"],["rating","STRING"]]},"index_weight":{"rows":256154,"ts":"ts","min":"2010-01-29T00:00:00.000000Z","max":"2026-09-30T00:00:00.000000Z","part":"YEAR","wal":true,"cols":[["ts","TIMESTAMP"],["index_code","SYMBOL"],["code","SYMBOL"],["weight","DOUBLE"]]},"intraday_baseline":{"rows":0,"ts":"as_of_date","min":null,"max":null,"part":"MONTH","wal":true,"cols":[["as_of_date","TIMESTAMP"],["code","SYMBOL"],["market","SYMBOL"],["freq","SYMBOL"],["minute_end","INT"],["session","SYMBOL"],["avg_volume","DOUBLE"],["avg_cum_volume","DOUBLE"],["avg_amount","DOUBLE"],["avg_cum_amount","DOUBLE"],["std_cum_volume","DOUBLE"],["sample_days","INT"],["expected_days","INT"],["coverage_ratio","DOUBLE"],["includes_auction","BOOLEAN"],["is_partial","BOOLEAN"],["source_start","TIMESTAMP"],["source_end","TIMESTAMP"],["formula_version","STRING"],["computed_at","TIMESTAMP"]]},"map_stock_board":{"rows":6085,"ts":"ts","min":"2026-10-28T00:00:00.000000Z","max":"2026-10-29T00:00:00.000000Z","part":"YEAR","wal":true,"cols":[["ts","TIMESTAMP"],["code","SYMBOL"],["board_id","SYMBOL"],["board_type","SYMBOL"],["board_name","STRING"],["is_primary","BOOLEAN"],["effective_from","TIMESTAMP"],["effective_to","TIMESTAMP"],["source","SYMBOL"]]},"margin_detail":{"rows":5608436,"ts":"ts","min":"2019-01-02T00:00:00.000000Z","max":"2026-10-28T00:00:00.000000Z","part":"YEAR","wal":true,"cols":[["ts","TIMESTAMP"],["code","SYMBOL"],["rzye","DOUBLE"],["rqye","DOUBLE"],["rzmre","DOUBLE"],["rqyl","DOUBLE"],["rzche","DOUBLE"],["rqchl","DOUBLE"]]},"market_suspension":{"rows":8538,"ts":"updated_at","min":"2026-10-26T13:24:46.610469Z","max":"2026-10-26T19:04:37.873090Z","part":"YEAR","wal":true,"cols":[["updated_at","TIMESTAMP"],["code","SYMBOL"],["market","SYMBOL"],["status","SYMBOL"],["start_date","TIMESTAMP"],["end_date","TIMESTAMP"],["retry_at","TIMESTAMP"],["source","SYMBOL"],["reason","STRING"],["created_at","TIMESTAMP"]]},"moneyflow_daily":{"rows":5025640,"ts":"ts","min":"2022-10-10T00:00:00.000000Z","max":"2026-10-29T00:00:00.000000Z","part":"MONTH","wal":true,"cols":[["ts","TIMESTAMP"],["code","SYMBOL"],["market","SYMBOL"],["buy_sm_vol","LONG"],["buy_sm_amount","DOUBLE"],["sell_sm_vol","LONG"],["sell_sm_amount","DOUBLE"],["buy_md_vol","LONG"],["buy_md_amount","DOUBLE"],["sell_md_vol","LONG"],["sell_md_amount","DOUBLE"],["buy_lg_vol","LONG"],["buy_lg_amount","DOUBLE"],["sell_lg_vol","LONG"],["sell_lg_amount","DOUBLE"],["buy_elg_vol","LONG"],["buy_elg_amount","DOUBLE"],["sell_elg_vol","LONG"],["sell_elg_amount","DOUBLE"],["net_mf_vol","LONG"],["net_mf_amount","DOUBLE"],["source","SYMBOL"],["source_version","SYMBOL"],["quality","SYMBOL"],["quality_note","STRING"],["fetched_at","TIMESTAMP"]]},"moneyflow_source":{"rows":1,"ts":"updated_at","min":"2026-10-28T14:32:48.126340Z","max":"2026-10-28T14:32:48.126340Z","part":"YEAR","wal":true,"cols":[["updated_at","TIMESTAMP"],["source","SYMBOL"],["vendor","SYMBOL"],["dataset","SYMBOL"],["unit","STRING"],["definition","STRING"],["coverage_start","TIMESTAMP"],["coverage_end","TIMESTAMP"],["priority","INT"],["enabled","BOOLEAN"],["notes","STRING"]]},"ohlcv_15m":{"rows":0,"ts":"ts","min":null,"max":null,"part":"DAY","wal":true,"cols":[["ts","TIMESTAMP"],["open","DOUBLE"],["high","DOUBLE"],["low","DOUBLE"],["close","DOUBLE"],["volume","LONG"],["amount","DOUBLE"],["adj_factor","DOUBLE"],["code","SYMBOL"],["market","SYMBOL"]]},"ohlcv_1d":{"rows":11949102,"ts":"ts","min":"1990-12-19T00:00:00.000000Z","max":"2026-10-29T00:00:00.000000Z","part":"MONTH","wal":true,"cols":[["ts","TIMESTAMP"],["open","DOUBLE"],["high","DOUBLE"],["low","DOUBLE"],["close","DOUBLE"],["volume","LONG"],["amount","DOUBLE"],["turnover","DOUBLE"],["adj_factor","DOUBLE"],["code","SYMBOL"],["market","SYMBOL"],["type","SYMBOL"]]},"ohlcv_1m":{"rows":1261,"ts":"ts","min":"2026-10-23T10:20:00.000000Z","max":"2026-10-29T11:30:00.000000Z","part":"HOUR","wal":true,"cols":[["ts","TIMESTAMP"],["open","DOUBLE"],["high","DOUBLE"],["low","DOUBLE"],["close","DOUBLE"],["volume","LONG"],["amount","DOUBLE"],["adj_factor","DOUBLE"],["code","SYMBOL"],["market","SYMBOL"]]},"ohlcv_1mo":{"rows":0,"ts":"ts","min":null,"max":null,"part":"YEAR","wal":true,"cols":[["ts","TIMESTAMP"],["open","DOUBLE"],["high","DOUBLE"],["low","DOUBLE"],["close","DOUBLE"],["volume","LONG"],["amount","DOUBLE"],["turnover","DOUBLE"],["adj_factor","DOUBLE"],["code","SYMBOL"],["market","SYMBOL"]]},"ohlcv_1w":{"rows":0,"ts":"ts","min":null,"max":null,"part":"MONTH","wal":true,"cols":[["ts","TIMESTAMP"],["open","DOUBLE"],["high","DOUBLE"],["low","DOUBLE"],["close","DOUBLE"],["volume","LONG"],["amount","DOUBLE"],["turnover","DOUBLE"],["adj_factor","DOUBLE"],["code","SYMBOL"],["market","SYMBOL"]]},"ohlcv_30m":{"rows":0,"ts":"ts","min":null,"max":null,"part":"DAY","wal":true,"cols":[["ts","TIMESTAMP"],["open","DOUBLE"],["high","DOUBLE"],["low","DOUBLE"],["close","DOUBLE"],["volume","LONG"],["amount","DOUBLE"],["adj_factor","DOUBLE"],["code","SYMBOL"],["market","SYMBOL"]]},"ohlcv_5m":{"rows":1383,"ts":"ts","min":"2026-09-21T13:50:00.000000Z","max":"2026-10-29T11:30:00.000000Z","part":"HOUR","wal":true,"cols":[["ts","TIMESTAMP"],["open","DOUBLE"],["high","DOUBLE"],["low","DOUBLE"],["close","DOUBLE"],["volume","LONG"],["amount","DOUBLE"],["adj_factor","DOUBLE"],["code","SYMBOL"],["market","SYMBOL"]]},"ohlcv_60m":{"rows":0,"ts":"ts","min":null,"max":null,"part":"DAY","wal":true,"cols":[["ts","TIMESTAMP"],["open","DOUBLE"],["high","DOUBLE"],["low","DOUBLE"],["close","DOUBLE"],["volume","LONG"],["amount","DOUBLE"],["adj_factor","DOUBLE"],["code","SYMBOL"],["market","SYMBOL"]]},"portfolios":{"rows":16,"ts":"id","min":"2026-10-22T13:50:19.163961Z","max":"2026-10-22T15:02:56.366777Z","part":"YEAR","wal":false,"cols":[["id","TIMESTAMP"],["portfolio_id","SYMBOL"],["name","STRING"],["total_assets","DOUBLE"],["cash","DOUBLE"],["market_value","DOUBLE"],["unrealized_profit","DOUBLE"],["realized_profit","DOUBLE"],["deleted_at","TIMESTAMP"]]},"positions":{"rows":16,"ts":"id","min":"2026-10-22T13:50:14.679270Z","max":"2026-10-22T15:02:55.757945Z","part":"YEAR","wal":false,"cols":[["id","TIMESTAMP"],["pos_id","SYMBOL"],["portfolio_id","SYMBOL"],["ticker","SYMBOL"],["name","STRING"],["mode","SYMBOL"],["created_at","TIMESTAMP"],["cost","DOUBLE"],["quantity","DOUBLE"],["market_value","DOUBLE"],["unrealized_profit","DOUBLE"],["unrealized_profit_rate","DOUBLE"],["realized_profit","DOUBLE"],["total_profit","DOUBLE"],["updated_at","TIMESTAMP"],["mode_params","STRING"],["deleted_at","TIMESTAMP"],["stop_price","DOUBLE"],["first_entry_date","TIMESTAMP"]]},"repurchase":{"rows":53786,"ts":"ts","min":"2019-01-02T00:00:00.000000Z","max":"2026-10-29T00:00:00.000000Z","part":"YEAR","wal":true,"cols":[["ts","TIMESTAMP"],["code","SYMBOL"],["end_date","TIMESTAMP"],["proc","VARCHAR"],["exp_date","TIMESTAMP"],["vol","DOUBLE"],["amount","DOUBLE"],["high_limit","DOUBLE"],["low_limit","DOUBLE"]]},"rolling_financial":{"rows":435,"ts":"ts","min":"2025-01-02T00:00:00.000000Z","max":"2026-10-22T00:00:00.000000Z","part":"MONTH","wal":true,"cols":[["ts","TIMESTAMP"],["code","SYMBOL"],["peTTM","DOUBLE"],["psTTM","DOUBLE"],["pcfNcfTTM","DOUBLE"],["pbMRQ","DOUBLE"]]},"scheduled_task_state":{"rows":474,"ts":"updated_at","min":"2026-10-25T23:52:17.189478Z","max":"2026-10-30T15:54:50.247316Z","part":"YEAR","wal":true,"cols":[["updated_at","TIMESTAMP"],["task_name","SYMBOL"],["dataset","SYMBOL"],["cursor","STRING"],["status","SYMBOL"],["total","INT"],["processed","INT"],["message","STRING"],["payload","STRING"]]},"scheduled_task_state_bak":{"rows":466,"ts":"updated_at","min":"2026-10-25T23:52:17.189478Z","max":"2026-10-29T13:29:04.405132Z","part":"NONE","wal":false,"cols":[["updated_at","TIMESTAMP"],["task_name","SYMBOL"],["dataset","SYMBOL"],["cursor","STRING"],["status","SYMBOL"],["total","INT"],["processed","INT"],["message","STRING"],["payload","STRING"]]},"screener_build_state":{"rows":124,"ts":"updated_at","min":"2026-10-26T13:23:22.011256Z","max":"2026-10-30T15:54:50.243296Z","part":"YEAR","wal":true,"cols":[["updated_at","TIMESTAMP"],["build_id","SYMBOL"],["build_kind","SYMBOL"],["dataset","SYMBOL"],["scope","SYMBOL"],["scope_key","SYMBOL"],["universe_key","SYMBOL"],["universe_payload","STRING"],["freq","SYMBOL"],["formula_version","STRING"],["window_start","TIMESTAMP"],["window_end","TIMESTAMP"],["status","SYMBOL"],["quality","SYMBOL"],["phase","SYMBOL"],["cursor_ts","TIMESTAMP"],["cursor_code","SYMBOL"],["requested_codes","INT"],["built_codes","INT"],["coverage_ratio","DOUBLE"],["progress_current","LONG"],["progress_total","LONG"],["rows_written","LONG"],["attempts","INT"],["max_attempts","INT"],["message","STRING"],["last_error","STRING"],["retry_at","TIMESTAMP"],["locked_by","STRING"],["locked_until","TIMESTAMP"],["created_at","TIMESTAMP"],["finished_at","TIMESTAMP"]]},"share_float":{"rows":7841,"ts":"ts","min":"2006-02-10T00:00:00.000000Z","max":"2026-10-27T00:00:00.000000Z","part":"YEAR","wal":true,"cols":[["ts","TIMESTAMP"],["code","SYMBOL"],["float_date","TIMESTAMP"],["float_share","DOUBLE"],["float_ratio","DOUBLE"],["holder_name","VARCHAR"],["share_type","VARCHAR"]]},"stk_holdernumber":{"rows":272753,"ts":"ts","min":"2019-01-01T00:00:00.000000Z","max":"2026-10-29T00:00:00.000000Z","part":"YEAR","wal":true,"cols":[["ts","TIMESTAMP"],["code","SYMBOL"],["end_date","TIMESTAMP"],["holder_num","LONG"]]},"stock_basic_info":{"rows":11924,"ts":"ts","min":"2026-10-22T13:57:34.000000Z","max":"2026-10-29T00:00:00.000000Z","part":"MONTH","wal":true,"cols":[["ts","TIMESTAMP"],["code","SYMBOL"],["name","STRING"],["fullname","STRING"],["main_operation_biz","STRING"],["affiliate_industry","STRING"],["total_share","DOUBLE"],["float_share","DOUBLE"],["total_mv","DOUBLE"],["float_mv","DOUBLE"],["list_date","TIMESTAMP"],["exchange","SYMBOL"],["board","SYMBOL"],["market","SYMBOL"],["security_type","SYMBOL"],["currency","SYMBOL"],["is_st","BOOLEAN"],["list_status","SYMBOL"],["delist_date","TIMESTAMP"],["industry","STRING"],["sw_l1","STRING"],["sw_l2","STRING"],["sw_l3","STRING"],["area","STRING"],["main_business","STRING"],["source","SYMBOL"],["updated_at","TIMESTAMP"]]},"top_list":{"rows":119509,"ts":"ts","min":"2019-01-02T00:00:00.000000Z","max":"2026-10-29T00:00:00.000000Z","part":"YEAR","wal":true,"cols":[["ts","TIMESTAMP"],["code","SYMBOL"],["name","VARCHAR"],["close","DOUBLE"],["pct_chg","DOUBLE"],["turnover_rate","DOUBLE"],["amount","DOUBLE"],["l_sell","DOUBLE"],["l_buy","DOUBLE"],["l_amount","DOUBLE"],["net_amount","DOUBLE"],["reason","VARCHAR"]]},"trade_records":{"rows":10,"ts":"trade_date","min":"2026-10-22T13:50:20.391988Z","max":"2026-10-22T14:28:13.588770Z","part":"YEAR","wal":false,"cols":[["trade_id","SYMBOL"],["pos_id","SYMBOL"],["type","SYMBOL"],["quantity","DOUBLE"],["price","DOUBLE"],["trade_date","TIMESTAMP"],["updated_at","TIMESTAMP"],["deleted_at","TIMESTAMP"]]},"trading_days":{"rows":13452,"ts":"ts","min":"1990-01-01T00:00:00.000000Z","max":"2026-10-30T00:00:00.000000Z","part":"YEAR","wal":true,"cols":[["ts","TIMESTAMP"],["is_trading","BOOLEAN"]]}};
+
+const DOMAINS = [
+  {id:'market',    label:'行情与基础', short:'行情', color:'#22d3ee', desc:'K 线、证券主数据、交易日历'},
+  {id:'financial', label:'财务与估值', short:'财务', color:'#f59e0b', desc:'三大报表、指标、每日估值、一致预期'},
+  {id:'flow',      label:'资金与情绪', short:'资金', color:'#fb7185', desc:'四档资金流、两融、龙虎榜、大宗交易'},
+  {id:'concept',   label:'板块与概念', short:'板块', color:'#a78bfa', desc:'板块维度、日线、成分快照、分类映射'},
+  {id:'factor',    label:'因子资产',   short:'因子', color:'#60a5fa', desc:'注册表、长表、latest、宽表、评分卡'},
+  {id:'position',  label:'组合与持仓', short:'持仓', color:'#34d399', desc:'组合、持仓、逐笔成交'},
+  {id:'ops',       label:'运行状态',   short:'状态', color:'#94a3b8', desc:'构建 / 同步游标、停牌负缓存'}
+];
+const DOMAIN_BY_ID = Object.fromEntries(DOMAINS.map(d => [d.id, d]));
+
+const F = s => { const [n,t,d,k] = s.split('|'); return {n,t,d,k:k||''}; };
+
+const TABLES = [
+  /* ---------------- market ---------------- */
+  {id:'trading_days', cn:'交易日历', domain:'market', core:true, writer:'data_interface', readers:['全模块'],
+   desc:'A 股交易日历，含非交易日标记；用于缺口判断、调仓日推进与 as_of 对齐。',
+   fields:[F('ts|TIMESTAMP|日期（含节假日）|ts'), F('is_trading|BOOLEAN|是否交易日')]},
+
+  {id:'stock_basic_info', cn:'证券主数据', domain:'market', core:true, writer:'data_interface', readers:['screener','position','factor_engine'],
+   desc:'股票 / 基金静态信息与最新股本市值快照；ST 状态、上市与退市日都在这里。',
+   fields:[F('code|SYMBOL|证券代码|pk'), F('name|STRING|证券简称'), F('exchange|SYMBOL|交易所'), F('is_st|BOOLEAN|是否 ST'), F('list_status|SYMBOL|上市状态 L/D'), F('total_mv|DOUBLE|总市值')]},
+
+  {id:'ohlcv_1d', cn:'日线行情', domain:'market', core:true, writer:'data_interface', readers:['factor_engine','screener','backtest','research','position'],
+   desc:'不复权 OHLCV 与累计后复权因子；复权在读取端应用，同键重复写入由 DEDUP 覆盖。',
+   fields:[F('ts|TIMESTAMP|交易日|ts'), F('code|SYMBOL|证券代码|fk'), F('close|DOUBLE|收盘价（不复权）'), F('volume|LONG|成交量（股）'), F('amount|DOUBLE|成交额（元）'), F('adj_factor|DOUBLE|后复权因子'), F('turnover|DOUBLE|换手率')]},
+
+  {id:'ohlcv_1m', cn:'分钟线', domain:'market', core:false, writer:'data_interface', readers:['screener','position'],
+   desc:'1 / 5 / 15 / 30 / 60 分钟线共用结构；当前仅 1m 与 5m 有数据，用于分时量能与封板判断。',
+   fields:[F('ts|TIMESTAMP|K 线结束时刻|ts'), F('code|SYMBOL|证券代码|fk'), F('close|DOUBLE|收盘价'), F('volume|LONG|成交量'), F('adj_factor|DOUBLE|复权因子')]},
+
+  {id:'fund_basic_info', cn:'基金主数据', domain:'market', core:false, writer:'data_interface', readers:['screener'],
+   desc:'ETF / 基金基础信息：成立日、规模、管理人、评级，支撑基金行情与标的扩展。',
+   fields:[F('code|SYMBOL|基金代码|pk'), F('name|STRING|基金简称'), F('fund_type|SYMBOL|基金类型'), F('found_date|TIMESTAMP|成立日'), F('management|STRING|管理人')]},
+
+  /* ---------------- financial ---------------- */
+  {id:'fin_report_meta', cn:'报表元数据', domain:'financial', core:true, writer:'data_interface', readers:['factor_engine','research'],
+   desc:'三大报表的目录与 PIT 锚点：report_id 唯一标识一期报表，publish_date 决定可用时点。',
+   fields:[F('report_id|SYMBOL|报表唯一 ID|pk'), F('code|SYMBOL|证券代码|fk'), F('period_end|TIMESTAMP|报告期|ts'), F('publish_date|TIMESTAMP|披露日（PIT 锚点）'), F('statement_type|SYMBOL|报表类型 IS/BS/CF'), F('is_restated|BOOLEAN|是否重述')]},
+
+  {id:'fin_income_statement', cn:'利润表', domain:'financial', core:true, writer:'data_interface', readers:['factor_engine'],
+   desc:'营业收入、成本费用、利润与每股收益；按报告期分区，publish_date 支持时点还原。',
+   fields:[F('report_id|SYMBOL|报表唯一 ID|fk'), F('total_revenue|DOUBLE|营业总收入'), F('operating_profit|DOUBLE|营业利润'), F('net_income|DOUBLE|净利润'), F('net_income_attributable_to_parent|DOUBLE|归母净利润'), F('basic_eps|DOUBLE|基本每股收益')]},
+
+  {id:'fin_balance_sheet', cn:'资产负债表', domain:'financial', core:true, writer:'data_interface', readers:['factor_engine'],
+   desc:'资产、负债与权益结构；用于杠杆、流动性、营运资本类因子。',
+   fields:[F('report_id|SYMBOL|报表唯一 ID|fk'), F('total_assets|DOUBLE|总资产'), F('total_liabilities|DOUBLE|总负债'), F('total_equity|DOUBLE|所有者权益'), F('cash_and_cash_equivalents|DOUBLE|货币资金'), F('total_debt|DOUBLE|有息负债')]},
+
+  {id:'fin_cash_flow', cn:'现金流量表', domain:'financial', core:false, writer:'data_interface', readers:['factor_engine'],
+   desc:'经营 / 投资 / 筹资现金流与自由现金流，是质量类与盈余质量因子的核心输入。',
+   fields:[F('report_id|SYMBOL|报表唯一 ID|fk'), F('operating_cash_flow|DOUBLE|经营现金流净额'), F('investing_cash_flow|DOUBLE|投资现金流净额'), F('financing_cash_flow|DOUBLE|筹资现金流净额'), F('capital_expenditure|DOUBLE|资本开支'), F('free_cash_flow|DOUBLE|自由现金流')]},
+
+  {id:'fin_indicator', cn:'财务指标', domain:'financial', core:false, writer:'data_interface', readers:['factor_engine'],
+   desc:'供应商口径的比率指标（ROE / 毛利率 / 同比）；只作 raw 输入，派生因子仍写 factor 表。',
+   fields:[F('code|SYMBOL|证券代码|fk'), F('period_end|TIMESTAMP|报告期|ts'), F('roe|DOUBLE|净资产收益率'), F('gross_margin|DOUBLE|毛利率'), F('debt_to_assets|DOUBLE|资产负债率'), F('revenue_yoy|DOUBLE|营收同比')]},
+
+  {id:'fin_valuation_daily', cn:'每日估值', domain:'financial', core:true, writer:'data_interface', readers:['factor_engine','screener','research'],
+   desc:'每日市值与估值倍数（PE / PB / PS / EV 系），由价格与股本推导，随行记录公式版本。',
+   fields:[F('ts|TIMESTAMP|交易日|ts'), F('code|SYMBOL|证券代码|fk'), F('pe_ttm|DOUBLE|市盈率 TTM'), F('pb_mrq|DOUBLE|市净率 MRQ'), F('market_cap|DOUBLE|总市值'), F('dividend_yield|DOUBLE|股息率')]},
+
+  {id:'fin_estimate', cn:'一致预期', domain:'financial', core:false, writer:'data_interface', readers:['research'],
+   desc:'分析师一致预期（均值 / 中位数 / 区间 / 人数）；当前为空表，待数据源接入后启用。',
+   fields:[F('as_of|TIMESTAMP|预期快照日|ts'), F('code|SYMBOL|证券代码|fk'), F('metric|SYMBOL|预测指标'), F('fiscal_year|INT|预测年度'), F('value_mean|DOUBLE|一致预期均值'), F('analyst_count|INT|覆盖分析师数')]},
+
+  {id:'dim_fin_field', cn:'财务字段字典', domain:'financial', core:false, writer:'data_interface', readers:['factor_engine'],
+   desc:'canonical 字段名 → 中文名 / 单位 / 符号约定 / 供应商别名，是财务归一化的唯一字典。',
+   fields:[F('canonical_name|SYMBOL|标准字段名|pk'), F('display_cn|STRING|中文名'), F('statement_type|SYMBOL|所属报表'), F('unit|SYMBOL|单位'), F('aliases|STRING|供应商别名')]},
+
+  /* ---------------- flow ---------------- */
+  {id:'moneyflow_source', cn:'资金流源注册表', domain:'flow', core:false, writer:'data_interface', readers:['factor_engine'],
+   desc:'记录每个资金流源的量纲、口径、覆盖区间与优先级；多源并存时据此选择。',
+   fields:[F('source|SYMBOL|源标识 vendor.dataset|pk'), F('vendor|SYMBOL|供应商'), F('unit|STRING|量纲（元 / 股）'), F('coverage_start|TIMESTAMP|覆盖起'), F('coverage_end|TIMESTAMP|覆盖止'), F('priority|INT|优先级')]},
+
+  {id:'moneyflow_daily', cn:'资金流日频', domain:'flow', core:true, writer:'data_interface', readers:['factor_engine','screener'],
+   desc:'小 / 中 / 大 / 特大四档买卖量与额 + 净流入；主力净额须由四档合成，不等于 net_mf_amount。',
+   fields:[F('ts|TIMESTAMP|交易日|ts'), F('code|SYMBOL|证券代码|fk'), F('buy_lg_amount|DOUBLE|大单买入额'), F('sell_lg_amount|DOUBLE|大单卖出额'), F('buy_elg_amount|DOUBLE|特大单买入额'), F('net_mf_amount|DOUBLE|净流入额（原始口径）'), F('source|SYMBOL|数据源|fk')]},
+
+  {id:'margin_detail', cn:'两融明细', domain:'flow', core:true, writer:'data_interface', readers:['factor_engine'],
+   desc:'融资余额 / 买入 / 偿还与融券余额 / 余量，用于杠杆情绪与拥挤度因子。',
+   fields:[F('ts|TIMESTAMP|交易日|ts'), F('code|SYMBOL|证券代码|fk'), F('rzye|DOUBLE|融资余额'), F('rzmre|DOUBLE|融资买入额'), F('rqye|DOUBLE|融券余额'), F('rqyl|DOUBLE|融券余量')]},
+
+  {id:'top_list', cn:'龙虎榜', domain:'flow', core:false, writer:'data_interface', readers:['research'],
+   desc:'涨跌幅、换手、成交额与买卖席位金额，反映游资与机构行为。',
+   fields:[F('ts|TIMESTAMP|交易日|ts'), F('code|SYMBOL|证券代码|fk'), F('net_amount|DOUBLE|净买入额'), F('l_buy|DOUBLE|买入额'), F('l_sell|DOUBLE|卖出额'), F('reason|VARCHAR|上榜原因')]},
+
+  {id:'block_trade', cn:'大宗交易', domain:'flow', core:false, writer:'data_interface', readers:['research'],
+   desc:'成交价 / 量 / 额与买卖营业部，用于折价率与减持信号。',
+   fields:[F('ts|TIMESTAMP|交易日|ts'), F('code|SYMBOL|证券代码|fk'), F('price|DOUBLE|成交价'), F('vol|DOUBLE|成交量'), F('amount|DOUBLE|成交额'), F('buyer|VARCHAR|买方营业部')]},
+
+  /* ---------------- concept ---------------- */
+  {id:'concept_board_dim', cn:'板块维度（日快照）', domain:'concept', core:true, writer:'data_interface', readers:['screener','research'],
+   desc:'板块代码 / 名称 / 类型的逐日快照，保留更名与状态；跨源代码通过 alias 映射。',
+   fields:[F('ts|TIMESTAMP|快照日|ts'), F('board_code|SYMBOL|板块代码|pk'), F('name|STRING|板块名称'), F('board_type|SYMBOL|板块类型'), F('source|SYMBOL|数据源')]},
+
+  {id:'concept_board_daily', cn:'板块日线', domain:'concept', core:true, writer:'data_interface', readers:['research'],
+   desc:'板块指数 OHLCV 与涨跌幅；同一交易日允许多个数据源并存。',
+   fields:[F('ts|TIMESTAMP|交易日|ts'), F('board_code|SYMBOL|板块代码|fk'), F('close|DOUBLE|收盘点位'), F('pct_chg|DOUBLE|涨跌幅'), F('amount|DOUBLE|成交额'), F('source|SYMBOL|数据源')]},
+
+  {id:'concept_member_snapshot', cn:'成分股快照', domain:'concept', core:true, writer:'data_interface', readers:['screener'],
+   desc:'整组成分快照而非增量：同一 ts 全量写入，PIT 查询取最近快照整组返回，被剔除股票不会残留。',
+   fields:[F('ts|TIMESTAMP|快照日|ts'), F('board_code|SYMBOL|板块代码|fk'), F('stock_code|SYMBOL|成分股代码|fk'), F('weight|DOUBLE|权重'), F('in_date|TIMESTAMP|纳入日')]},
+
+  {id:'concept_classification', cn:'概念三级分类', domain:'concept', core:false, writer:'data_interface', readers:['research'],
+   desc:'概念 → 一级 / 二级 / 三级分类树，用于概念主题聚合与行业中性化参考。',
+   fields:[F('concept_code|SYMBOL|概念代码|pk'), F('name|STRING|概念名称'), F('class1_name|STRING|一级分类'), F('class2_name|STRING|二级分类'), F('item_size|INT|成分数量')]},
+
+  {id:'dim_board', cn:'板块维度', domain:'concept', core:false, writer:'data_interface', readers:['screener'],
+   desc:'通用板块维表（行业 / 指数 / 地域），与 map_stock_board 构成多对多映射。',
+   fields:[F('board_id|SYMBOL|板块 ID|pk'), F('board_type|SYMBOL|板块类型'), F('board_name|STRING|板块名称'), F('parent_id|SYMBOL|父板块')]},
+
+  {id:'map_stock_board', cn:'个股↔板块映射', domain:'concept', core:false, writer:'data_interface', readers:['screener'],
+   desc:'带生效区间的多对多映射；is_primary 标记主归属板块，避免重复计入。',
+   fields:[F('code|SYMBOL|证券代码|fk'), F('board_id|SYMBOL|板块 ID|fk'), F('is_primary|BOOLEAN|是否主归属'), F('effective_from|TIMESTAMP|生效起'), F('effective_to|TIMESTAMP|生效止')]},
+
+  /* ---------------- factor ---------------- */
+  {id:'factor_registry', cn:'因子目录', domain:'factor', core:true, writer:'factor_engine', readers:['screener','backtest','research'],
+   desc:'因子元数据权威表：分类 / 窗口 / 方向 / 单位 / 公式 / 依赖 / 物化方式；按 updated_at 追加版本快照。',
+   fields:[F('factor_id|SYMBOL|因子 ID|pk'), F('category|SYMBOL|因子分类'), F('window|INT|窗口长度'), F('direction|SYMBOL|设计方向'), F('update_mode|SYMBOL|shift/window/recursive/event'), F('materialization|SYMBOL|stored/inline/auto'), F('version|SYMBOL|因子版本')]},
+
+  {id:'factor_value_daily', cn:'因子值长表', domain:'factor', core:true, writer:'factor_engine', readers:['screener','backtest','research'],
+   desc:'时点型因子的 canonical 存储，千万行级；DEDUP 键包含 version 与 source_version，版本升级写新行。',
+   fields:[F('ts|TIMESTAMP|交易日|ts'), F('code|SYMBOL|证券代码|fk'), F('factor_id|SYMBOL|因子 ID|fk'), F('value|DOUBLE|因子值'), F('quality|SYMBOL|质量标记'), F('version|SYMBOL|因子版本'), F('source_version|SYMBOL|上游数据版本')]},
+
+  {id:'factor_value_latest', cn:'最新值读模型', domain:'factor', core:true, writer:'factor_engine', readers:['screener'],
+   desc:'为筛股“最新一日”快查设计的读模型，应只保留每个 (code, factor_id) 的最新值，可整表重建。',
+   fields:[F('ts|TIMESTAMP|最新交易日|ts'), F('code|SYMBOL|证券代码|fk'), F('factor_id|SYMBOL|因子 ID|fk'), F('value|DOUBLE|最新因子值'), F('version|SYMBOL|因子版本')]},
+
+  {id:'factor_value_announce', cn:'事件型因子', domain:'factor', core:false, writer:'factor_engine', readers:['research'],
+   desc:'财务 / 事件型因子，带 report_period 与 announce_date，PIT 以 available_at 为准；当前为空表。',
+   fields:[F('ts|TIMESTAMP|可用日|ts'), F('code|SYMBOL|证券代码|fk'), F('factor_id|SYMBOL|因子 ID|fk'), F('report_period|TIMESTAMP|报告期'), F('announce_date|TIMESTAMP|公告日'), F('value|DOUBLE|因子值')]},
+
+  {id:'factor_daily_wide', cn:'选股宽表', domain:'factor', core:true, writer:'factor_engine', readers:['screener','backtest'],
+   desc:'56+ 列价量 / 估值宽表，选股单表读取；每列对应一个 legacy 因子，可解构回长表。',
+   fields:[F('ts|TIMESTAMP|交易日|ts'), F('code|SYMBOL|证券代码|fk'), F('close|DOUBLE|收盘价'), F('ma20|DOUBLE|20 日均线'), F('atr_pct|DOUBLE|ATR 百分比'), F('beta_252|DOUBLE|252 日 Beta'), F('total_mv|DOUBLE|总市值'), F('core_ready|BOOLEAN|核心字段就绪')]},
+
+  {id:'factor_build_state', cn:'因子构建状态', domain:'factor', core:false, writer:'factor_engine', readers:['acquisition','screener'],
+   desc:'物化作业的游标 / 重试 / 写入行数；DataWritten 事件触发的钩子把状态写在这里。',
+   fields:[F('job_id|SYMBOL|作业 ID|pk'), F('dataset|SYMBOL|数据集'), F('cursor|TIMESTAMP|游标'), F('status|SYMBOL|状态'), F('attempts|INT|重试次数'), F('rows_written|LONG|写入行数')]},
+
+  {id:'factor_scorecard', cn:'因子评分卡', domain:'factor', core:true, writer:'research', readers:['scripts','research'],
+   desc:'因子评级结果：IC / ICIR / NW-t / 单调性 / 换手 / 覆盖率与四象限；按 run 去重保留历史。',
+   fields:[F('run_id|SYMBOL|评级批次|pk'), F('factor_id|SYMBOL|因子 ID|fk'), F('grade|SYMBOL|评级 A~D'), F('score|DOUBLE|总分'), F('ic_mean|DOUBLE|IC 均值'), F('turnover|DOUBLE|每期换手'), F('quadrant|SYMBOL|时间×空间象限')]},
+
+  {id:'factor_alias', cn:'因子别名', domain:'factor', core:false, writer:'factor_engine', readers:['screener','backtest'],
+   desc:'旧因子 ID / 简写 → canonical factor_id 的映射，resolve_id 的解析依据。',
+   fields:[F('alias|SYMBOL|旧 ID / 简写|pk'), F('factor_id|SYMBOL|目标因子 ID|fk'), F('window|INT|默认窗口'), F('params|STRING|附加参数')]},
+
+  /* ---------------- position ---------------- */
+  {id:'portfolios', cn:'组合账户', domain:'position', core:true, writer:'position', readers:['position','MCPserver'],
+   desc:'组合账户：总资产 / 现金 / 市值 / 已实现盈亏；软删除通过 deleted_at 标记。',
+   fields:[F('portfolio_id|SYMBOL|组合 ID|pk'), F('name|STRING|组合名称'), F('total_assets|DOUBLE|总资产'), F('cash|DOUBLE|可用现金'), F('market_value|DOUBLE|持仓市值'), F('realized_profit|DOUBLE|已实现盈亏')]},
+
+  {id:'positions', cn:'持仓', domain:'position', core:true, writer:'position', readers:['position','MCPserver'],
+   desc:'组合下的持仓；数量由成交记录汇总推导，模式参数决定止损与加减仓规则。',
+   fields:[F('pos_id|SYMBOL|持仓 ID|pk'), F('portfolio_id|SYMBOL|所属组合|fk'), F('ticker|SYMBOL|证券代码|fk'), F('quantity|DOUBLE|持仓数量'), F('cost|DOUBLE|持仓成本'), F('mode|SYMBOL|ATR / GRID'), F('stop_price|DOUBLE|止损价')]},
+
+  {id:'trade_records', cn:'交易流水', domain:'position', core:true, writer:'position', readers:['position'],
+   desc:'逐笔买卖流水，是持仓台账的真相来源；按 trade_date 分区，删除为软删除。',
+   fields:[F('trade_id|SYMBOL|成交 ID|pk'), F('pos_id|SYMBOL|持仓 ID|fk'), F('type|SYMBOL|BUY / SELL'), F('quantity|DOUBLE|数量'), F('price|DOUBLE|成交价'), F('trade_date|TIMESTAMP|成交日|ts')]},
+
+  /* ---------------- ops ---------------- */
+  {id:'screener_build_state', cn:'选股构建状态', domain:'ops', core:true, writer:'acquisition', readers:['screener','MCPserver'],
+   desc:'快照 / 作业状态：universe 指纹、覆盖率、阶段、游标、互斥锁与重试；由 BuildOrchestrator 经 BuildStatePort 写入。',
+   fields:[F('build_id|SYMBOL|构建 ID|pk'), F('dataset|SYMBOL|数据集'), F('universe_key|SYMBOL|股票池指纹'), F('status|SYMBOL|状态'), F('coverage_ratio|DOUBLE|覆盖率'), F('cursor_ts|TIMESTAMP|游标时点'), F('locked_until|TIMESTAMP|互斥锁到期')]},
+
+  {id:'fin_sync_state', cn:'财务同步游标', domain:'ops', core:true, writer:'acquisition', readers:['acquisition'],
+   desc:'按 (code, dataset) 记录最后报告期与披露日，是实现断点续跑与增量同步的依据。',
+   fields:[F('code|SYMBOL|证券代码|fk'), F('dataset|SYMBOL|数据集'), F('last_period_end|TIMESTAMP|最后报告期'), F('last_publish_date|TIMESTAMP|最后披露日'), F('status|SYMBOL|同步状态'), F('message|STRING|错误信息')]},
+
+  {id:'market_suspension', cn:'停牌 / 负缓存', domain:'ops', core:false, writer:'screener', readers:['screener'],
+   desc:'停牌、退市、无数据的负缓存，避免重复请求；读取时按 code / status 取最新记录。',
+   fields:[F('code|SYMBOL|证券代码|fk'), F('market|SYMBOL|市场'), F('status|SYMBOL|停牌/退市/无数据'), F('start_date|TIMESTAMP|开始日'), F('retry_at|TIMESTAMP|下次重试'), F('reason|STRING|原因')]},
+
+  {id:'scheduled_task_state', cn:'任务状态', domain:'ops', core:false, writer:'acquisition', readers:['acquisition','MCPserver'],
+   desc:'采集任务的游标与进度（TaskStateRepository 的落库表）：task_name / dataset / cursor / status，是断点续跑的依据。',
+   fields:[F('task_name|SYMBOL|任务名|pk'), F('dataset|SYMBOL|数据集'), F('cursor|STRING|游标'), F('status|SYMBOL|状态'), F('processed|INT|已处理数'), F('message|STRING|说明')]}
+];
+const TABLE_BY_ID = Object.fromEntries(TABLES.map(t => [t.id, t]));
+
+const EDGES = [
+  {f:'stock_basic_info', t:'ohlcv_1d',              type:'fk',      label:'code 1:N'},
+  {f:'stock_basic_info', t:'fin_report_meta',       type:'fk',      label:'code 1:N'},
+  {f:'trading_days',     t:'ohlcv_1d',              type:'state',   label:'交易日约束'},
+  {f:'fin_report_meta',  t:'fin_income_statement',  type:'fk',      label:'report_id 1:1'},
+  {f:'fin_report_meta',  t:'fin_balance_sheet',     type:'fk',      label:'report_id 1:1'},
+  {f:'fin_report_meta',  t:'fin_cash_flow',         type:'fk',      label:'report_id 1:1'},
+  {f:'fin_report_meta',  t:'fin_indicator',         type:'fk',      label:'code + 报告期'},
+  {f:'fin_report_meta',  t:'factor_value_announce', type:'lineage', label:'PIT 公告口径'},
+  {f:'ohlcv_1d',         t:'fin_valuation_daily',   type:'lineage', label:'close × 股本'},
+  {f:'moneyflow_source', t:'moneyflow_daily',       type:'fk',      label:'source 1:N'},
+  {f:'concept_board_dim',t:'concept_board_daily',   type:'fk',      label:'board_code 1:N'},
+  {f:'concept_board_dim',t:'concept_member_snapshot',type:'fk',     label:'board_code 1:N'},
+  {f:'concept_board_dim',t:'concept_classification',type:'fk',      label:'board_code ≈ concept_code'},
+  {f:'dim_board',        t:'map_stock_board',       type:'fk',      label:'board_id 1:N'},
+  {f:'concept_member_snapshot', t:'stock_basic_info',type:'fk',     label:'stock_code → code'},
+  {f:'factor_registry',  t:'factor_value_daily',    type:'fk',      label:'factor_id 1:N'},
+  {f:'factor_registry',  t:'factor_scorecard',      type:'fk',      label:'factor_id 1:N'},
+  {f:'factor_registry',  t:'factor_alias',          type:'fk',      label:'alias → factor_id'},
+  {f:'factor_value_daily',t:'factor_value_latest',  type:'lineage', label:'每日投影'},
+  {f:'factor_daily_wide',t:'factor_value_daily',    type:'lineage', label:'56 列解构'},
+  {f:'ohlcv_1d',         t:'factor_value_daily',    type:'lineage', label:'ts + code 对齐'},
+  {f:'ohlcv_1d',         t:'factor_daily_wide',     type:'lineage', label:'价量输入'},
+  {f:'factor_build_state',t:'factor_value_daily',   type:'state',   label:'作业写入'},
+  {f:'portfolios',       t:'positions',             type:'fk',      label:'portfolio_id 1:N'},
+  {f:'positions',        t:'trade_records',         type:'fk',      label:'pos_id 1:N'},
+  {f:'screener_build_state',t:'factor_build_state', type:'state',   label:'触发物化'},
+  {f:'fin_sync_state',   t:'fin_report_meta',       type:'state',   label:'游标 → 报表'}
+];
+
+const MODULES = [
+  {id:'acquisition', name:'acquisition', cn:'采集编排', layer:'采集层', color:'#f59e0b',
+   role:'唯一把外部数据写进 QuestDB 的模块：增量同步、断点续跑、快照与作业调度。不算因子、不读业务数据。',
+   funcs:['Scope / Orchestrator.run','REAL_SYNCERS（16 个数据集）','sync_margin_detail / top_list / block_trade','BuildOrchestrator.ensure_snapshot','TaskStateRepository.load / save'],
+   deps:['data_interface','factor_engine','screener'], tables:['ohlcv_1d','fin_report_meta','screener_build_state'],
+   note:'dataset 白名单与 start_date 语义随数据集变化；单代码失败只记状态不抛异常。'},
+
+  {id:'data_interface', name:'data_interface', cn:'数据访问层', layer:'数据层', color:'#22d3ee',
+   role:'所有 QuestDB 读写的唯一入口：多源取数、字段归一、复权、PIT 对齐，向上提供稳定业务语义。',
+   funcs:['QuestDBClient.query_dataframe / execute','MarketDataLoader.ohlc(codes, start, end, freq, adjust)','MarketDataFetcher.get_ohlc','FinancialDataService.get_statements(as_of)','ConceptService.stock_boards / compute_board_daily'],
+   deps:['无硬依赖（延迟引用）'], tables:['ohlcv_1d','fin_income_statement','moneyflow_daily'],
+   note:'库里是北京时间但标签为 UTC，读出后 tz_localize(None)，不要 tz_convert。'},
+
+  {id:'factors', name:'factors', cn:'因子定义与纯计算', layer:'计算层', color:'#3b82f6',
+   role:'纯计算层：声明式因子定义、时序算子、横截面变换与因子面板。不碰数据库、不读配置、不发网络请求。',
+   funcs:['F.mom / F.ma / F.vol / F.atr','F.composite / F.neutralize / F.rank','F.stored / F.ts / F.factor','build_panel(frame, defs, start, end)','compute_series / rank_pct / winsorize'],
+   deps:['仅 pandas / numpy'], tables:[],
+   note:'零业务依赖是硬约束；warmup 不足会直接产生 NaN，不会报错。'},
+
+  {id:'factor_engine', name:'factor_engine', cn:'因子物化与注册', layer:'计算层', color:'#818cf8',
+   role:'把因子定义算出来并落库，维护因子注册表与读模型；负责 build / ensure / read 与对账。',
+   funcs:['FactorEngineService.build(ids, start, end, codes)','.ensure(codes, as_of, ids)','.read / .read_latest','FactorStore.upsert_values / query_values','FundamentalComputer.load_metrics / compute'],
+   deps:['factors','data_interface'], tables:['factor_registry','factor_value_daily','factor_daily_wide'],
+   note:'build 内存开销大，单批代码数建议 ≤ 8；写后立即读需重试（WAL 异步）。'},
+
+  {id:'research', name:'research', cn:'因子研究报告', layer:'应用层', color:'#a78bfa',
+   role:'回答“这个因子值不值得用”：IC / 分层 / 衰减 / 成本 / 增量性，输出 HTML 报告与评分卡。',
+   funcs:['build_report(factor, close, open, ...)','rate(report) → grade / score / quadrant','render(report, score, meta)','generate(factor_id, ...)','scorecard.save(report, run_id, ...)'],
+   deps:['data_interface','factor_value_daily'], tables:['factor_scorecard','factor_value_daily'],
+   note:'重叠样本看 NW-t，保守判断看独立 t；否决规则优先于分数。'},
+
+  {id:'screener', name:'screener', cn:'选股', layer:'应用层', color:'#38bdf8',
+   role:'给定条件产出当日候选池：universe 解析、快照就绪保证、SQL 筛选与排序、覆盖率校验。',
+   funcs:['ScreenerService.screen(spec)','.rebuild(request) / .status(build_id)','.get_metrics(codes, start, end)','FactorService.coverage','ScreenSpec / Filter / Sort'],
+   deps:['factor_engine','data_interface','acquisition'], tables:['factor_daily_wide','factor_value_latest','screener_build_state'],
+   note:'as_of 是快照时点而非最新数据；STORED 因子缺失不会现算，结果会标 INSUFFICIENT。'},
+
+  {id:'backtest', name:'backtest', cn:'回测引擎', layer:'应用层', color:'#34d399',
+   role:'唯一的撮合与资金曲线实现：A 股 T+1、整手、涨跌停、停牌、税费，输出订单 / 成交 / 净值 / 绩效。',
+   funcs:['BacktestRunner.run(path)','.optimize(path) / .walkforward(path)','BacktestSettings.from_dict(payload)','ExecutionRules / PortfolioLedger','_run_single / _run_cross'],
+   deps:['strategies','factors','factor_engine','data_interface'], tables:['factor_value_daily','ohlcv_1d'],
+   note:'横截面不要在 on_bar 开仓；止损写在 on_bar + close_position。PyBroker 版本敏感。'},
+
+  {id:'strategies', name:'strategies', cn:'策略基类', layer:'应用层', color:'#2dd4bf',
+   role:'定义策略怎么写：因子声明、股票池、调仓节奏、权重分配与下单意图。不含撮合逻辑。',
+   funcs:['BaseStrategy.factors / hyperparams / validate','CrossSectionStrategy.rank / weights','SingleSymbolStrategy.on_bar','StrategyContext.target_weight / buy_shares','UniverseSpec / EqualWeight / ScoreWeight'],
+   deps:['factors'], tables:[],
+   note:'rank() 只选股不下单；权重和必须 ≤ 1，否则被 max_gross_exposure 截断。'},
+
+  {id:'position', name:'position', cn:'持仓与交易台账', layer:'应用层', color:'#4ade80',
+   role:'管理组合 / 持仓 / 逐笔成交，并基于行情刷新成本、盈亏与止损位。模式决定加减仓与风控规则。',
+   funcs:['PositionManager.create_profolio / create_position','add_trade_record(pos_id, type, qty, price)','refresh_all_positions(portfolio_id)','calculate_profit / get_portfolio_summary','PositionAgentInterface / ATRMode / GridMode'],
+   deps:['data_interface','factors'], tables:['portfolios','positions','trade_records'],
+   note:'create_profolio / list__profolio 是历史拼写，不要改名。交易记录才是台账真相来源。'},
+
+  {id:'scripts', name:'scripts', cn:'运维脚本', layer:'运维层', color:'#94a3b8',
+   role:'一次性迁移、回填、体检、评分卡与方向校准；只做运维动作，不承载业务逻辑。',
+   funcs:['init_database.py / migrate_database.py','migrate_factors.py','backfill_moneyflow / concept / disclosure','factor_scorecard.py','calibrate_directions.py / verify_p0_p2.py'],
+   deps:['全模块'], tables:['factor_registry','factor_scorecard'],
+   note:'迁移窗口只写新表、旧表冻结；完成后直接 DROP，不归档观察。'},
+
+  {id:'MCPserver', name:'MCPserver', cn:'MCP 工具服务器', layer:'接入层', color:'#f472b6',
+   role:'唯一对外入口：把各模块能力注册为 MCP 工具，管理 HTTP / stdio 传输与生命周期。本身无业务逻辑。',
+   funcs:['register_*_tools(mcp)','_resolve_transport(name)','pm_create_portfolio / pm_execute_trade','screen_stocks / acquisition_run','get_factor_values / get_ohlc'],
+   deps:['全部模块'], tables:[],
+   note:'返回值必须 JSON 可序列化；同步类工具应“提交任务”而不是阻塞等待。'}
+];
+
+/* ============================================================
+   UTIL
+   ============================================================ */
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
+const NS = 'http://www.w3.org/2000/svg';
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmtInt = n => (n == null ? '—' : Number(n).toLocaleString('en-US'));
+const fmtRows = n => {
+  if (n == null) return '—';
+  if (n >= 1e8) return (n / 1e8).toFixed(2) + ' 亿';
+  if (n >= 1e4) return (n / 1e4).toFixed(n >= 1e6 ? 1 : 2) + ' 万';
+  return Number(n).toLocaleString('en-US');
+};
+const fmtDate = s => (s ? String(s).slice(0, 10) : '—');
+const typeShort = t => ({TIMESTAMP:'ts', SYMBOL:'sym', STRING:'str', VARCHAR:'str', DOUBLE:'num', LONG:'long', INT:'int', BOOLEAN:'bool'}[t] || t.toLowerCase());
+const svgEl = (tag, attrs = {}, text) => {
+  const el = document.createElementNS(NS, tag);
+  for (const k in attrs) el.setAttribute(k, attrs[k]);
+  if (text != null) el.textContent = text;
+  return el;
+};
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const debounce = (fn, ms) => { let h; return (...a) => { clearTimeout(h); h = setTimeout(() => fn(...a), ms); }; };
+
+const TOTAL_ROWS = Object.values(DB).reduce((s, d) => s + (d.rows || 0), 0);
+const EMPTY_TABLES = Object.entries(DB).filter(([, d]) => !d.rows).map(([k]) => k);
+const DOMAIN_ROWS = {};
+DOMAINS.forEach(d => DOMAIN_ROWS[d.id] = 0);
+TABLES.forEach(t => { DOMAIN_ROWS[t.domain] += (DB[t.id]?.rows || 0); });
+
+/* ============================================================
+   OVERVIEW
+   ============================================================ */
+function buildOverview() {
+  const stats = [
+    {k:'数据表', v:Object.keys(DB).length, n:'7 个数据域'},
+    {k:'总行数', v:Math.round(TOTAL_ROWS / 1e4).toLocaleString('en-US'), u:'万', n:'WAL + DEDUP UPSERT'},
+    {k:'模块', v:MODULES.length, n:'单向依赖'},
+    {k:'因子 ID', v:118, n:'57 个注册 spec'},
+    {k:'覆盖标的', v:'8,182', n:'1990-12 → 2026-10'}
+  ];
+  $('#statStrip').innerHTML = stats.map(s => `
+    <div class="stat">
+      <div class="stat-label">${s.k}</div>
+      <div class="stat-value">${s.v}${s.u ? `<small>${s.u}</small>` : ''}</div>
+      <div class="stat-note">${s.n}</div>
+    </div>`).join('');
+
+  const dbTotal = $('#dbTotal');
+  if (dbTotal) dbTotal.textContent = `WAL + DEDUP UPSERT · ${Object.keys(DB).length} 张表 / ${Math.round(TOTAL_ROWS / 1e4).toLocaleString('en-US')} 万行`;
+
+  // architecture sources
+  const srcs = ['Tushare Pro', 'BaoStock', '东方财富', '同花顺', '腾讯财经', '新浪财经'];
+  const srcRow = $('#srcRow'), srcArrows = $('#srcArrows');
+  const startX = 65, chipW = 170, gap = 16;
+  srcs.forEach((name, i) => {
+    const x = startX + i * (chipW + gap);
+    const g = svgEl('g');
+    g.appendChild(svgEl('rect', {class:'achip', x, y:14, width:chipW, height:38, rx:9}));
+    g.appendChild(svgEl('circle', {cx:x + 16, cy:33, r:3, fill:'#5b6b82'}));
+    g.appendChild(svgEl('text', {class:'achiplabel', x:x + 28, y:37}, name));
+    srcRow.appendChild(g);
+    srcArrows.appendChild(svgEl('path', {
+      class:'aarrow', 'marker-end':'url(#arw)',
+      d:`M${x + chipW / 2} 52 V86`
+    }));
+  });
+
+  // questdb groups
+  const groups = [
+    {t:'行情', d:['market'], rows:['ohlcv_1d','ohlcv_1m','trading_days','stock_basic_info']},
+    {t:'财务', d:['financial'], rows:['fin_income_statement','fin_balance_sheet','fin_cash_flow','fin_valuation_daily']},
+    {t:'资金', d:['flow'], rows:['moneyflow_daily','margin_detail','top_list','block_trade']},
+    {t:'板块', d:['concept'], rows:['concept_board_dim','concept_board_daily','concept_member_snapshot']},
+    {t:'因子', d:['factor'], rows:['factor_registry','factor_value_daily','factor_value_latest','factor_daily_wide']},
+    {t:'组合 · 状态', d:['position','ops'], rows:['portfolios','positions','trade_records','screener_build_state']}
+  ];
+  const gx = 80, gw = 170, ggap = 12, gy = 316, gh = 142;
+  const gWrap = $('#dbGroups');
+  groups.forEach((grp, i) => {
+    const x = gx + i * (gw + ggap);
+    const dom = DOMAIN_BY_ID[grp.d[0]];
+    const rows = grp.d.reduce((s, id) => s + DOMAIN_ROWS[id], 0);
+    gWrap.appendChild(svgEl('rect', {x, y:gy, width:gw, height:gh, rx:9, fill:'rgba(7,14,24,.6)', stroke:'rgba(148,163,184,.13)'}));
+    gWrap.appendChild(svgEl('rect', {x, y:gy, width:gw, height:2.5, rx:1.2, fill:dom.color, opacity:.8}));
+    gWrap.appendChild(svgEl('text', {class:'gtitle', x:x + 12, y:gy + 21}, grp.t));
+    gWrap.appendChild(svgEl('text', {class:'gmeta', x:x + gw - 10, y:gy + 21, 'text-anchor':'end'}, fmtRows(rows)));
+    grp.rows.forEach((name, j) => {
+      gWrap.appendChild(svgEl('text', {class:'gtab', x:x + 12, y:gy + 44 + j * 17}, name));
+    });
+  });
+
+  // bars
+  const top = Object.entries(DB).sort((a, b) => b[1].rows - a[1].rows).slice(0, 10);
+  const max = top[0][1].rows;
+  const colors = ['#22d3ee','#f59e0b','#fb7185','#a78bfa','#60a5fa','#34d399','#94a3b8'];
+  $('#barList').innerHTML = top.map(([name, d], i) => {
+    const t = TABLE_BY_ID[name];
+    const color = t ? DOMAIN_BY_ID[t.domain].color : colors[i % colors.length];
+    const pct = Math.max(2, d.rows / max * 100);
+    return `<div class="bar-row">
+      <div class="bar-name" title="${esc(name)}">${esc(name)}</div>
+      <div class="bar-track"><div class="bar-fill" style="width:${pct}%;background:linear-gradient(90deg,${color}99,${color})"></div></div>
+      <div class="bar-val">${fmtRows(d.rows)}</div>
+    </div>`;
+  }).join('');
+
+  // notes
+  const notes = [
+    {w:1, t:'latest 读模型未裁剪', d:`<b class="mono">factor_value_latest</b> 与长表行数完全相同（${fmtInt(DB.factor_value_latest.rows)}），且每只股票保留全部 1,896 个交易日。按设计它只应保留最新一日；现状会让存储翻倍、筛股快查退化为长表扫描。`},
+    {w:1, t:`${EMPTY_TABLES.length} 张空表`, d:`fin_estimate、factor_value_announce、factor_audit_state、intraday_baseline、ohlcv_15m / 30m / 60m / 1w / 1mo、concept_board_alias 等为空：属现行 schema 但尚未产生数据；5 张退役表已于 2026-10-30 清理。`},
+    {w:0, t:'时间起点不一致', d:`行情从 1990-12 起，因子长表从 2019-01 起。跨 2019 年前的回测会整段缺因子，需要 inline 现算或接受空值。`},
+    {w:0, t:`展开 ${TABLES.length} / ${Object.keys(DB).length} 张表`, d:`图中是核心链路；其余为扩展数据集（index_weight、announcement、fin_raw_report…）、备份表与遗留表。`}
+  ];
+  $('#noteList').innerHTML = notes.map(n => `
+    <div class="note ${n.w ? 'warn' : ''}"><i>${n.w ? '!' : 'i'}</i><div><b>${n.t}</b> · ${n.d}</div></div>`).join('');
+
+  $('#rowTag').textContent = `${fmtInt(Object.keys(DB).length)} TABLES / ${fmtInt(TOTAL_ROWS)} ROWS`;
+}
+
+/* ============================================================
+   MODULES
+   ============================================================ */
+function buildModules() {
+  $('#modTag').textContent = `${MODULES.length} MODULES · ${TABLES.length} TABLES MAPPED`;
+  $('#modGrid').innerHTML = MODULES.map((m, i) => {
+    const tableTags = m.tables.length
+      ? m.tables.map(id => `<span class="tag hit" data-table="${id}">${id}</span>`).join('')
+      : `<span class="tag">无直接表访问</span>`;
+    return `<article class="mod" style="--acc:${m.color}">
+      <div class="mod-top">
+        <span class="mod-idx">MODULE ${String(i + 1).padStart(2, '0')}</span>
+        <span class="mod-layer">${m.layer}</span>
+      </div>
+      <div>
+        <div class="mod-name">${m.name}</div>
+        <div class="mod-cn">${m.cn}</div>
+      </div>
+      <p class="mod-role">${m.role}</p>
+      <div class="mod-funcs">${m.funcs.map(f => `<div class="fn"><span>${esc(f)}</span></div>`).join('')}</div>
+      <div class="mod-note"><b>注意</b> · ${m.note}</div>
+      <div class="mod-foot">
+        <div class="mod-tables">${tableTags}</div>
+        <div class="mod-deps" title="依赖 ${esc(m.deps.join(' / '))}">依赖 · ${esc(m.deps.join(' / '))}</div>
+      </div>
+    </article>`;
+  }).join('');
+
+  $('#modGrid').addEventListener('click', e => {
+    const tag = e.target.closest('[data-table]');
+    if (tag) goTable(tag.dataset.table);
+  });
+}
+
+/* ============================================================
+   ER GRAPH
+   ============================================================ */
+const ER = {
+  W: 250, HDR: 48, ROW: 20, FOOT: 24,
+  GAP: 24, LANE_GAP: 50, PAD: 46, TOP: 96,
+  nodes: [], edges: [], graphW: 0, graphH: 0,
+  view: {x: 0, y: 0, k: 1},
+  hover: null, autoFit: true, rendered: false
+};
+let mode = 'core';
+let activeDomain = 'all';
+let query = '';
+let showLabels = false;
+
+const canvas = () => $('#erCanvas');
+const viewport = () => $('#erRoot');
+
+function nodeH(t) {
+  const nf = Math.min(5, t.fields.length);
+  return ER.HDR + nf * ER.ROW + ER.FOOT;
+}
+
+function visibleTables() {
+  return TABLES.filter(t => mode === 'all' || t.core);
+}
+
+function layout(tables) {
+  const lanes = DOMAINS
+    .map(d => ({d, list: tables.filter(t => t.domain === d.id)}))
+    .filter(l => l.list.length);
+  let x = ER.PAD;
+  let maxBottom = ER.TOP + 200;
+  lanes.forEach(lane => {
+    lane.x = x;
+    let y = ER.TOP;
+    lane.list.forEach(t => {
+      const h = nodeH(t);
+      t._x = x; t._y = y; t._w = ER.W; t._h = h;
+      y += h + ER.GAP;
+    });
+    lane.bottom = y - ER.GAP;
+    maxBottom = Math.max(maxBottom, lane.bottom);
+    x += ER.W + ER.LANE_GAP;
+  });
+  ER.graphW = x - ER.LANE_GAP + ER.PAD;
+  ER.graphH = maxBottom + ER.PAD + 20;
+  ER.maxBottom = maxBottom;
+  return lanes;
+}
+
+function buildMarkers() {
+  const defs = $('#erDefs');
+  DOMAINS.concat([{id:'lineage', color:'#38bdf8'}, {id:'state', color:'#94a3b8'}]).forEach(d => {
+    const m = svgEl('marker', {
+      id: `arw-${d.id}`, viewBox: '0 0 10 10', refX: 9, refY: 5,
+      markerWidth: 6, markerHeight: 6, orient: 'auto-start-reverse'
+    });
+    m.appendChild(svgEl('path', {d: 'M0 0 L10 5 L0 10 Z', fill: d.color}));
+    defs.appendChild(m);
+  });
+}
+
+function edgeGeometry(a, b) {
+  const acx = a._x + a._w / 2, acy = a._y + a._h / 2;
+  const bcx = b._x + b._w / 2, bcy = b._y + b._h / 2;
+  const sameCol = Math.abs(acx - bcx) < (a._w + b._w) / 2 - 10;
+  if (sameCol) {
+    const down = bcy > acy;
+    const x1 = acx, y1 = down ? a._y + a._h : a._y;
+    const x2 = bcx, y2 = down ? b._y : b._y + b._h;
+    const dy = y2 - y1;
+    return {
+      d: `M${x1} ${y1} C${x1} ${y1 + dy * .45},${x2} ${y2 - dy * .45},${x2} ${y2}`,
+      lx: (x1 + x2) / 2, ly: (y1 + y2) / 2
+    };
+  }
+  const right = bcx > acx;
+  const x1 = right ? a._x + a._w : a._x;
+  const y1 = acy;
+  const x2 = right ? b._x : b._x + b._w;
+  const y2 = bcy;
+  const dx = x2 - x1;
+  return {
+    d: `M${x1} ${y1} C${x1 + dx * .45} ${y1},${x2 - dx * .45} ${y2},${x2} ${y2}`,
+    lx: (x1 + x2) / 2, ly: (y1 + y2) / 2
+  };
+}
+
+function renderER() {
+  const tables = visibleTables();
+  const lanes = layout(tables);
+  const laneG = $('#erLanes'), edgeG = $('#erEdges'), nodeG = $('#erNodes');
+  laneG.innerHTML = ''; edgeG.innerHTML = ''; nodeG.innerHTML = '';
+
+  lanes.forEach(lane => {
+    const color = lane.d.color;
+    const sumRows = lane.list.reduce((s, t) => s + (DB[t.id]?.rows || 0), 0);
+    const g = svgEl('g', {
+      class: 'lane', 'data-domain': lane.d.id,
+      opacity: activeDomain === 'all' || activeDomain === lane.d.id ? 1 : .3
+    });
+    g.appendChild(svgEl('rect', {
+      class: 'lane-bg', 'data-domain': lane.d.id, x: lane.x - 14, y: ER.TOP - 66,
+      width: ER.W + 28, height: ER.maxBottom - ER.TOP + 106, rx: 16,
+      fill: color, 'fill-opacity': .055, stroke: color, 'stroke-opacity': .28
+    }));
+    g.appendChild(svgEl('text', {class: 'lane-title', 'data-domain': lane.d.id, x: lane.x, y: ER.TOP - 44, fill: color}, lane.d.label));
+    g.appendChild(svgEl('text', {class: 'lane-meta', x: lane.x, y: ER.TOP - 26}, `${lane.list.length} 表 · ${fmtRows(sumRows)} 行`));
+    g.appendChild(svgEl('text', {class: 'lane-meta', x: lane.x, y: ER.TOP - 11, fill: '#4b5b71'}, lane.d.desc));
+    g.appendChild(svgEl('line', {
+      class: 'lane-rule', x1: lane.x, y1: ER.TOP - 2, x2: lane.x + ER.W, y2: ER.TOP - 2, stroke: color
+    }));
+    laneG.appendChild(g);
+  });
+
+  // nodes
+  ER.nodes = [];
+  tables.forEach(t => {
+    const dom = DOMAIN_BY_ID[t.domain];
+    const nf = Math.min(5, t.fields.length);
+    const h = nodeH(t);
+    const g = svgEl('g', {class: 'node', 'data-id': t.id, transform: `translate(${t._x},${t._y})`, tabindex: 0, role: 'button'});    g.appendChild(svgEl('rect', {class: 'node-bg', x: 0, y: 0, width: ER.W, height: h, rx: 10}));
+    g.appendChild(svgEl('rect', {x: 0, y: 13, width: 3, height: h - 26, rx: 1.5, fill: dom.color, opacity: .9}));
+    g.appendChild(svgEl('text', {class: 'n-name', x: 14, y: 24}, t.id));
+    g.appendChild(svgEl('text', {class: 'n-cn', x: 14, y: 39}, t.cn));
+    g.appendChild(svgEl('line', {class: 'n-div', x1: 12, y1: 47, x2: ER.W - 12, y2: 47}));
+    g.appendChild(svgEl('circle', {cx: ER.W - 13, cy: 20, r: 3, fill: dom.color, opacity: .55}));
+
+    t.fields.slice(0, 5).forEach((f, i) => {
+      const cy = 65 + i * ER.ROW;
+      let shape;
+      if (f.k === 'ts') shape = svgEl('circle', {cx: 16, cy: cy - 3, r: 2.6, fill: dom.color});
+      else if (f.k === 'pk') shape = svgEl('rect', {x: 13.6, y: cy - 5.6, width: 5, height: 5, rx: 1, fill: '#fbbf24'});
+      else if (f.k === 'fk') shape = svgEl('circle', {cx: 16, cy: cy - 3, r: 2.4, fill: 'none', stroke: '#60a5fa', 'stroke-width': 1.2});
+      else shape = svgEl('circle', {cx: 16, cy: cy - 3, r: 1.6, fill: '#3b4b60'});
+      g.appendChild(shape);
+      g.appendChild(svgEl('text', {class: 'n-field', x: 25, y: cy}, f.n));
+    });
+
+    g.appendChild(svgEl('text', {class: 'n-foot', x: 14, y: h - 9}, `${fmtRows(DB[t.id]?.rows)} 行`));
+    g.appendChild(svgEl('text', {class: 'n-foot', x: ER.W - 13, y: h - 9, 'text-anchor': 'end'},
+      `${DB[t.id]?.cols?.length || t.fields.length} 列`));
+
+    const title = svgEl('title', {}, `${t.id} · ${t.cn}\n${t.desc}`);
+    g.appendChild(title);
+    if (!DB[t.id]?.rows) g.querySelector('.node-bg').setAttribute('stroke-dasharray', '4 3');
+
+    g.addEventListener('mouseenter', () => focusNode(t.id));
+    g.addEventListener('mouseleave', () => clearFocus());
+    g.addEventListener('focus', () => focusNode(t.id));
+    g.addEventListener('blur', () => clearFocus());
+    g.addEventListener('keydown', ev => { if (ev.key === 'Enter') openTable(t.id); });
+    nodeG.appendChild(g);
+    ER.nodes.push({id: t.id, el: g});
+  });
+
+  // edges
+  ER.edges = [];
+  EDGES.forEach(e => {
+    const a = TABLE_BY_ID[e.f], b = TABLE_BY_ID[e.t];
+    if (!a || !b || !a._x || !b._x) return;
+    if (!tables.includes(a) || !tables.includes(b)) return;
+    const geo = edgeGeometry(a, b);
+    const isLineage = e.type === 'lineage';
+    const isState = e.type === 'state';
+    const color = isLineage ? '#38bdf8' : isState ? '#94a3b8' : DOMAIN_BY_ID[a.domain].color;
+    const marker = isLineage ? 'arw-lineage' : isState ? 'arw-state' : `arw-${a.domain}`;
+
+    const hit = svgEl('path', {class: 'edge-hit', d: geo.d});
+    const pathAttrs = {
+      class: 'edge', d: geo.d, stroke: color,
+      'stroke-width': isLineage || isState ? 1.15 : 1.3,
+      'marker-end': `url(#${marker})`
+    };
+    if (isLineage) pathAttrs['stroke-dasharray'] = '5 4';
+    if (isState) pathAttrs['stroke-dasharray'] = '2 4';
+    const path = svgEl('path', pathAttrs);
+    const label = svgEl('text', {
+      class: 'edge-label' + (showLabels ? ' show' : ''),
+      x: geo.lx, y: geo.ly - 4, 'text-anchor': 'middle'
+    }, e.label);
+
+    const onEnter = () => {
+      path.classList.add('hot'); label.classList.add('hot');
+      ER.nodes.forEach(n => n.el.classList.toggle('faded', n.id !== e.f && n.id !== e.t));
+    };
+    const onLeave = () => {
+      path.classList.remove('hot'); label.classList.remove('hot');
+      clearFocus(false);
+    };
+    hit.addEventListener('mouseenter', onEnter);
+    hit.addEventListener('mouseleave', onLeave);
+    edgeG.appendChild(path);
+    edgeG.appendChild(label);
+    edgeG.appendChild(hit);
+    ER.edges.push({e, path, hit, label});
+  });
+
+  $('#erSvg').classList.toggle('show-labels', showLabels);
+  refreshSpot();
+  ER.autoFit = true;
+  fit();
+}
+
+function focusNode(id) {
+  const nb = new Set([id]);
+  EDGES.forEach(e => {
+    if (e.f === id) nb.add(e.t);
+    if (e.t === id) nb.add(e.f);
+  });
+  ER.nodes.forEach(n => {
+    n.el.classList.toggle('hot', nb.has(n.id));
+    n.el.classList.toggle('faded', !nb.has(n.id));
+  });
+  ER.edges.forEach(o => {
+    const on = o.e.f === id || o.e.t === id;
+    o.path.classList.toggle('hot', on);
+    o.path.classList.toggle('dim', !on);
+    o.label.classList.toggle('hot', on);
+  });
+}
+
+function clearFocus(applySearchAfter = true) {
+  ER.nodes.forEach(n => n.el.classList.remove('hot', 'faded'));
+  ER.edges.forEach(o => { o.path.classList.remove('hot', 'dim'); o.label.classList.remove('hot'); });
+  if (applySearchAfter) { applySearch(); applySpot(); }
+}
+
+function applySpot() {
+  ER.nodes.forEach(n => {
+    const t = TABLE_BY_ID[n.id];
+    n.el.classList.toggle('spot-off', activeDomain !== 'all' && t.domain !== activeDomain);
+  });
+  ER.edges.forEach(o => {
+    const a = TABLE_BY_ID[o.e.f], b = TABLE_BY_ID[o.e.t];
+    const off = activeDomain !== 'all' && a.domain !== activeDomain && b.domain !== activeDomain;
+    o.path.classList.toggle('dim', off);
+  });
+}
+
+function refreshSpot() {
+  $$('#erLanes .lane').forEach(g => {
+    g.setAttribute('opacity', activeDomain === 'all' || g.dataset.domain === activeDomain ? 1 : .3);
+  });
+  applySpot();
+}
+
+function applySearch() {
+  const q = query.trim().toLowerCase();
+  if (!q) {
+    ER.nodes.forEach(n => n.el.classList.remove('faded'));
+    ER.edges.forEach(o => { o.path.classList.remove('dim'); o.hit.style.pointerEvents = 'stroke'; });
+    return;
+  }
+  const hit = new Set();
+  TABLES.forEach(t => {
+    const hay = (t.id + ' ' + t.cn + ' ' + t.desc + ' ' + t.fields.map(f => f.n + ' ' + f.d).join(' ')).toLowerCase();
+    if (hay.includes(q)) hit.add(t.id);
+  });
+  ER.nodes.forEach(n => {
+    const match = hit.has(n.id);
+    n.el.classList.toggle('faded', !match);
+  });
+  ER.edges.forEach(o => {
+    const on = hit.has(o.e.f) || hit.has(o.e.t);
+    o.path.classList.toggle('dim', !on);
+  });
+}
+
+function applyTransform() {
+  const {x, y, k} = ER.view;
+  viewport().setAttribute('transform', `translate(${x},${y}) scale(${k})`);
+}
+
+function fit() {
+  const cw = canvas().clientWidth, ch = canvas().clientHeight;
+  if (!cw || !ch) return;
+  const k = clamp(Math.min((cw - 56) / ER.graphW, (ch - 56) / ER.graphH, 1.05), .15, 1.2);
+  ER.view = {
+    k,
+    x: (cw - ER.graphW * k) / 2,
+    y: (ch - ER.graphH * k) / 2
+  };
+  applyTransform();
+  ER.autoFit = true;
+}
+
+function zoomAt(px, py, factor) {
+  const v = ER.view;
+  const k2 = clamp(v.k * factor, .16, 2.4);
+  v.x = px - (px - v.x) * (k2 / v.k);
+  v.y = py - (py - v.y) * (k2 / v.k);
+  v.k = k2;
+  ER.autoFit = false;
+  applyTransform();
+}
+
+function centerOn(id) {
+  const t = TABLE_BY_ID[id];
+  if (!t || t._x == null) return;
+  const cw = canvas().clientWidth, ch = canvas().clientHeight;
+  const k = Math.max(ER.view.k, .78);
+  const drawerW = window.innerWidth > 720 ? Math.min(470, window.innerWidth * .94) : 0;
+  const cx = Math.max(180, (cw - drawerW) / 2);
+  ER.view = {
+    k,
+    x: cx - (t._x + ER.W / 2) * k,
+    y: ch / 2 - (t._y + t._h / 2) * k
+  };
+  ER.autoFit = false;
+  applyTransform();
+}
+
+/* ---------- interactions ---------- */
+function initCanvas() {
+  const svg = $('#erSvg');
+  const c = canvas();
+
+  svg.addEventListener('wheel', e => {
+    e.preventDefault();
+    const r = c.getBoundingClientRect();
+    zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(-e.deltaY * .0016));
+  }, {passive: false});
+
+  let down = null, moved = 0, downNode = null, downLane = null;
+  svg.addEventListener('pointerdown', e => {
+    if (e.button !== 0 || e.target.closest('button')) return;
+    down = {x: e.clientX, y: e.clientY, vx: ER.view.x, vy: ER.view.y};
+    downNode = e.target.closest('.node');
+    downLane = e.target.closest('[data-domain]');
+    moved = 0;
+    svg.setPointerCapture(e.pointerId);
+  });
+  svg.addEventListener('pointermove', e => {
+    if (!down) return;
+    const dx = e.clientX - down.x, dy = e.clientY - down.y;
+    moved = Math.max(moved, Math.abs(dx) + Math.abs(dy));
+    ER.view.x = down.vx + dx;
+    ER.view.y = down.vy + dy;
+    applyTransform();
+  });
+  const end = e => {
+    if (!down) return;
+    svg.releasePointerCapture?.(e.pointerId);
+    if (moved > 5) ER.autoFit = false;
+    else if (downNode) openTable(downNode.dataset.id);
+    else if (downLane) focusDomain(downLane.dataset.domain);
+    down = null; downNode = null; downLane = null;
+  };
+  svg.addEventListener('pointerup', end);
+  svg.addEventListener('pointercancel', () => { down = null; downNode = null; downLane = null; });
+
+  $('#zIn').addEventListener('click', () => zoomAt(c.clientWidth / 2, c.clientHeight / 2, 1.25));
+  $('#zOut').addEventListener('click', () => zoomAt(c.clientWidth / 2, c.clientHeight / 2, .8));
+  $('#zFit').addEventListener('click', fit);
+  $('#btnFit').addEventListener('click', fit);
+
+  window.addEventListener('resize', debounce(() => {
+    if ($('#view-model').classList.contains('active') && ER.autoFit) fit();
+  }, 160));
+}
+
+/* ============================================================
+   DRAWER
+   ============================================================ */
+let drawerOpenId = null;
+
+function openTable(id) {
+  const t = TABLE_BY_ID[id];
+  if (!t) return;
+  const d = DB[id] || {rows: 0, cols: [], min: null, max: null, part: '—'};
+  const dom = DOMAIN_BY_ID[t.domain];
+  drawerOpenId = id;
+
+  const dw = $('#drawer');
+  dw.style.setProperty('--acc', dom.color);
+  $('#dwDom').innerHTML = `<span class="dw-dom"><i style="width:6px;height:6px;border-radius:2px;background:${dom.color};display:inline-block"></i>${dom.label}</span>`;
+  $('#dwName').textContent = t.id;
+  $('#dwCn').textContent = t.cn;
+
+  const keyRows = t.fields.map(f => {
+    const kc = f.k === 'ts' ? dom.color : f.k === 'pk' ? '#fbbf24' : f.k === 'fk' ? '#60a5fa' : 'transparent';
+    return `<tr>
+      <td><span class="kdot" style="background:${kc}"></span>${esc(f.n)}</td>
+      <td>${esc(f.t)}</td>
+      <td>${esc(f.d)}</td>
+    </tr>`;
+  }).join('');
+
+  const allCols = (d.cols && d.cols.length ? d.cols : t.fields.map(f => [f.n, f.t]))
+    .map(([n, ty]) => `<span class="colchip">${esc(n)}<i>${typeShort(ty)}</i></span>`).join('');
+
+  const rels = [];
+  EDGES.filter(e => e.f === id).forEach(e => {
+    rels.push(`<div class="rel" data-goto="${e.t}"><span class="dir">→</span><div><span class="t">${e.t}</span><span class="lab">${esc(e.label)}</span><div style="color:#5f7288;font-size:10.5px">${TABLE_BY_ID[e.t]?.cn || ''}</div></div></div>`);
+  });
+  EDGES.filter(e => e.t === id).forEach(e => {
+    rels.push(`<div class="rel" data-goto="${e.f}"><span class="dir">←</span><div><span class="t">${e.f}</span><span class="lab">${esc(e.label)}</span><div style="color:#5f7288;font-size:10.5px">${TABLE_BY_ID[e.f]?.cn || ''}</div></div></div>`);
+  });
+
+  const tsCol = d.ts || t.fields.find(f => f.k === 'ts')?.n || 'ts';
+  const sql = `SELECT *\nFROM "${id}"\nWHERE "${tsCol}" >= '2026-01-01'\nORDER BY "${tsCol}" DESC\nLIMIT 50;`;
+
+  $('#dwBody').innerHTML = `
+    <p class="dw-desc">${esc(t.desc)}</p>
+    <div class="dmgrid">
+      <div class="dm"><div class="dm-k">行数</div><div class="dm-v">${fmtInt(d.rows)}</div></div>
+      <div class="dm"><div class="dm-k">列数</div><div class="dm-v">${(d.cols || []).length || t.fields.length}</div></div>
+      <div class="dm"><div class="dm-k">时间范围</div><div class="dm-v">${fmtDate(d.min)} → ${fmtDate(d.max)}</div></div>
+      <div class="dm"><div class="dm-k">分区</div><div class="dm-v">${esc(d.part || '—')}${d.wal ? ' · WAL' : ' · 非 WAL'}</div></div>
+      <div class="dm"><div class="dm-k">时间列</div><div class="dm-v">${esc(d.ts || '—')}</div></div>
+      <div class="dm"><div class="dm-k">写入方</div><div class="dm-v">${esc(t.writer)}</div></div>
+    </div>
+
+    <div class="dw-h">关键字段 · ${t.fields.length}</div>
+    <table class="ft">
+      <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+      <tbody>${keyRows}</tbody>
+    </table>
+    <div style="font-size:10px;color:#5f7288;margin-top:7px">● 时间戳　■ 业务主键　○ 逻辑外键</div>
+
+    <div class="dw-h">全部字段 · ${(d.cols || []).length}</div>
+    <div class="colslist">${allCols}</div>
+
+    <div class="dw-h">读写方</div>
+    <div class="rel"><span class="dir">写</span><div><span class="t">${esc(t.writer)}</span></div></div>
+    <div class="rel"><span class="dir">读</span><div>${t.readers.map(r => `<span class="t">${esc(r)}</span>`).join('<span style="color:#3b4b60"> · </span>')}</div></div>
+
+    <div class="dw-h">关系</div>
+    ${rels.length ? rels.join('') : `<div class="rel"><span class="dir">·</span><div style="color:#5f7288">无显式连线；按 code 与主数据关联。</div></div>`}
+
+    <div class="dw-h">示例查询</div>
+    <div class="sqlbox"><button class="copybtn" id="copySql">复制</button>${esc(sql).replace(/\n/g, '<br>')}</div>
+  `;
+
+  dw.classList.add('open');
+  dw.setAttribute('aria-hidden', 'false');
+  $('#dwScrim').classList.add('on');
+  $('#dwBody').scrollTop = 0;
+
+  const copy = $('#copySql');
+  copy?.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(sql);
+      copy.textContent = '已复制';
+    } catch {
+      copy.textContent = '复制失败';
+    }
+    setTimeout(() => copy.textContent = '复制', 1600);
+  });
+}
+
+function closeDrawer() {
+  $('#drawer').classList.remove('open');
+  $('#drawer').setAttribute('aria-hidden', 'true');
+  $('#dwScrim').classList.remove('on');
+  drawerOpenId = null;
+}
+
+function goTable(id) {
+  const t = TABLE_BY_ID[id];
+  if (!t) return;
+  if (mode === 'core' && !t.core) {
+    mode = 'all';
+    syncModeButton();
+  }
+  activeDomain = 'all';
+  syncDomainChips();
+  renderER();
+  switchView('model');
+  setTimeout(() => {
+    centerOn(id);
+    openTable(id);
+  }, 80);
+}
+
+function navigateTo(id) {
+  const t = TABLE_BY_ID[id];
+  if (!t) return;
+  if (visibleTables().includes(t)) {
+    centerOn(id);
+    openTable(id);
+  } else {
+    goTable(id);
+  }
+}
+
+/* ============================================================
+   FILTERS / TABS
+   ============================================================ */
+function syncDomainChips() {
+  $$('#domainChips .dchip').forEach(chip => {
+    chip.classList.toggle('on', chip.dataset.domain === activeDomain);
+  });
+}
+
+function spotLane(id) {
+  const list = TABLES.filter(t => (mode === 'all' || t.core) && t.domain === id && t._x != null);
+  if (!list.length) return;
+  const cw = canvas().clientWidth;
+  const minX = Math.min(...list.map(t => t._x));
+  const maxX = Math.max(...list.map(t => t._x + t._w));
+  const k = window.innerWidth < 760 ? 1 : .92;
+  ER.view = {
+    k,
+    x: cw / 2 - (minX + maxX) / 2 * k,
+    y: 30 - (ER.TOP - 70) * k
+  };
+  ER.autoFit = false;
+  applyTransform();
+}
+
+function focusDomain(id) {
+  activeDomain = (id === activeDomain) ? 'all' : id;
+  syncDomainChips();
+  renderER();
+  if (activeDomain === 'all') { fit(); return; }
+  spotLane(activeDomain);
+}
+
+function buildChips() {
+  const counts = {};
+  TABLES.filter(t => mode === 'all' || t.core).forEach(t => counts[t.domain] = (counts[t.domain] || 0) + 1);
+  const total = TABLES.filter(t => mode === 'all' || t.core).length;
+  const chips = [`<button class="dchip on" data-domain="all" style="--c:#e2e8f0"><i></i>全部 <b>${total}</b></button>`];
+  DOMAINS.forEach(d => {
+    if (!counts[d.id]) return;
+    chips.push(`<button class="dchip" data-domain="${d.id}" style="--c:${d.color}"><i></i>${d.short} <b>${counts[d.id]}</b></button>`);
+  });
+  $('#domainChips').innerHTML = chips.join('');
+  syncDomainChips();
+}
+
+function syncModeButton() {
+  $('#btnCore').textContent = mode === 'core' ? '显示全部表' : '仅看核心表';
+  $('#btnCore').classList.toggle('on', mode === 'all');
+}
+
+function initToolbar() {
+  $('#erSearch').addEventListener('input', debounce(e => {
+    query = e.target.value;
+    if (query.trim()) {
+      if (activeDomain !== 'all') {
+        activeDomain = 'all';
+        syncDomainChips();
+        refreshSpot();
+      }
+      if (mode === 'core') {
+        const q = query.trim().toLowerCase();
+        const needsAll = TABLES.some(t => !t.core &&
+          (t.id + ' ' + t.cn + ' ' + t.desc + ' ' + t.fields.map(f => f.n + ' ' + f.d).join(' ')).toLowerCase().includes(q));
+        if (needsAll) {
+          mode = 'all';
+          syncModeButton();
+          buildChips();
+          renderER();
+        }
+      }
+    }
+    applySearch();
+  }, 140));
+
+  $('#domainChips').addEventListener('click', e => {
+    const chip = e.target.closest('.dchip');
+    if (!chip) return;
+    focusDomain(chip.dataset.domain);
+  });
+
+  $('#btnLabels').addEventListener('click', () => {
+    showLabels = !showLabels;
+    $('#btnLabels').classList.toggle('on', showLabels);
+    $('#erSvg').classList.toggle('show-labels', showLabels);
+  });
+
+  $('#btnCore').addEventListener('click', () => {
+    mode = mode === 'core' ? 'all' : 'core';
+    syncModeButton();
+    activeDomain = 'all';
+    buildChips();
+    renderER();
+  });
+}
+
+function switchView(name) {
+  $$('.tab').forEach(b => b.classList.toggle('active', b.dataset.view === name));
+  $$('.view').forEach(v => v.classList.toggle('active', v.id === 'view-' + name));
+  if (name === 'model') {
+    requestAnimationFrame(() => {
+      if (!ER.rendered) {
+        ER.rendered = true;
+        if (window.innerWidth < 760 && activeDomain === 'all') activeDomain = 'market';
+        buildChips();
+        renderER();
+        if (activeDomain !== 'all') requestAnimationFrame(() => spotLane(activeDomain));
+      } else if (ER.autoFit) {
+        fit();
+      }
+    });
+  }
+}
+
+/* ============================================================
+   BOOT
+   ============================================================ */
+buildOverview();
+buildModules();
+buildMarkers();
+buildChips();
+initCanvas();
+initToolbar();
+
+$$('.tab').forEach(b => b.addEventListener('click', () => {
+  history.replaceState(null, '', '#' + b.dataset.view);
+  switchView(b.dataset.view);
+}));
+$('#dwClose').addEventListener('click', closeDrawer);
+$('#dwScrim').addEventListener('click', closeDrawer);
+$('#dwBody').addEventListener('click', e => {
+  const rel = e.target.closest('[data-goto]');
+  if (rel) navigateTo(rel.dataset.goto);
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDrawer(); });
+
+function routeFromHash() {
+  const raw = location.hash.replace(/^#\/?/, '');
+  const [view, table] = raw.split('/');
+  if (['overview', 'modules', 'model'].includes(view)) switchView(view);
+  if (table) setTimeout(() => goTable(table), 160);
+}
+window.addEventListener('hashchange', routeFromHash);
+routeFromHash();
+</script>
+</body>
+</html>

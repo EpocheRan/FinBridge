@@ -44,6 +44,24 @@ def moneyflow(scope: Scope) -> dict:
     )
 
 
+def margin_detail(scope: Scope) -> dict:
+    return _service().sync_margin_detail(
+        start_date=scope.start, end_date=scope.end
+    )
+
+
+def top_list(scope: Scope) -> dict:
+    return _service().sync_top_list(
+        start_date=scope.start, end_date=scope.end
+    )
+
+
+def block_trade(scope: Scope) -> dict:
+    return _service().sync_block_trade(
+        start_date=scope.start, end_date=scope.end
+    )
+
+
 def valuation(scope: Scope) -> dict:
     return _service().sync_valuation(
         start_date=scope.start, end_date=scope.end
@@ -118,6 +136,9 @@ REAL_SYNCERS = {
     "financial": financial,
     "valuation": valuation,
     "moneyflow": moneyflow,
+    "margin_detail": margin_detail,
+    "top_list": top_list,
+    "block_trade": block_trade,
     "concept_meta": concept_meta,
     "concept_daily": concept_daily,
     "concept_member": concept_member,

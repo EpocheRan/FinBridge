@@ -73,11 +73,11 @@ def main() -> int:
     # 用「覆盖足够多股票」的最新交易日取样：补数时可能给个别股票写入未来日期，
     # 直接取 max(ts) 会选到只有几只股票的那天。
     latest = _query(
-        "select ts from (select ts, count() c from ohlcv_1d where market='MLCN' group by ts) "
+        "select ts from (select ts, count() c from ohlcv_1d where type <> 'idx' group by ts) "
         "where c > 3000 order by ts desc limit 1"
     )[0][0]
     rows = _query(
-        f"""select code from ohlcv_1d where ts = '{latest}' and market='MLCN'
+        f"""select code from ohlcv_1d where ts = '{latest}' and type <> 'idx'
             order by amount desc limit {int(args.codes * 1.5)}"""
     )
     codes = [str(r[0]) for r in rows if str(r[0])[:2] in ("60", "00", "30", "68")][: args.codes]

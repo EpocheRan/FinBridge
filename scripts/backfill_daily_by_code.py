@@ -41,10 +41,11 @@ import requests  # noqa: E402
 
 from data_interface.common.config import get_config, resolve_questdb_host  # noqa: E402
 from data_interface.common.questdb_client import QuestDBClient  # noqa: E402
+from data_interface.common.security_code import instrument_market, instrument_type  # noqa: E402
 
 logger = logging.getLogger("Scripts.BackfillByCode")
 
-_COLUMNS = ["ts", "open", "high", "low", "close", "volume", "amount", "turnover", "adj_factor", "code", "market"]
+_COLUMNS = ["ts", "open", "high", "low", "close", "volume", "amount", "turnover", "adj_factor", "code", "market", "type"]
 
 
 def main() -> int:
@@ -68,7 +69,7 @@ def main() -> int:
         resp = requests.get(
             f"{base}/exec",
             params={
-                "query": f"select code from ohlcv_1d where ts='{args.pool_date}' and market='MLCN' "
+                "query": f"select code from ohlcv_1d where ts='{args.pool_date}' and type <> 'idx' "
                 f"order by amount desc limit {args.pool}"
             },
             timeout=120,
@@ -108,7 +109,8 @@ def main() -> int:
                 raw["adj_factor"] = pd.to_numeric(raw["adj_factor"], errors="coerce").fillna(1.0)
                 raw = raw.drop(columns=[c for c in ("adj_factor_x",) if c in raw.columns])
             raw["code"] = code
-            raw["market"] = "MLCN"
+            raw["market"] = raw["code"].map(instrument_market)
+            raw["type"] = raw["code"].map(instrument_type)
             raw = raw.dropna(subset=["open", "high", "low", "close"])
             rows = [tuple(row[c] for c in _COLUMNS) for _, row in raw.iterrows()]
             if rows:

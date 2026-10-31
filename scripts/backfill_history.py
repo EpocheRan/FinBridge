@@ -185,7 +185,7 @@ def _existing_counts(dates: list[str]) -> dict[str, int]:
     try:
         rows = _sql(
             "select ts, count() from ohlcv_1d "
-            f"where market='MLCN' and ts between '{start}' and '{end}' group by ts",
+            f"where type <> 'idx' and ts between '{start}' and '{end}' group by ts",
             timeout=300,
         )
         return {str(r[0])[:10]: int(r[1]) for r in rows}
@@ -634,12 +634,12 @@ def phase_financial(api: _Api, args) -> int:
     min_days = int(getattr(args, "min_days", 0) or 0)
     if min_days > 0:
         rows = _sql(
-            "select code from (select code, count() n from ohlcv_1d where market='MLCN' "
+            "select code from (select code, count() n from ohlcv_1d where type <> 'idx' "
             "group by code) where n >= " + str(min_days) + " order by code"
         )
     else:
         rows = _sql(
-            "select distinct code from ohlcv_1d where market='MLCN' order by code"
+            "select distinct code from ohlcv_1d where type <> 'idx' order by code"
         )
     codes = [str(r[0]) for r in rows]
     logger.info("P3 财务：%s 只，起始年 %s", len(codes), args.start_year)

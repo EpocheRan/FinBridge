@@ -28,25 +28,25 @@ OHLC_PARTITION = {
 }
 
 #: 需要在存量库上补齐的列（(列名, 类型)），迁移脚本与 init 共用
-OHLC_EXTRA_COLUMNS = (("adj_factor", "DOUBLE"),)
+OHLC_EXTRA_COLUMNS = (("adj_factor", "DOUBLE"), ("type", "SYMBOL"))
 
 
 def _ohlc_sql(table: str, freq: str) -> str:
     partition = OHLC_PARTITION[freq]
     columns = (
         "ts TIMESTAMP, open DOUBLE, high DOUBLE, low DOUBLE, close DOUBLE, "
-        "volume LONG, amount DOUBLE, adj_factor DOUBLE, code SYMBOL, market SYMBOL"
+        "volume LONG, amount DOUBLE, adj_factor DOUBLE, code SYMBOL, market SYMBOL, type SYMBOL"
     )
     if not freq.endswith("min"):
         columns = (
             "ts TIMESTAMP, open DOUBLE, high DOUBLE, low DOUBLE, close DOUBLE, "
             "volume LONG, amount DOUBLE, turnover DOUBLE, adj_factor DOUBLE, "
-            "code SYMBOL, market SYMBOL"
+            "code SYMBOL, market SYMBOL, type SYMBOL"
         )
     return (
         f'CREATE TABLE IF NOT EXISTS "{table}" ({columns}) '
         f"TIMESTAMP(ts) PARTITION BY {partition} WAL "
-        "DEDUP UPSERT KEYS(ts, code, market)"
+        "DEDUP UPSERT KEYS(ts, code, market, type)"
     )
 
 
@@ -107,38 +107,6 @@ def create_market_tables(db, *, dry_run: bool = False) -> list[str]:
                 rating STRING
             ) TIMESTAMP(ts) PARTITION BY MONTH WAL
             DEDUP UPSERT KEYS(code, ts)
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS "concept_boards" (
-                ts TIMESTAMP,
-                code SYMBOL,
-                name STRING
-            ) TIMESTAMP(ts) PARTITION BY YEAR WAL
-            DEDUP UPSERT KEYS(ts, code)
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS "concept_boards_ohlc" (
-                ts TIMESTAMP,
-                code SYMBOL,
-                name STRING,
-                open DOUBLE,
-                high DOUBLE,
-                low DOUBLE,
-                close DOUBLE,
-                volume DOUBLE,
-                amount DOUBLE
-            ) TIMESTAMP(ts) PARTITION BY MONTH WAL
-            DEDUP UPSERT KEYS(ts, code)
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS "concept_constituents" (
-                ts TIMESTAMP,
-                board_name STRING,
-                board_code SYMBOL,
-                stock_name STRING,
-                stock_code SYMBOL
-            ) TIMESTAMP(ts) PARTITION BY YEAR WAL
-            DEDUP UPSERT KEYS(ts, board_code, stock_code)
             """,
             """
             CREATE TABLE IF NOT EXISTS "trading_days" (

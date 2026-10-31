@@ -81,6 +81,7 @@
 | 行情 | `ohlcv_1m~60m`、`ohlcv_1d/1w/1mo`、`stock_basic_info`、`fund_basic_info`、`trading_days` |
 | 财务 | `fin_report_meta`、`fin_income_statement`、`fin_balance_sheet`、`fin_cash_flow`、`fin_indicator`、`fin_estimate`、`fin_valuation_daily` |
 | 分档 | `moneyflow_daily`、`moneyflow_source` |
+| 情绪 | `margin_detail`、`top_list`、`block_trade` |
 | 概念 | `concept_board_dim`、`concept_board_daily`、`concept_member_snapshot`、`concept_classification`、`concept_board_alias` |
 | 组合 | `portfolios`、`positions`、`trade_records` |
 | 状态 | `acquisition_run`、`scheduled_task_state`（游标） |
@@ -217,7 +218,7 @@ class Scope:
 
 ### 6.3 数据集顺序
 
-`trading_calendar → stock/fund_basic → ohlcv_1d+adj_factor+benchmark → financial → valuation → moneyflow → concept → factors`。
+`trading_calendar → stock/fund_basic → ohlcv_1d+adj_factor+benchmark → financial → valuation → moneyflow → margin_detail/top_list/block_trade → concept → factors`。
 
 ### 6.4 统一入口（修正 backfill 并行命令）
 

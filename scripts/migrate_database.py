@@ -11,7 +11,7 @@
 
     # 3) 迁移后会清空 OHLCV（旧行是前复权价，无法还原成 raw），再重跑同步
     python scripts/migrate_database.py --apply --truncate-ohlc
-    python MCPserver.py   # 或让 Agent 调 scheduled_sync_a_shares 重新拉取
+    python MCPserver.py   # 或让 Agent 调 acquisition_run 重新拉取
 
 安全策略：
 

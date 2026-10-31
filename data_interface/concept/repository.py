@@ -276,7 +276,7 @@ class ConceptRepository:
             placeholders = ",".join(["%s"] * len(batch))
             sql = (
                 'SELECT ts, code, close FROM "ohlcv_1d" '
-                f"WHERE code IN ({placeholders}) AND ts BETWEEN %s AND %s"
+                f"WHERE code IN ({placeholders}) AND ts BETWEEN %s AND %s AND type <> 'idx'"
             )
             params: list[Any] = [
                 *batch,
@@ -307,7 +307,7 @@ class ConceptRepository:
             placeholders = ",".join(["%s"] * len(batch))
             sql = (
                 'SELECT ts, code, float_market_cap FROM "fin_valuation_daily" '
-                f"WHERE code IN ({placeholders}) AND ts BETWEEN %s AND %s"
+                f"WHERE code IN ({placeholders}) AND ts BETWEEN %s AND %s AND type <> 'idx'"
             )
             params: list[Any] = [
                 *batch,

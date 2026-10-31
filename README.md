@@ -659,11 +659,12 @@ FinBridge/
 │   ├── application/                # 用例编排 + ports
 │   ├── infrastructure/             # QuestDB 仓储/补齐/SQL/队列
 │   └── interface/                  # MCP tools / CLI / worker_main
-├── acquisition/                   # 整合同步（Scope/编排/进度/CLI/MCP）
-│   ├── datasets/                   # base + daily/financial/benchmark/screener/moneyflow/concept
-│   ├── service.py                  # AShareSyncService（总调度）
+├── acquisition/                   # 整合同步（唯一入口：Scope/编排/CLI/MCP）
+│   ├── orchestrator.py             # DATASET_ORDER / Orchestrator / Scope
+│   ├── syncers.py                  # 数据集 → data_interface / factor_engine 适配
+│   ├── datasets/                   # daily/financial/benchmark/screener/moneyflow/sentiment/concept
 │   ├── build_orchestrator.py       # screener 构建编排
-│   ├── api.py / legacy_tools.py
+│   ├── api.py                      # MCP acquisition_run / acquisition_status
 │   └── state.py
 ├── position/                       # 组合/持仓/交易
 │   ├── manager.py / schema.py / llm_tool.py
@@ -753,7 +754,7 @@ FinBridge/
 | `concept_member_snapshot` | `ts` | YEAR | `(ts, board_code, stock_code, source)` | 成分快照（PIT） |
 | `concept_classification` | `ts` | YEAR | `(ts, concept_code, source)` | 概念分类树 |
 | `concept_board_alias` | `updated_at` | YEAR | `(updated_at, board_code, source, source_code)` | 跨源板块代码映射 |
-| `concept_boards` / `_ohlc` / `_constituents` | `ts` | YEAR/MONTH | 见 DDL | **legacy**，迁移后停用 |
+| `concept_boards` / `_ohlc` / `_constituents` | — | — | — | **已拆除（2026-10-30 DROP）**，由 `concept_board_*` 取代 |
 | `trading_days` | `ts` | YEAR | `(ts)` | 交易日历 |
 
 ### 8.3 财务表
@@ -797,7 +798,7 @@ FinBridge/
 | `portfolios` | `id` | 组合现金、总资产、浮盈/已实现盈亏 |
 | `positions` | `id` | 当前持仓、成本、市值、止损、模式参数 |
 | `trade_records` | `trade_date` | 买卖/调整流水（软删除） |
-| `scheduled_task_state` | `updated_at` | 日线/财务同步游标、状态、进度、pending |
+| `scheduled_task_state` | `updated_at` | 各数据集同步游标、状态、进度、pending |
 
 ### 8.6 建表与迁移
 
@@ -876,14 +877,7 @@ python scripts/migrate_database.py --apply --truncate-ohlc   # 清空旧前复�
 | `pm_check_signals` / `pm_get_buying_advice` | 加减仓信号 / 建仓建议 |
 | `pm_get_portfolio_status` / `pm_list_modes` | 组合状态、可用模式 |
 
-### 9.6 同步（legacy 兼容）
-
-| 工具 | 用途 |
-|---|---|
-| `scheduled_sync_a_shares` | legacy：分批同步仍可用；新入口请用 `acquisition_run` |
-| `scheduled_task_status` | 查看游标、进度、待补日期 |
-
-### 9.7 分档与概念
+### 9.6 分档与概念
 
 | 工具 | 用途 |
 |---|---|
@@ -896,7 +890,7 @@ python scripts/migrate_database.py --apply --truncate-ohlc   # 清空旧前复�
 | `get_concept_classification` | Tushare 概念分类树（可按键词过滤） |
 | `get_stock_boards` | 个股所属板块（行业/概念/地域，按 `spt` 分类） |
 
-### 9.8 因子库
+### 9.7 因子库
 
 | 工具 | 用途 |
 |---|---|
@@ -906,7 +900,7 @@ python scripts/migrate_database.py --apply --truncate-ohlc   # 清空旧前复�
 
 > 因子**评级/评分**不通过 MCP 暴露，由 `scripts/factor_scorecard.py` 写入 `factor_scorecard` 表，用 SQL 查询（见 [§13](#13-因子研究报告与评分卡)）。
 
-### 9.9 整合同步
+### 9.8 整合同步
 
 | 工具 | 用途 |
 |---|---|
@@ -917,7 +911,7 @@ python scripts/migrate_database.py --apply --truncate-ohlc   # 清空旧前复�
 
 ## 10. 整合同步（acquisition）
 
-统一入口是 `python -m acquisition` / MCP `acquisition_run`、`acquisition_status`。`datasets` 可选 `trading_calendar`、`stock_basic`、`ohlcv_1d`、`benchmark`、`financial`、`valuation`、`moneyflow`、`concept_meta`、`concept_daily`、`concept_member`、`concept_class`、`factors`、`screener`。
+统一入口是 `python -m acquisition` / MCP `acquisition_run`、`acquisition_status`。`datasets` 可选 `trading_calendar`、`stock_basic`、`ohlcv_1d`、`benchmark`、`financial`、`valuation`、`moneyflow`、`margin_detail`、`top_list`、`block_trade`、`concept_meta`、`concept_daily`、`concept_member`、`concept_class`、`factors`、`screener`。
 
 ```bash
 # 一键全部：raw + screener 宽表 + 因子长表
@@ -925,6 +919,9 @@ python -m acquisition run
 
 # 只更新部分数据集
 python -m acquisition run --datasets ohlcv_1d,factors,screener
+
+# 两融 / 龙虎榜 / 大宗
+python -m acquisition run --datasets margin_detail,top_list,block_trade
 
 # 单代码 + 日期段
 python -m acquisition update --code 600519 --start 2024-01-01 --end 2026-10-27
@@ -939,7 +936,7 @@ python -m acquisition update --code 600519 --start 2026-10-01 --end 2026-10-27 -
 python -m acquisition status
 ```
 
-> `--loop`：分批数据集（日线/分档/估值/财务/概念日线/成分）自动续跑，直到 `done`、`--max-rounds` 或 `--timeout`。
+> `--loop`：分批数据集（日线/财务/估值/分档/两融/龙虎榜/大宗/概念日线/成分）自动续跑，直到 `done`、`--max-rounds` 或 `--timeout`。
 > `--no-financial`：显式排除季度财务；`--force-financial`：即使会重置也运行。
 > `run` 默认先检查 `financial` 游标：若本次 `--start` 会改变 `start_year`（触发重置），会自动跳过并告警；日常补数据建议直接加 `--no-financial`。
 
@@ -947,14 +944,14 @@ python -m acquisition status
 - **财务**：按股票池分批，逐只增量拉三大报表、重算指标；
 - **估值**：按交易日调 Tushare `daily_basic`（一次全市场）+ 批量报表 PIT，写 `fin_valuation_daily`，产出 `valuation.*` 因子；
 - **分档**：按交易日调 Tushare `moneyflow`（一次全市场），金额万元→元、量手→股；
+- **两融 / 龙虎榜 / 大宗**：按交易日调 Tushare `margin_detail` / `top_list` / `block_trade`（各一次全市场），写 `margin_detail` / `top_list` / `block_trade`；首次接入从库内最新日期续跑，历史回补仍用 `scripts/backfill_history.py --phase p2-structure`；
 - **因子长表**：`factors` 数据集调用 `FactorEngineService`，写 `factor_value_daily` / `factor_value_latest`；
 - **Screener 宽表**：`screener` 数据集调用 `BuildOrchestrator`，写 `factor_daily_wide`（在 factors 之后）；
 - **板块列表/日线**：同花顺（AkShare）一次拿 375 个板块，日线按板块增量；
 - **成分**：东方财富优先，失败回退同花顺网页抓取；每次全量写同一快照日；
 - **概念分类**：Tushare `concept`，注意该接口限 1 次/小时；
-- **空数据日**：未收盘导致的“无数据”记入 `pending` 下次补；
-- 游标保存在 `scheduled_task_state`（表名保留兼容），Agent 重启后可继续；
-- 旧的 `scheduled_sync_a_shares` / `scheduled_task_status` 仍可用，但已标记 legacy。
+- **空数据日**：未收盘导致的“无数据”记入 `pending` 下次补；情绪类只对最近 3 天重试，避免历史空日永久挂起；
+- 游标保存在 `scheduled_task_state`（表名保留兼容），Agent 重启后可继续。
 
 ### 10.1 历史回补脚本
 
@@ -1149,7 +1146,7 @@ RUN_LIVE_TESTS=1 python -m pytest # 额外跑真实数据源/QuestDB 用例
 | **时间** | 信号是否持续（IC 均值 / NW-t）、是否跨周期稳定（分年 / 分市场状态）、衰减多快 | §02 |
 | **空间** | 分层是否单调、多空有无经济意义、在市值/行业子样本中是否成立 | §03 |
 
-评价口径固定为**可执行口径**：T 日收盘出信号、T+1 开盘买入、双边 20bp、非重叠调仓。
+评价口径固定为**可执行口径**：T 日收盘出信号、T+1 开盘买入、单腿往返 20bp（多空合计 40bp）、非重叠调仓。
 
 ### 13.2 单因子报告
 
@@ -1164,41 +1161,50 @@ output/factor_reports/<factor_id>.html    # 内联 SVG，A4 打印样式
 output/factor_reports/<factor_id>.json    # 评级与关键指标
 ```
 
-报告结构：摘要（评级徽章 + 4 个 KPI）→ 01 概览 → 02 时间维度（3 图 1 表）→ 03 空间维度
-（2 图 2 表 + 可成交性检验）→ 04 评级（四象限 + 评分条 + 否决）→ 05 附录。
+报告结构：摘要（评级徽章 + 4 个 KPI + 方向/局部评级横幅）→ 01 因子定义与样本（公式/单位/
+变换/PIT、样本池构造、选样漏斗、幸存者偏差）→ 02 时间维度（IC 时序、分年、衰减、分市场状态 CI、
+前后半段一致性）→ 03 空间维度（毛/净分层、净值/回撤/分年、中性化 IC、增量性、买入/卖出端、
+成本与容量）→ 04 评级（规则表 + 四象限 + 评分条 + 否决对账 + 结构化断言 + 重估条件）→
+05 附录（两类 t 值、方法、局限）。
 
 ### 13.3 评分卡（100 分制）
 
 | 分项 | 分值 | 计算 |
 |---|---|---|
-| 预测力 | 30 | IC 幅度 15 + ICIR 15 |
-| 时间稳定性 | 25 | 分年 IC 同号比例、分年 IC 离散度 |
-| 空间单调性 | 15 | 分组每期收益均值的 Spearman ρ（**有符号**） |
-| 可交易性 | 15 | 覆盖率、换手率、多空夏普 |
-| 增量性 | 15 | 与同类因子相关性（当前为占位 8 分） |
+| 预测力与稳定性 | 45 | 预测力 30 = `30×(0.6×min(1,IC/0.05)+0.4×min(1,ICIR/0.5))`（负值记 0）；稳定性 25 = 分年 CI 显著率 40% + 分状态 30% + 滚动 12m 同号率 30%；两项合维后 ×45/55 |
+| 空间单调性 | 15 | 分组**毛收益**每期均值的 Spearman ρ（有符号；IC<0 记 0） |
+| 可交易性 | 20 | 覆盖率 6 + 换手 6 + 净价差 t 8 |
+| 增量性 | 20 | 同类最高相关 + 剔除同类后的残差 IC（残差为负或相关≥0.95 记 0） |
 
 **一票否决**（任一触发即封顶 C）：
 
 | 规则 | 阈值 |
 |---|---|
-| 预测力不足 | `|IC| < 0.02` |
+| 证据不足 | `|IC| < 0.015`（财务 <0.010），或显著年份不足（>=5 年窗口要 3 年，<5 年要 2 年），或方向不一致 |
+| 方向与先验相反 | `IC < −0.010` 且独立 t `< −2`；**不自动翻转** |
 | 覆盖率不足 | `< 70%` |
-| 跨年不稳定 | 分年同号比例 `< 60%` |
 | 分层反向 | 单调性 ρ `< 0` |
-| 不可交易 | 多空价差 `< 单期成本 0.20%` |
-| 换手过高 | `> 80%` |
+| 不可交易 | 毛价差 95% 上界 `<` 单期成本 → 触发；下界 `>` 成本 → 通过；否则边界 |
+| 换手过高 | **每期**换手 `> 80%`（报告同时给年化换手 `×242/5`） |
 
 评级映射：A ≥ 85 / B ≥ 70 / C ≥ 55 / D < 55。四象限按「时间得分 × 空间得分」划分：
 **核心区**（双高）、**过滤因子**（时间高/空间低）、**择时因子**（时间低/空间高）、**淘汰区**。
+D 级必须给出失效归因：`无信号(IC→0)` / `方向错` / `复现失败` / `数据不足` / `传导断裂`。
 
 ### 13.4 全量跑批与评分卡入库
 
 ```bash
 # 价量因子（85 个，INLINE 现算）
-python scripts/factor_scorecard.py --source price --pool 200 --start 2019-01-01 --render
+python scripts/factor_scorecard.py --source price --pool 200 --start 2019-01-01 --full --render
 
 # 财务因子（61 个，读物化表，先跑 backfill_factors）
-python scripts/factor_scorecard.py --source financial --pool 200 --start 2024-01-01 --render
+python scripts/factor_scorecard.py --source financial --pool 200 --start 2019-01-01 --full --render
+
+# 全库审计：断言违规 + D 级归因 + 20 份家族报告
+python scripts/factor_audit.py --dir output/factor_reports
+
+# 相关矩阵 / 家族聚类（只保留代表，不再 20d、21d 各算一个）
+python scripts/factor_corr.py --source price
 
 # 方向校准（默认只报告，--apply 才写 registry）
 python scripts/calibrate_directions.py --min-abs-ic 0.02
@@ -1221,10 +1227,24 @@ select * from factor_scorecard latest on ts partition by factor_id order by scor
 
 ### 13.5 注意事项
 
-- **单调性用每期收益均值**，不能用复利净值——波动拖累会伪造单调性（曾导致 Q2 看起来比 Q5 好 39pp）；
-- **方向自适应会翻转因子**：设计方向 IC 为负时自动翻，并在 `warnings` 标注；经济逻辑不支持反向时应判无效；
+- **重叠样本看 NW-t，保守判断看独立 t**：报告同时给出 Newey-West t（lag=h−1）与每 h 日取一个观测的独立样本 t；
+- **中性化**：逐日横截面回归剔除 log 流通市值与行业哑变量后的残差 IC，原始/市值/行业/双中性并列；
+- **增量性实测**：与同类别因子及规模风格做截面相关，再把本因子对全部对照因子回归取残差 IC；
+  残差 IC 保留比例低说明大部分信息是已知风格暴露；
+- **可交易性拆成买入端/卖出端**：买入端按 T+1 开盘涨停/停牌统计，卖出端按 T+h 收盘跌停/停牌顺延；
+  分母/分子逐项列清，旧口径（全部面板单元）与新口径（有信号且有下一日）并列对账；
+- **成本按换手率扣除**：`cost = turnover × 单腿往返费率`，不是每次调仓无条件扣 20bp；多空另计两条腿成本（合计 40bp）；
+- **时间口径统一北京时间**：报告记录生成时间（UTC+8）、行情截止日、末日覆盖与数据滞后；末日覆盖不足
+  前一日 80% 时整日回退，避免用未收盘/未入库 K 线；
+- **单调性用每期收益均值**，且用**毛收益**——波动拖累与各组换手差异都会伪造单调性；
+- **方向不翻转**：`sig = raw × direction`，方向事先给定；IC 为负记「方向错」并给 D 级归因。
+  旧版在同一样本内按 IC 符号翻，会把随机因子的 IC 系统性抬成正数（4/4 强因子 IC>0 即由此而来）；
+- **价差断言只在可证边界硬失败**：n=5 时 ρ≥0.8 才必然 Q5>Q1；0<ρ<0.8 可以 Q5<Q1（非单调排列），只报警；
+  IC→价差传调用 `IC×σ_5d×2.80` 对照，避免把「IC 显著但价差为负」当正常；
+- **不可交易用区间**：毛价差 95% 上界<成本→触发，下界>成本→通过，否则边界；不再有 0.58pp 死区；
 - **可成交过滤**默认关闭，`exclude_limit_up=True` 会剔除 T+1 开盘一字涨停/停牌样本；
-- **财务因子样本少**（100+ 只 × 2 年），D 级不等于因子坏，先看覆盖率与样本期；
+- **财务因子样本少**（覆盖度选样、2019 起约 70–117 只），D 级不等于因子坏，先看覆盖率与样本期；
+  PIT 为 `as_of=available_at` + `lag`，重述未逐期回溯，结论按「上限」读；
 - IC 计算已**向量化**（整表 `rank(axis=1)` + 逐行 Pearson），比逐日循环快 35 倍，数值差 1e-16。
 
 ---
