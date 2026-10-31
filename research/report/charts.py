@@ -187,34 +187,162 @@ def bar_chart(
     formatter=lambda v: f"{v:.2f}",
     caption: str | None = None,
     value_labels: bool = True,
+    errors: Sequence[float] | None = None,
+    y_ticks: int = 5,
+    y_label: str | None = None,
 ) -> str:
-    left, right, top, bottom = 56, 24, 30, 42
+    """柱状图：带 y 轴刻度、零线、可选误差棒。"""
+    left, right, top, bottom = 64, 24, 30, 46
     plot_w, plot_h = width - left - right, height - top - bottom
-    vmax = max([abs(v) for v in values] + [1e-9]) * 1.15
-    zero = top + plot_h / 2
+    values = [0.0 if v != v else float(v) for v in values]
+    errs = [0.0 if (e is None or e != e) else abs(float(e)) for e in (errors or [0.0] * len(values))]
+    lows = [v - e for v, e in zip(values, errs)]
+    highs = [v + e for v, e in zip(values, errs)]
+    y_lo = min(min(lows), 0.0)
+    y_hi = max(max(highs), 0.0)
+    pad = (y_hi - y_lo) * 0.12 or (abs(y_hi) * 0.2 + 1e-6)
+    y_lo, y_hi = y_lo - pad, y_hi + pad
+
+    def py(v: float) -> float:
+        return top + plot_h - (v - y_lo) / ((y_hi - y_lo) or 1) * plot_h
+
     step = plot_w / max(1, len(values))
-    bar_w = step * 0.58
+    bar_w = step * 0.56
 
     parts = [f'<svg viewBox="0 0 {width} {height}" width="100%" '
              f'preserveAspectRatio="xMidYMid meet" role="img">']
     parts.append(f'<rect width="{width}" height="{height}" fill="{WHITE}"/>')
-    parts.append(f'<line x1="{left}" y1="{zero}" x2="{left + plot_w}" y2="{zero}" '
-                 f'stroke="{SLATE}" stroke-width="1" opacity="0.55"/>')
-    for i, (label, value) in enumerate(zip(labels, values)):
+
+    # y 网格与刻度
+    for i in range(y_ticks + 1):
+        value = y_lo + (y_hi - y_lo) * i / y_ticks
+        y = py(value)
+        parts.append(f'<line x1="{left}" y1="{y:.1f}" x2="{left + plot_w}" y2="{y:.1f}" '
+                     f'stroke="{GRID}" stroke-width="1"/>')
+        parts.append(f'<text x="{left - 10}" y="{y + 4:.1f}" text-anchor="end" '
+                     f'font-size="10.5" fill="{MUTED}">{_esc(formatter(value))}</text>')
+
+    zero = py(0)
+    parts.append(f'<line x1="{left}" y1="{zero:.1f}" x2="{left + plot_w}" y2="{zero:.1f}" '
+                 f'stroke="{SLATE}" stroke-width="1" opacity="0.7"/>')
+    if y_label:
+        parts.append(f'<text x="14" y="{top + plot_h / 2}" text-anchor="middle" font-size="10.5" '
+                     f'fill="{MUTED}" transform="rotate(-90 14 {top + plot_h / 2})">{_esc(y_label)}</text>')
+
+    for i, (label, value, err) in enumerate(zip(labels, values, errs)):
         x = left + step * i + (step - bar_w) / 2
-        h = abs(value) / vmax * (plot_h / 2)
-        y = zero - h if value >= 0 else zero
+        yv = py(value)
+        y = min(zero, yv)
+        h = abs(yv - zero)
         color = color_pos if value >= 0 else color_neg
         parts.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{bar_w:.1f}" height="{h:.1f}" '
                      f'fill="{color}" opacity="0.85" rx="2"/>')
-        parts.append(f'<text x="{x + bar_w / 2:.1f}" y="{top + plot_h + 16:.1f}" text-anchor="middle" '
-                     f'font-size="11" fill="{MUTED}">{_esc(label)}</text>')
+        if err:
+            cx = x + bar_w / 2
+            y1, y2 = py(value + err), py(value - err)
+            parts.append(f'<line x1="{cx:.1f}" y1="{y1:.1f}" x2="{cx:.1f}" y2="{y2:.1f}" '
+                         f'stroke="{INK}" stroke-width="1.3"/>')
+            cap = bar_w * 0.28
+            parts.append(f'<line x1="{cx - cap:.1f}" y1="{y1:.1f}" x2="{cx + cap:.1f}" y2="{y1:.1f}" '
+                         f'stroke="{INK}" stroke-width="1.3"/>')
+            parts.append(f'<line x1="{cx - cap:.1f}" y1="{y2:.1f}" x2="{cx + cap:.1f}" y2="{y2:.1f}" '
+                         f'stroke="{INK}" stroke-width="1.3"/>')
+        parts.append(f'<text x="{x + bar_w / 2:.1f}" y="{top + plot_h + 18:.1f}" text-anchor="middle" '
+                     f'font-size="10.5" fill="{MUTED}">{_esc(label)}</text>')
         if value_labels:
-            ty = y - 6 if value >= 0 else y + h + 14
+            ty = min(py(value + err) - 6, top + 8)
+            if value < 0:
+                ty = max(py(value - err) + 13, top + plot_h - 2)
             parts.append(f'<text x="{x + bar_w / 2:.1f}" y="{ty:.1f}" text-anchor="middle" '
                          f'font-size="10.5" fill="{color}">{_esc(formatter(value))}</text>')
     if caption:
-        parts.append(f'<text x="{left}" y="{height - 6}" font-size="10.5" fill="{FAINT}">'
+        parts.append(f'<text x="{left}" y="{height - 8}" font-size="10.5" fill="{FAINT}">'
+                     f'{_esc(caption)}</text>')
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def nav_chart(
+    nav: Sequence[tuple[str, Sequence[float], str]],
+    drawdown: Sequence[float],
+    x_labels: Sequence[str],
+    *,
+    width: float = 980,
+    height: float = 420,
+    caption: str | None = None,
+) -> str:
+    """上：净值曲线（可多条）；下：回撤面积。"""
+    left, right, top, gap, bottom = 64, 24, 26, 46, 30
+    plot_w = width - left - right
+    nav_h = (height - top - gap - bottom) * 0.66
+    dd_top = top + nav_h + gap
+    dd_h = height - dd_top - bottom
+
+    all_values = [v for _, values, _ in nav for v in values if v == v]
+    if not all_values:
+        return f'<svg width="{width}" height="{height}"></svg>'
+    y_lo, y_hi = min(all_values), max(all_values)
+    pad = (y_hi - y_lo) * 0.08 or 0.05
+    y_lo, y_hi = y_lo - pad, y_hi + pad
+
+    def py(v: float) -> float:
+        return top + nav_h - (v - y_lo) / ((y_hi - y_lo) or 1) * nav_h
+
+    dd_lo = min(min(drawdown), -0.01) if drawdown is not None and len(drawdown) else -0.01
+    def pdd(v: float) -> float:
+        return dd_top + dd_h - (v - dd_lo) / ((0 - dd_lo) or 1) * dd_h
+
+    parts = [f'<svg viewBox="0 0 {width} {height}" width="100%" '
+             f'preserveAspectRatio="xMidYMid meet" role="img">']
+    parts.append(f'<rect width="{width}" height="{height}" fill="{WHITE}"/>')
+
+    for i in range(4):
+        value = y_lo + (y_hi - y_lo) * i / 3
+        y = py(value)
+        parts.append(f'<line x1="{left}" y1="{y:.1f}" x2="{left + plot_w}" y2="{y:.1f}" '
+                     f'stroke="{GRID}" stroke-width="1"/>')
+        parts.append(f'<text x="{left - 9}" y="{y + 4:.1f}" text-anchor="end" font-size="10" '
+                     f'fill="{MUTED}">{value:.2f}</text>')
+
+    n = max(len(values) for _, values, _ in nav)
+    for name, values, color in nav:
+        pts = []
+        for i, v in enumerate(values):
+            if v == v:
+                pts.append((left + plot_w * i / max(1, n - 1), py(v)))
+        if len(pts) < 2:
+            continue
+        d = "M " + " L ".join(f"{x:.1f},{y:.1f}" for x, y in pts)
+        parts.append(f'<path d="{d}" fill="none" stroke="{color}" stroke-width="1.8" '
+                     f'stroke-linejoin="round" stroke-linecap="round"/>')
+        lx, ly = pts[-1]
+        parts.append(f'<text x="{lx + 5:.1f}" y="{ly - 5:.1f}" font-size="10" '
+                     f'fill="{color}">{_esc(name)}</text>')
+
+    # 回撤面板
+    if drawdown is not None and len(drawdown):
+        base = dd_top
+        pts = [(left + plot_w * i / max(1, len(drawdown) - 1), pdd(v)) for i, v in enumerate(drawdown)]
+        area = f"M {pts[0][0]:.1f},{base:.1f} L " + " L ".join(f"{x:.1f},{y:.1f}" for x, y in pts) + f" L {pts[-1][0]:.1f},{base:.1f} Z"
+        parts.append(f'<path d="{area}" fill="{BURGUNDY}" opacity="0.16"/>')
+        d = "M " + " L ".join(f"{x:.1f},{y:.1f}" for x, y in pts)
+        parts.append(f'<path d="{d}" fill="none" stroke="{BURGUNDY}" stroke-width="1.2"/>')
+        parts.append(f'<line x1="{left}" y1="{dd_top}" x2="{left + plot_w}" y2="{dd_top}" '
+                     f'stroke="{RULE}" stroke-width="1"/>')
+        parts.append(f'<text x="{left - 9}" y="{dd_top + 10:.1f}" text-anchor="end" '
+                     f'font-size="10" fill="{MUTED}">0%</text>')
+        parts.append(f'<text x="{left - 9}" y="{dd_top + dd_h - 2:.1f}" text-anchor="end" '
+                     f'font-size="10" fill="{MUTED}">{dd_lo:.0%}</text>')
+        parts.append(f'<text x="{left + 4}" y="{dd_top + 12}" font-size="9.5" fill="{MUTED}">回撤</text>')
+
+    if x_labels:
+        for i, label in enumerate(x_labels):
+            x = left + plot_w * i / max(1, len(x_labels) - 1)
+            anchor = "start" if i == 0 else ("end" if i == len(x_labels) - 1 else "middle")
+            parts.append(f'<text x="{x:.1f}" y="{height - 8:.1f}" text-anchor="{anchor}" '
+                         f'font-size="10" fill="{MUTED}">{_esc(label)}</text>')
+    if caption:
+        parts.append(f'<text x="{left}" y="{dd_top - 6}" font-size="10" fill="{FAINT}">'
                      f'{_esc(caption)}</text>')
     parts.append("</svg>")
     return "".join(parts)
@@ -301,7 +429,7 @@ def score_bars(
         parts.append(f'<rect x="{label_w}" y="{y}" width="{plot_w * ratio:.1f}" height="{bar_h}" '
                      f'fill="{color}" opacity="0.85" rx="3"/>')
         parts.append(f'<text x="{label_w + plot_w + 10}" y="{y + bar_h / 2 + 4}" '
-                     f'font-size="11.5" fill="{MUTED}">{score:.0f}/{full:.0f}</text>')
+                     f'font-size="11.5" fill="{MUTED}">{score:.1f}/{full:.0f}</text>')
     if caption:
         parts.append(f'<text x="0" y="{height - 4}" font-size="10.5" fill="{FAINT}">'
                      f'{_esc(caption)}</text>')
@@ -317,28 +445,54 @@ def quadrant(
     y_label: str = "空间区分度",
     width: float = 420,
     height: float = 420,
+    threshold_x: float = 60.0,
+    threshold_y: float = 60.0,
     caption: str | None = None,
-    labels: Sequence[tuple[float, float, str]] = (),
 ) -> str:
+    """二维象限图。中线画在实际阈值（默认 60），而不是几何中心 50。
+
+    右上=核心型（双高）、左上=择时型（时间低/空间高）、
+    右下=过滤型（时间高/空间低）、左下=淘汰（双低）。
+    """
     pad = 52
     plot_w, plot_h = width - pad * 2, height - pad * 2
+    tx = pad + plot_w * max(0.0, min(100.0, threshold_x)) / 100
+    ty = pad + plot_h * (1 - max(0.0, min(100.0, threshold_y)) / 100)
+
     parts = [f'<svg viewBox="0 0 {width} {height}" width="100%" '
              f'preserveAspectRatio="xMidYMid meet" role="img">']
     parts.append(f'<rect width="{width}" height="{height}" fill="{WHITE}"/>')
     parts.append(f'<rect x="{pad}" y="{pad}" width="{plot_w}" height="{plot_h}" '
                  f'fill="#fafbfc" stroke="{RULE}"/>')
-    parts.append(f'<line x1="{pad + plot_w / 2}" y1="{pad}" x2="{pad + plot_w / 2}" '
-                 f'y2="{pad + plot_h}" stroke="{RULE}"/>')
-    parts.append(f'<line x1="{pad}" y1="{pad + plot_h / 2}" x2="{pad + plot_w}" '
-                 f'y2="{pad + plot_h / 2}" stroke="{RULE}"/>')
-    for lx, ly, text in labels:
-        parts.append(f'<text x="{lx:.1f}" y="{ly:.1f}" font-size="9.5" fill="{FAINT}" '
+    # 阈值线（实际 60 分，不是 50）
+    parts.append(f'<line x1="{tx:.1f}" y1="{pad}" x2="{tx:.1f}" '
+                 f'y2="{pad + plot_h}" stroke="{SLATE}" stroke-dasharray="4 3" opacity="0.55"/>')
+    parts.append(f'<line x1="{pad}" y1="{ty:.1f}" x2="{pad + plot_w}" '
+                 f'y2="{ty:.1f}" stroke="{SLATE}" stroke-dasharray="4 3" opacity="0.55"/>')
+    parts.append(f'<text x="{tx:.1f}" y="{pad + plot_h + 14}" text-anchor="middle" '
+                 f'font-size="9" fill="{FAINT}">{threshold_x:.0f}</text>')
+    parts.append(f'<text x="{pad - 6}" y="{ty + 3:.1f}" text-anchor="end" '
+                 f'font-size="9" fill="{FAINT}">{threshold_y:.0f}</text>')
+
+    # 四个区域标签（按实际阈值定位中心）
+    regions = [
+        ((threshold_x + 100) / 2, (threshold_y + 100) / 2, "核心型"),
+        ((threshold_x + 0) / 2, (threshold_y + 100) / 2, "过滤型"),
+        ((threshold_x + 0) / 2, (threshold_y + 0) / 2, "淘汰"),
+        ((threshold_x + 100) / 2, (threshold_y + 0) / 2, "择时型"),
+    ]
+    for rx, ry, text in regions:
+        px_ = pad + plot_w * rx / 100
+        py_ = pad + plot_h * (1 - ry / 100)
+        parts.append(f'<text x="{px_:.1f}" y="{py_:.1f}" font-size="10" fill="{FAINT}" '
                      f'text-anchor="middle">{_esc(text)}</text>')
+
     cx = pad + plot_w * min(1, max(0, x / 100))
     cy = pad + plot_h * (1 - min(1, max(0, y / 100)))
     parts.append(f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="9" fill="{BURGUNDY}" opacity="0.18"/>')
     parts.append(f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="5" fill="{BURGUNDY}"/>')
-    parts.append(f'<text x="{cx + 12:.1f}" y="{cy - 8:.1f}" font-size="11" fill="{INK}">本因子</text>')
+    parts.append(f'<text x="{cx:.1f}" y="{cy - 14:.1f}" font-size="10.5" fill="{INK}" '
+                 f'text-anchor="middle">本因子（{x:.0f}, {y:.0f}）</text>')
     parts.append(f'<text x="{pad + plot_w / 2}" y="{height - 12}" text-anchor="middle" '
                  f'font-size="11" fill="{MUTED}">{_esc(x_label)} →</text>')
     parts.append(f'<text x="14" y="{pad + plot_h / 2}" text-anchor="middle" font-size="11" '

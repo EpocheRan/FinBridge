@@ -103,7 +103,7 @@ def save(report, *, run_id: str, category: str = "", horizon: int = 5, score: di
     mono = float(report.monotonicity) if report.monotonicity == report.monotonicity else float("nan")
     turnover = float(report.turnover) if report.turnover == report.turnover else float("nan")
     calibrated = 1 if ic_mean >= 0 else -1
-    vetoes = " | ".join(report.vetoes) if getattr(report, "vetoes", None) else ""
+    vetoes = " | ".join(rating.get("vetoes", []))
     stamp = pd_timestamp(now_cn())
     values = ", ".join(
         [

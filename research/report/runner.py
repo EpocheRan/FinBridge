@@ -3,8 +3,9 @@
 设计约束
 --------
 - **不引入绘图第三方库**：图全部是内联 SVG，保证打印/PDF 无损；
-- **口径固定**：T+1 开盘买入、双边 20bp、逐日截面统计；
-- **可复现**：``run_id`` 记录数据版本与参数，重跑结果一致。
+- **口径固定**：T+1 开盘买入、双边费率、逐日截面统计；
+- **可复现**：``run_id`` 记录数据版本与参数，重跑结果一致；
+- **时间可核验**：生成时间统一北京时间，并单列行情截止日与滞后天数。
 """
 
 from __future__ import annotations
@@ -12,36 +13,24 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import requests
 
-from data_interface.common.config import get_config, resolve_questdb_host
 from data_interface.common.timeutil import now_cn
 
-from . import metrics, rating as rating_mod, render
+from . import definitions, diagnostics as diag, metrics, rating as rating_mod, render
+from .db import query as _query  # noqa: F401 - 兼容旧调用点
+from .panel import Panel, financial_factor_panel, load_panel, peer_panels, price_factor_panel
 
 logger = logging.getLogger("Research.Report")
-
-_cfg = get_config()
-BASE = f"http://{resolve_questdb_host(_cfg)}:{_cfg['questdb'].get('rest_port', 9000)}"
-
-
-def _query(sql: str, timeout: int = 300) -> pd.DataFrame:
-    resp = requests.get(f"{BASE}/exec", params={"query": sql}, timeout=timeout)
-    payload = resp.json()
-    if "error" in payload:
-        raise RuntimeError(payload["error"])
-    return pd.DataFrame(payload["dataset"], columns=[c["name"] for c in payload["columns"]])
 
 
 # ---------------------------------------------------------------- 因子库（内联计算）
 def compute_factor(factor_id: str, close: pd.DataFrame) -> pd.DataFrame:
-    """支持 ``momN`` / ``momentum.ret@N`` / ``reversal.short@N`` / ``volatility.Nd``。"""
+    """旧版简化因子计算（momN / momentum.ret@N / volatility.Nd），保留兼容。"""
     key = str(factor_id).strip()
     rets = close.pct_change(fill_method=None)
 
@@ -60,79 +49,64 @@ def compute_factor(factor_id: str, close: pd.DataFrame) -> pd.DataFrame:
     raise ValueError(f"未知因子: {factor_id}")
 
 
-# ---------------------------------------------------------------- 面板装载
-@dataclass
-class Panel:
-    close: pd.DataFrame
-    open: pd.DataFrame
-    market_cap: pd.DataFrame | None
-    industry: pd.DataFrame | None
-    regime: pd.Series | None
-    symbols: list[str]
+def _resolve_panel(factor_id: str, pool_date: str, pool_size: int, start: str, end: str | None) -> tuple[Panel, pd.DataFrame]:
+    panel = load_panel(pool_date, pool_size, start, end)
+    category = factor_id.split(".", 1)[0]
+    if category in ("quality", "value"):
+        frame = financial_factor_panel(factor_id, panel.close, str(panel.close.index.min().date()), str(panel.data_cutoff.date()))
+        if frame.empty:
+            raise RuntimeError(f"{factor_id} 无物化数据（先跑 backfill_factors.py）")
+        return panel, frame
+    return panel, price_factor_panel(factor_id, panel)
 
 
-def load_panel(pool_date: str, pool_size: int, start: str, end: str, *, min_amount: float | None = None, max_amount: float | None = None) -> Panel:
-    amount_filter = ""
-    if min_amount is not None:
-        amount_filter += f" and amount >= {min_amount}"
-    if max_amount is not None:
-        amount_filter += f" and amount <= {max_amount}"
-    pool = _query(
-        f"""select code from ohlcv_1d where ts='{pool_date}' and market='MLCN'{amount_filter}
-            order by amount desc limit {int(pool_size * 1.6)}"""
-    )
-    codes = [str(c) for c in pool["code"] if str(c)[:2] in ("60", "00", "30", "68")][:pool_size]
-    inlist = ",".join(f"'{c}'" for c in codes)
-
-    frame = _query(
-        f"""select ts, code, open, close from ohlcv_1d
-            where market='MLCN' and code in ({inlist}) and ts between '{start}' and '{end}'"""
-    )
-    frame["ts"] = pd.to_datetime(frame["ts"]).dt.tz_localize(None)
-    frame["open"] = pd.to_numeric(frame["open"], errors="coerce")
-    frame["close"] = pd.to_numeric(frame["close"], errors="coerce")
-    close = frame.pivot_table(index="ts", columns="code", values="close").sort_index()
-    open_ = frame.pivot_table(index="ts", columns="code", values="open").sort_index()
-
-    cap = _query(
-        f"""select ts, code, float_market_cap from fin_valuation_daily
-            where code in ({inlist}) and ts between '{start}' and '{end}'"""
-    )
-    market_cap = None
-    if not cap.empty:
-        cap["ts"] = pd.to_datetime(cap["ts"]).dt.tz_localize(None)
-        cap["float_market_cap"] = pd.to_numeric(cap["float_market_cap"], errors="coerce")
-        market_cap = cap.pivot_table(index="ts", columns="code", values="float_market_cap")
-
-    industry = None
-    board = _query(
-        f"""select code, board_name, is_primary from map_stock_board
-            where code in ({inlist}) and ts=(select max(ts) from map_stock_board)"""
-    )
-    if not board.empty:
-        board = board.sort_values(["code", "is_primary"], ascending=[True, False])
-        mapping = board.drop_duplicates("code").set_index("code")["board_name"]
-        cols = list(close.columns)
-        industry = pd.DataFrame(
-            [[mapping.get(c, "未知") for c in cols]] * len(close.index),
-            index=close.index, columns=cols,
-        )
-
-    regime = None
-    idx = _query("select ts, close from ohlcv_1d where code='000852' and market='IDX' order by ts")
-    if not idx.empty:
-        idx["ts"] = pd.to_datetime(idx["ts"]).dt.tz_localize(None)
-        idx["close"] = pd.to_numeric(idx["close"])
-        idx["mom20"] = idx["close"] / idx["close"].shift(20) - 1
-        idx["ma20"] = idx["close"].rolling(20).mean()
-        idx["regime"] = np.where(
-            (idx["mom20"] > 0) & (idx["close"] > idx["ma20"]), "bull",
-            np.where((idx["mom20"] < -0.03) & (idx["close"] < idx["ma20"]), "bear", "neutral"),
-        )
-        regime = idx.set_index("ts")["regime"].reindex(close.index).ffill()
-
-    return Panel(close=close, open=open_, market_cap=market_cap, industry=industry,
-                 regime=regime, symbols=list(close.columns))
+def _pool_robustness(
+    factor_id: str,
+    *,
+    pool_size: int,
+    pool_dates: tuple[tuple[str, str], ...],
+    start: str,
+    end: str | None,
+    direction: int,
+    baseline,
+) -> pd.DataFrame:
+    """换基准日/起点重构样本池，检验 IC/价差是否还是同一个答案。"""
+    rows = [
+        {
+            "pool_date": baseline.universe,
+            "start": str(baseline.start.date()),
+            "n": baseline.n_symbols,
+            "ic": float(baseline.ic[5].mean()) if 5 in baseline.ic else np.nan,
+            "t_indep": float(baseline.ic_stats.loc[5, "t_indep"]) if 5 in baseline.ic_stats.index else np.nan,
+            "spread": float(baseline.quantile_returns.get("Q5", np.nan) - baseline.quantile_returns.get("Q1", np.nan)),
+            "mono": baseline.monotonicity,
+        }
+    ]
+    for pool_date, start_date in pool_dates:
+        try:
+            panel = load_panel(pool_date, pool_size, max(start, start_date), end)
+            factor = price_factor_panel(factor_id, panel)
+            report = metrics.build_report(
+                factor, panel.close, panel.open,
+                factor_id=factor_id, category=factor_id.split(".", 1)[0],
+                direction=direction, regime=panel.regime,
+                market_cap=panel.market_cap, industry=panel.industry,
+                full=False,
+            )
+            rows.append(
+                {
+                    "pool_date": f"点位池 {pool_size}（{pool_date} 成交额）",
+                    "start": str(report.start.date()),
+                    "n": report.n_symbols,
+                    "ic": float(report.ic[5].mean()) if 5 in report.ic else np.nan,
+                    "t_indep": float(report.ic_stats.loc[5, "t_indep"]) if 5 in report.ic_stats.index else np.nan,
+                    "spread": float(report.quantile_returns.get("Q5", np.nan) - report.quantile_returns.get("Q1", np.nan)),
+                    "mono": report.monotonicity,
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("样本池稳健性 %s 失败：%s", pool_date, exc)
+    return pd.DataFrame(rows)
 
 
 # ---------------------------------------------------------------- 生成报告
@@ -140,33 +114,83 @@ def generate(
     factor_id: str,
     *,
     pool_date: str = "2017-11-01",
-    pool_size: int = 700,
-    start: str = "2018-01-01",
+    pool_size: int = 200,
+    start: str = "2019-01-01",
     end: str | None = None,
-    universe: str = "点位池 700（2017-11 成交额）",
-    category: str = "momentum",
-    direction: int = 1,
-    out_dir: str | Path = "output/reports",
+    universe: str | None = None,
+    category: str | None = None,
+    direction: int | None = None,
+    out_dir: str | Path = "output/factor_reports",
+    with_peers: bool = True,
+    robustness: bool = True,
+    run_id: str | None = None,
+    verify_repro: bool = True,
 ) -> dict:
-    end = end or now_cn().date().isoformat()
-    panel = load_panel(pool_date, pool_size, start, end)
-    factor = compute_factor(factor_id, panel.close)
+    panel, factor = _resolve_panel(factor_id, pool_date, pool_size, start, end)
+    definition = definitions.describe(factor_id)
+    if direction is None:
+        direction = definition.direction
+    peers = peer_panels(factor_id, panel) if with_peers else None
 
     report = metrics.build_report(
         factor, panel.close, panel.open,
-        factor_id=factor_id, category=category, direction=direction,
-        universe=universe,
-        regime=panel.regime, market_cap=panel.market_cap, industry=panel.industry,
+        factor_id=factor_id, category=category or definition.category,
+        direction=direction,
+        direction_source=definition.direction_source if direction == definition.direction else "manual",
+        universe=universe or f"点位池 {pool_size}（{pool_date} 成交额）",
+        regime=panel.regime, regime_alt=panel.regime_alt,
+        market_cap=panel.market_cap, industry=panel.industry,
+        amount=panel.amount, benchmark=panel.benchmark, peers=peers,
+        definition=definition.as_dict(), pool=panel.pool, freshness=panel.freshness,
+        is_st=panel.is_st,
     )
+    if robustness:
+        report.pool_robustness = _pool_robustness(
+            factor_id,
+            pool_size=pool_size,
+            pool_dates=(
+                ("2019-01-02", "2019-01-02"),
+                ("2021-01-04", "2021-01-04"),
+                ("2017-11-01", "2021-01-04"),
+            ),
+            start=start,
+            end=end,
+            direction=direction,
+            baseline=report,
+        )
+    if verify_repro:
+        # 同输入再跑一次分层：只比较每期均值/IC/ρ，验证没有隐藏随机源
+        sig = factor * int(direction)
+        _, _, pr2, pg2, _, _, _ = metrics._quantile_nav(
+            sig, panel.close, panel.open, groups=5, horizon=5, cost_bps=20.0,
+            tradeable=None,
+        )
+        left = {
+            "ic": float(report.ic[5].mean()) if 5 in report.ic else float("nan"),
+            "mono": report.monotonicity,
+            "q5_net": float(report.quantile_returns.get("Q5", float("nan"))),
+            "q1_net": float(report.quantile_returns.get("Q1", float("nan"))),
+        }
+        right = {
+            "ic": float(report.ic[5].mean()) if 5 in report.ic else float("nan"),
+            "mono": diag.group_monotonicity(pg2.mean())[0],
+            "q5_net": float(pr2["Q5"].mean()) if "Q5" in pr2 else float("nan"),
+            "q1_net": float(pr2["Q1"].mean()) if "Q1" in pr2 else float("nan"),
+        }
+        check = diag.reproduction_check(left, right, list(left))
+        report.diagnostics = list(report.diagnostics or []) + [check]
+        report.reproduction = check.as_dict()
+        report.attribution = diag.attribute_failure(report)
     score = rating_mod.rate(report)
 
     run_hash = hashlib.sha1(
-        f"{factor_id}|{start}|{end}|{pool_size}|{len(panel.close)}".encode()
+        f"{factor_id}|{start}|{panel.data_cutoff.date()}|{pool_size}|{len(panel.close)}".encode()
     ).hexdigest()[:8]
     meta = {
-        "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "run_id": f"{now_cn().strftime('%Y%m%dT%H%M')}_{run_hash}",
-        "data_version": f"ohlcv_1d:{panel.close.index.max().date()}",
+        "generated_at": f"{panel.freshness.get('generated_at', now_cn().strftime('%Y-%m-%d %H:%M:%S'))}"
+                        f"（{panel.freshness.get('timezone', 'UTC+8')}）",
+        "run_id": run_id or f"{now_cn().strftime('%Y%m%dT%H%M')}_{run_hash}",
+        "data_version": f"ohlcv_1d:{panel.data_cutoff.date()}",
     }
 
     html = render.render(report, score, meta)
@@ -176,15 +200,62 @@ def generate(
     html_path = target / f"{safe}.html"
     html_path.write_text(html, encoding="utf-8")
 
-    payload = {
-        "run_id": meta["run_id"],
-        "factor": factor_id,
-        "rating": {k: v for k, v in score.items() if k != "items"},
-        "ic_stats": report.ic_stats.round(4).to_dict(orient="index"),
-        "warnings": report.warnings,
-    }
+    payload = build_payload(report, score, meta, definition.as_dict(), panel)
     json_path = target / f"{safe}.json"
-    json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
 
     logger.info("报告已生成: %s（评级 %s / %s 分）", html_path, score["grade"], score["score"])
     return {"html": html_path, "json": json_path, "rating": score, "report": report, "meta": meta}
+
+
+def build_payload(report, score: dict, meta: dict, definition: dict, panel) -> dict:
+    """HTML 与 JSON 必须同源：同一个 ``run_id``、同一组报告对象。"""
+    return {
+        "run_id": meta["run_id"],
+        "generated_at": meta.get("generated_at", ""),
+        "data_version": meta.get("data_version", ""),
+        "factor": report.factor_id,
+        "category": report.category,
+        "family": diag.family_of(report.factor_id),
+        "direction": report.direction,
+        "direction_source": report.direction_source,
+        "definition": definition,
+        "rating": {k: v for k, v in score.items() if k not in ("items", "rules")},
+        "attribution": score.get("attribution") or report.attribution,
+        "diagnostics": [c.as_dict() for c in (report.diagnostics or [])],
+        "checks_status": diag.overall_status(report.diagnostics or []),
+        "ic_stats": report.ic_stats.round(6).to_dict(orient="index"),
+        "ic_half": report.ic_half,
+        "ic_by_year": report.ic_by_year.round(6).to_dict() if report.ic_by_year is not None else {},
+        "ic_neutral": report.ic_neutral.round(6).to_dict(orient="index") if report.ic_neutral is not None else {},
+        "monotonicity": report.monotonicity,
+        "monotonicity_net": report.monotonicity_net,
+        "quantile_returns": report.quantile_returns,
+        "quantile_returns_gross": report.quantile_returns_gross,
+        "spread_gross": report.spread_gross,
+        "spread_net": report.spread_net,
+        "cost_mean": report.cost_mean,
+        "sigma_5d": report.sigma_5d,
+        "transmission": report.transmission,
+        "perf": report.perf,
+        "long_short": report.long_short,
+        "annual_returns": report.annual_returns.round(6).to_dict() if report.annual_returns is not None else {},
+        "tradeability": report.tradeability,
+        "sell_side": report.sell_side,
+        "capacity": report.capacity,
+        "incrementality": {k: v for k, v in report.incrementality.items() if k not in ("peers", "residual")},
+        "warnings": report.warnings,
+        "pool": report.pool,
+        "freshness": report.freshness,
+        "sample": {
+            "start": str(report.start.date()),
+            "end": str(report.end.date()),
+            "n_symbols": report.n_symbols,
+            "n_dates": report.n_dates,
+            "coverage": report.coverage,
+            "universe": report.universe,
+        },
+    }
+
+
+__all__ = ["Panel", "build_payload", "compute_factor", "generate", "load_panel"]
