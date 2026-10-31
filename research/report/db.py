@@ -16,4 +16,7 @@ def query(sql: str, timeout: int = 300) -> pd.DataFrame:
     payload = resp.json()
     if "error" in payload:
         raise RuntimeError(payload["error"])
-    return pd.DataFrame(payload["dataset"], columns=[c["name"] for c in payload["columns"]])
+    # DDL / INSERT 不返回 dataset，返回空表而不是 KeyError
+    dataset = payload.get("dataset") or []
+    columns = [item["name"] for item in payload.get("columns", [])]
+    return pd.DataFrame(dataset, columns=columns)

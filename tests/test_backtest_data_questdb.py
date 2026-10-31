@@ -90,3 +90,58 @@ def test_questdb_data_source_missing_factor_marks_fallback():
     )
     assert bundle.frame["adjust_fallback"].all()
     assert bundle.frame["hfq_close"].tolist() == [10.0, 11.0]
+
+
+def test_ohlc_columns_include_turnover_for_daily_tables():
+    """换手类因子依赖 turnover；分钟线没有该列，不能拼进 SELECT。"""
+    from backtest.infrastructure.data.questdb import _ohlc_columns
+
+    assert "turnover" in _ohlc_columns("ohlcv_1d")
+    assert "turnover" in _ohlc_columns("ohlcv_1w")
+    assert "turnover" not in _ohlc_columns("ohlcv_5m")
+    assert "turnover" not in _ohlc_columns("ohlcv_15m")
+
+
+def test_missing_turnover_column_becomes_nan():
+    # FakeDB 的帧本来就没有 turnover：loader 必须补 NaN 列而不是 KeyError
+    source = QuestDBDataSource(config={"questdb": {}}, db=FakeDB())
+    bundle = source.load(
+        ["600519"],
+        pd.Timestamp("2024-01-01").date(),
+        pd.Timestamp("2024-01-05").date(),
+    )
+    assert "turnover" in bundle.frame.columns
+    assert bundle.frame["turnover"].isna().all()
+
+
+class ValuationDB(FakeDB):
+    """市值表：fin_valuation_daily 的列名与面板列名不同。"""
+
+    def query_dataframe(self, sql, params=None):
+        if "fin_valuation_daily" in sql:
+            index = pd.DatetimeIndex(
+                [pd.Timestamp("2024-01-02"), pd.Timestamp("2024-01-03")],
+                name="ts",
+            )
+            return pd.DataFrame(
+                {
+                    "code": ["600519", "600519"],
+                    "market_cap": [1.0e9, 1.0e9],
+                    "float_market_cap": [8.0e8, 8.0e8],
+                },
+                index=index,
+            )
+        return super().query_dataframe(sql, params)
+
+
+def test_valuation_extras_rename_to_size_columns():
+    source = QuestDBDataSource(config={"questdb": {}}, db=ValuationDB())
+    bundle = source.load(
+        ["600519"],
+        pd.Timestamp("2024-01-01").date(),
+        pd.Timestamp("2024-01-05").date(),
+        extras=("fin_valuation_daily",),
+    )
+    frame = bundle.frame
+    assert frame["total_mv"].tolist() == [1.0e9, 1.0e9]
+    assert frame["float_mv"].tolist() == [8.0e8, 8.0e8]

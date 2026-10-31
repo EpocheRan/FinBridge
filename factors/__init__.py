@@ -25,6 +25,7 @@ from .spec import (
     close_enough,
 )
 from .stored import SCREENER_DAILY_COLUMNS, StoredColumn
+from .ops import flow as flow_ops
 from .ops.price_factors import ALL_NAMES as ALL_PRICE_FACTORS
 from .ops.price_factors import register_price_ops
 from .taxonomy import Category, SUBCATEGORIES, normalize_category, normalize_subcategory
@@ -32,8 +33,12 @@ from .technical import ATR, atr, atr_wilder, true_range
 
 register_price_ops()
 
+#: 情绪/资金类算子（两融、资金流）：导入即注册进 CUSTOM_FACTORS
+ALL_FLOW_FACTORS = tuple(flow_ops.FLOW_FACTORS)
+
 __all__ = [
     "ALIASES",
+    "ALL_FLOW_FACTORS",
     "ALL_PRICE_FACTORS",
     "ATR",
     "CUSTOM_FACTORS",

@@ -342,18 +342,25 @@ class F:
 
     @staticmethod
     def ts(name: str) -> FactorDef:
-        """引用价量因子库中的一个因子（见 ``factors.ops.price_factors``）。"""
-        from .ops.price_factors import lookup
+        """引用因子库中的一个算子：价量（``ops.price_factors``）或情绪（``ops.flow``）。"""
+        from .ops.flow import lookup as flow_lookup
+        from .ops.price_factors import lookup as price_lookup
 
+        inputs: tuple[str, ...] = ("hfq_close",)
         try:
-            _fn, window, unit = lookup(name)
-        except KeyError as exc:
-            raise ValueError(f"未知  价量因子: {name!r}") from exc
+            _fn, window, unit = price_lookup(name)
+        except KeyError:
+            try:
+                _fn, window, unit, _direction, _dataset = flow_lookup(name)
+            except KeyError as exc:
+                raise ValueError(f"未知因子: {name!r}（价量与情绪算子库都没有）") from exc
+            registered = CUSTOM_FACTORS.get(name)
+            inputs = tuple(getattr(registered, "factor_inputs", ()) or ()) or inputs
         return FactorDef(
             name=name,
             op=name,
             args=(),
-            inputs=("hfq_close",),
+            inputs=inputs,
             on="hfq_close",
             window=int(window),
             warmup=int(window),

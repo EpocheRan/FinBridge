@@ -49,6 +49,22 @@ def compute_factor(factor_id: str, close: pd.DataFrame) -> pd.DataFrame:
     raise ValueError(f"未知因子: {factor_id}")
 
 
+
+def _universe_label(panel: Panel, pool_size: int, pool_date: str) -> str:
+    """展示用池子标签：从 panel.pool 的真实口径生成，不再写死点位池。"""
+    pool = panel.pool or {}
+    selection = str(pool.get("selection", "")).strip()
+    boards = str(pool.get("boards", "")).strip()
+    n = len(panel.symbols)
+    if selection == "all_a" or selection.startswith("all_a"):
+        return f"全市场（all_a，{n:,} 只）"
+    if selection.startswith("index:"):
+        return f"{selection} PIT 成分（{n:,} 只）"
+    if boards:
+        return f"{boards}（{n:,} 只）"
+    return f"{selection or '样本池'}（{n:,} 只）"
+
+
 def _resolve_panel(factor_id: str, pool_date: str, pool_size: int, start: str, end: str | None) -> tuple[Panel, pd.DataFrame]:
     panel = load_panel(pool_date, pool_size, start, end)
     category = factor_id.split(".", 1)[0]
@@ -60,6 +76,61 @@ def _resolve_panel(factor_id: str, pool_date: str, pool_size: int, start: str, e
     return panel, price_factor_panel(factor_id, panel)
 
 
+def _pool_symbols(panel: Panel, pool_date: str, pool_size: int) -> tuple[str, ...]:
+    """按基准日成交额取前 N；代码由 B 模块按日查询（超集只覆盖评估期，不能用它取历史池）。"""
+    from research.eval.data import _pool_codes
+
+    return tuple(_pool_codes(pool_date, int(pool_size)))
+
+
+def _slice_panel(panel: Panel, symbols: Sequence[str], start: str) -> Panel:
+    """从全样本面板切出子池：裁列 + 裁行，并重算该子池的等权基准。"""
+    keep = [symbol for symbol in symbols if symbol in panel.close.columns]
+    if not keep:
+        raise ValueError("子池为空")
+    start_ts = pd.Timestamp(start).normalize()
+
+    def cut(frame: pd.DataFrame | None) -> pd.DataFrame | None:
+        if frame is None:
+            return None
+        sliced = frame.reindex(columns=keep).loc[lambda item: item.index >= start_ts]
+        return sliced
+
+    close = cut(panel.close)
+    benchmark = (1 + close.pct_change(fill_method=None).mean(axis=1)).cumprod()
+    benchmark.name = "样本池等权"
+    pool = dict(panel.pool)
+    pool.update(
+        {
+            "selected": len(keep),
+            "candidates": len(keep),
+            "board_passed": len(keep),
+        }
+    )
+    return Panel(
+        close=close,
+        open=cut(panel.open),
+        market_cap=cut(panel.market_cap),
+        industry=cut(panel.industry),
+        regime=panel.regime,
+        symbols=keep,
+        regime_alt=panel.regime_alt,
+        high=cut(panel.high),
+        low=cut(panel.low),
+        volume=cut(panel.volume),
+        amount=cut(panel.amount),
+        turnover=cut(panel.turnover),
+        close_raw=cut(panel.close_raw),
+        open_raw=cut(panel.open_raw),
+        benchmark=benchmark,
+        stock_info=panel.stock_info,
+        is_st=panel.is_st,
+        pool=pool,
+        freshness=panel.freshness,
+        eval_start=pd.Timestamp(start),
+    )
+
+
 def _pool_robustness(
     factor_id: str,
     *,
@@ -69,8 +140,12 @@ def _pool_robustness(
     end: str | None,
     direction: int,
     baseline,
+    superset: Panel | None = None,
 ) -> pd.DataFrame:
-    """换基准日/起点重构样本池，检验 IC/价差是否还是同一个答案。"""
+    """换基准日/起点重构样本池，检验 IC/价差是否还是同一个答案。
+
+    有 ``superset``（全样本）时只在内存里切片，不再重复回表取数。
+    """
     rows = [
         {
             "pool_date": baseline.universe,
@@ -84,7 +159,11 @@ def _pool_robustness(
     ]
     for pool_date, start_date in pool_dates:
         try:
-            panel = load_panel(pool_date, pool_size, max(start, start_date), end)
+            if superset is not None:
+                codes = _pool_symbols(superset, pool_date, pool_size)
+                panel = _slice_panel(superset, codes, max(start, start_date))
+            else:  # pragma: no cover - 兼容未提供超集的老调用
+                panel = load_panel(pool_date, pool_size, max(start, start_date), end)
             factor = price_factor_panel(factor_id, panel)
             report = metrics.build_report(
                 factor, panel.close, panel.open,
@@ -137,7 +216,7 @@ def generate(
         factor_id=factor_id, category=category or definition.category,
         direction=direction,
         direction_source=definition.direction_source if direction == definition.direction else "manual",
-        universe=universe or f"点位池 {pool_size}（{pool_date} 成交额）",
+        universe=universe or _universe_label(panel, pool_size, pool_date),
         regime=panel.regime, regime_alt=panel.regime_alt,
         market_cap=panel.market_cap, industry=panel.industry,
         amount=panel.amount, benchmark=panel.benchmark, peers=peers,
@@ -157,6 +236,7 @@ def generate(
             end=end,
             direction=direction,
             baseline=report,
+            superset=panel,
         )
     if verify_repro:
         # 同输入再跑一次分层：只比较每期均值/IC/ρ，验证没有隐藏随机源

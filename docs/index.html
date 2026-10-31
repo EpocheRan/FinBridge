@@ -754,10 +754,10 @@
               <text class="abadge" x="655" y="692" style="fill:#5f7288">覆盖率 · 停牌过滤</text>
 
               <rect class="abox" x="920" y="630" width="255" height="74" rx="12"/>
-              <text class="atitle" x="940" y="656">research · 因子研究</text>
-              <text class="asub" x="940" y="674">build_report · rate · render</text>
-              <text class="abadge" x="1162" y="656" text-anchor="end">评分卡入库</text>
-              <text class="abadge" x="940" y="692" style="fill:#5f7288">IC / 分层 / 四象限</text>
+              <text class="atitle" x="940" y="656">research · 因子评估</text>
+              <text class="asub" x="940" y="674">eval_items · profile · render</text>
+              <text class="abadge" x="1162" y="656" text-anchor="end">评估项 + profile</text>
+              <text class="abadge" x="940" y="692" style="fill:#5f7288">全市场 · 10 评估项</text>
             </g>
 
             <!-- MCP -->
@@ -1108,7 +1108,11 @@ const TABLES = [
    fields:[F('code|SYMBOL|证券代码|fk'), F('board_id|SYMBOL|板块 ID|fk'), F('is_primary|BOOLEAN|是否主归属'), F('effective_from|TIMESTAMP|生效起'), F('effective_to|TIMESTAMP|生效止')]},
 
   /* ---------------- factor ---------------- */
-  {id:'factor_registry', cn:'因子目录', domain:'factor', core:true, writer:'factor_engine', readers:['screener','backtest','research'],
+  {id:'eval_profile', cn:'评估 profile', domain:'factor', core:false, writer:'research', readers:['research'],
+desc:'评估内容（评估项 / 参数 / 阈值 / 参照因子）的版本化存储；不加池子、区间、成本，同一 profile 可跑不同样本。',
+fields:[F('updated_at|TIMESTAMP|更新时间|pk'), F('name|SYMBOL|profile 名|pk'), F('version|INT|版本|pk'), F('items|STRING|评估项列表'), F('item_params|STRING|评估项参数'), F('thresholds|STRING|判定阈值'), F('reference|SYMBOL|参照因子'), F('profile_hash|SYMBOL|口径指纹')]},
+
+{id:'factor_registry', cn:'因子目录', domain:'factor', core:true, writer:'factor_engine', readers:['screener','backtest','research'],
    desc:'因子元数据权威表：分类 / 窗口 / 方向 / 单位 / 公式 / 依赖 / 物化方式；按 updated_at 追加版本快照。',
    fields:[F('factor_id|SYMBOL|因子 ID|pk'), F('category|SYMBOL|因子分类'), F('window|INT|窗口长度'), F('direction|SYMBOL|设计方向'), F('update_mode|SYMBOL|shift/window/recursive/event'), F('materialization|SYMBOL|stored/inline/auto'), F('version|SYMBOL|因子版本')]},
 
@@ -1227,10 +1231,10 @@ const MODULES = [
    deps:['factors','data_interface'], tables:['factor_registry','factor_value_daily','factor_daily_wide'],
    note:'build 内存开销大，单批代码数建议 ≤ 8；写后立即读需重试（WAL 异步）。'},
 
-  {id:'research', name:'research', cn:'因子研究报告', layer:'应用层', color:'#a78bfa',
-   role:'回答“这个因子值不值得用”：IC / 分层 / 衰减 / 成本 / 增量性 + 断言与失效归因，输出 HTML 报告与评分卡。',
-   funcs:['build_report(factor, close, open, ...)','rate(report) → grade / score / quadrant','diagnostics / factor_audit / factor_corr','render(report, score, meta) / generate(factor_id, ...)','scorecard.save(report, run_id, ...)'],
-   deps:['data_interface','factor_value_daily'], tables:['factor_scorecard','factor_value_daily'],
+  {id:'research', name:'research', cn:'因子评估', layer:'应用层', color:'#a78bfa',
+   role:'回答“这个因子值不值得用”：统一评估：评估项目录（eval_items）+ profile（eval_profile）+ 报告渲染；报告层不取数，样本默认全市场。',
+   funcs:['pipeline.run(factors, profile) → 统一表','eval_items.execute(items, ctx) → 指标','profile.load(name) / save(...) / seed()','generate(...) / render(...) → HTML + 注入申明','verify_equivalence.py → 1e-9 回放','scorecard.save(report, run_id, ...)'],
+   deps:['data_interface','eval/data.py','eval_profile'], tables:['eval_profile','factor_value_daily','factor_scorecard'],
    note:'重叠样本看 NW-t；方向不翻转，价差/成本断言只在可证边界硬失败。'},
 
   {id:'screener', name:'screener', cn:'选股', layer:'应用层', color:'#38bdf8',

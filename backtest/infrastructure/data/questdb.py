@@ -12,6 +12,11 @@ from typing import Any, Sequence
 
 import pandas as pd
 
+from backtest.application.universe import (
+    UniverseSchedule,
+    explicit_schedule,
+    schedule_from_snapshots,
+)
 from backtest.domain.errors import DataError
 from backtest.domain.models import DataBundle, SecurityStatus, TradingCalendar, Universe
 from data_interface.common.config import get_config
@@ -26,6 +31,26 @@ logger = logging.getLogger("Backtest.QuestDB")
 def _calendar(frame: pd.DataFrame) -> TradingCalendar:
     dates = pd.to_datetime(frame["date"]).dropna().dt.normalize().unique()
     return TradingCalendar(tuple(sorted(pd.Timestamp(item) for item in dates)))
+
+
+def _with_ts(frame: pd.DataFrame) -> pd.DataFrame:
+    """QuestDB 查询把 ts 放在索引上；统一还原成列，供按列取用。"""
+    data = frame.reset_index()
+    if "ts" not in data.columns:
+        data = data.rename(columns={data.columns[0]: "ts"})
+    return data
+
+
+def _ohlc_columns(table: str) -> str:
+    """按表返回 OHLCV 列清单。
+
+    分钟线（ohlcv_5m/15m/…)没有 turnover 列；日线/周线有，而换手类因子
+    （``liquidity.turnover_std_bias_*``）必须靠它，缺列会退化成全 NaN 信号。
+    """
+    columns = "open, high, low, close, volume, amount, adj_factor"
+    if table in ("ohlcv_1d", "ohlcv_1w"):
+        columns = columns.replace("amount,", "amount, turnover,")
+    return columns
 
 
 class QuestDBDataSource:
@@ -80,6 +105,179 @@ class QuestDBDataSource:
             approximation=True,
         )
 
+    def resolve_universe(self, spec, start: date, end: date) -> UniverseSchedule:
+        """把 UniverseSpec 解析成「取数代码 + PIT 成分快照」。
+
+        - ``explicit``：原样返回；
+        - ``index``：读 ``index_weight``，每期一条快照，按 ts 升序；
+          取数代码 = 区间内所有快照的并集（含 start 之前最近一期）；
+        - ``all_a``：区间内有行情的全部股票，不做快照过滤（数据可得性即约束）。
+        """
+        kind = str(getattr(spec, "kind", "explicit")).strip().lower()
+        codes = tuple(str(code) for code in getattr(spec, "codes", ()))
+        if kind == "explicit":
+            return explicit_schedule(codes)
+        if kind == "index":
+            if not codes:
+                raise DataError("index universe 必须给出指数代码，如 Universe.index('000300')")
+            return self._resolve_index(codes[0], start, end)
+        if kind == "all_a":
+            return self._resolve_all_a(
+                start, end, exclude_st=bool(getattr(spec, "exclude_st", True))
+            )
+        raise DataError(f"未知 universe kind: {kind!r}（支持 explicit/index/all_a）")
+
+    def _resolve_index(self, index_code: str, start: date, end: date) -> UniverseSchedule:
+        # 多取 500 天，确保能拿到 start 之前最近一期成分
+        start_ts = pd.Timestamp(start).normalize() - pd.Timedelta(days=500)
+        end_ts = pd.Timestamp(end).normalize()
+        candidates = [index_code]
+        if "." not in index_code:
+            candidates.extend([f"{index_code}.SH", f"{index_code}.SZ"])
+        placeholders = ",".join(["%s"] * len(candidates))
+        sql = (
+            "SELECT ts, code FROM index_weight "
+            f"WHERE index_code IN ({placeholders}) AND ts >= %s AND ts <= %s "
+            "ORDER BY ts, code"
+        )
+        try:
+            frame = self.db.query_dataframe(sql, [*candidates, start_ts, end_ts])
+        except Exception as exc:
+            raise DataError(f"指数成分读取失败 {index_code}: {exc}") from exc
+        if frame is None or frame.empty:
+            raise DataError(
+                f"index_weight 没有 {index_code} 的成分（{start}..{end}）；"
+                "检查指数代码后缀或先同步 index_weight"
+            )
+        frame = _with_ts(frame)
+        rows = [
+            (row["ts"], str(row["code"]))
+            for _, row in frame.iterrows()
+            if pd.notna(row.get("ts")) and pd.notna(row.get("code"))
+        ]
+        schedule = schedule_from_snapshots(rows, label=f"index:{index_code}")
+        newest = schedule.snapshots[-1].ts
+        if newest < end_ts - pd.Timedelta(days=400):
+            logger.warning(
+                "index %s 的成分快照最新只到 %s，早于回测终点 %s；"
+                "该段区间按「冻结成分」处理，结果会失真",
+                index_code,
+                newest.date(),
+                end_ts.date(),
+            )
+        logger.info(
+            "index universe %s: %d 期快照 / %d 只成分",
+            index_code,
+            len(schedule.snapshots),
+            len(schedule.codes),
+        )
+        return schedule
+
+    def _resolve_all_a(self, start: date, end: date, *, exclude_st: bool) -> UniverseSchedule:
+        sql = (
+            "SELECT DISTINCT code FROM ohlcv_1d "
+            "WHERE type='stock' AND ts >= %s AND ts <= %s"
+        )
+        frame = self.db.query_dataframe(
+            sql, [pd.Timestamp(start).normalize(), pd.Timestamp(end).normalize()]
+        )
+        if frame is None or frame.empty:
+            raise DataError(f"all_a 在 {start}..{end} 没有行情")
+        codes = {str(code) for code in frame["code"] if str(code).strip()}
+        if exclude_st:
+            codes -= self._st_codes()
+        if not codes:
+            raise DataError("all_a 解析后为空（是否全部被判为 ST）")
+        if len(codes) > 3000:
+            logger.warning(
+                "all_a 解析出 %d 只股票，取数与因子计算会很慢；"
+                "建议用 Universe.index(...) 或显式池",
+                len(codes),
+            )
+        return UniverseSchedule(codes=tuple(sorted(codes)), label="all_a")
+
+    def _st_codes(self) -> set[str]:
+        sql = (
+            "SELECT code, last(is_st) AS is_st FROM stock_basic_info GROUP BY code"
+        )
+        try:
+            frame = self.db.query_dataframe(sql, [])
+        except Exception as exc:  # noqa: BLE001 - ST 过滤失败不阻断
+            logger.warning("ST 名单读取失败，跳过排除: %s", exc)
+            return set()
+        if frame is None or frame.empty:
+            return set()
+        return {
+            str(row["code"])
+            for _, row in frame.iterrows()
+            if bool(row.get("is_st")) and pd.notna(row.get("is_st"))
+        }
+
+    #: 辅助数据集 -> (原列, 面板列)。回测帧只带 OHLCV，情绪/资金因子靠这些列。
+    _EXTRA_COLUMNS: dict[str, dict[str, str]] = {
+        "margin_detail": {
+            "rzye": "margin_rzye",
+            "rzmre": "margin_rzmre",
+            "rqye": "margin_rqye",
+            "rqyl": "margin_rqyl",
+        },
+        "moneyflow_daily": {
+            "buy_sm_amount": "mf_buy_sm",
+            "sell_sm_amount": "mf_sell_sm",
+            "buy_lg_amount": "mf_buy_lg",
+            "sell_lg_amount": "mf_sell_lg",
+            "buy_elg_amount": "mf_buy_elg",
+            "sell_elg_amount": "mf_sell_elg",
+            "net_mf_amount": "mf_net_amount",
+        },
+        # 规模因子（size.mv / size.float_mv）需要市值列，OHLCV 帧里没有
+        "fin_valuation_daily": {
+            "market_cap": "total_mv",
+            "float_market_cap": "float_mv",
+        },
+    }
+
+    def _attach_extras(
+        self,
+        frame: pd.DataFrame,
+        codes: Sequence[str],
+        start_ts: pd.Timestamp,
+        end_ts: pd.Timestamp,
+        extras: Sequence[str],
+    ) -> pd.DataFrame:
+        """按 (symbol, date) 左连接辅助数据；失败只降级，不让回测挂掉。"""
+        for dataset in extras:
+            mapping = self._EXTRA_COLUMNS.get(str(dataset))
+            if not mapping:
+                logger.warning("未知辅助数据集 %s，跳过", dataset)
+                continue
+            placeholders = ",".join(["%s"] * len(codes))
+            fields = ", ".join(mapping)
+            sql = (
+                f"SELECT ts, code, {fields} FROM {dataset} "
+                f"WHERE code IN ({placeholders}) AND ts >= %s AND ts <= %s"
+            )
+            params = [*codes, start_ts.to_pydatetime(), end_ts.to_pydatetime()]
+            try:
+                aux = self.db.query_dataframe(sql, params)
+            except Exception as exc:  # noqa: BLE001 - 辅助数据失败不应阻断回测
+                logger.warning("%s 读取失败（相关因子退化为 NaN）: %s", dataset, exc)
+                continue
+            if aux is None or aux.empty:
+                logger.info("%s 在区间内无数据（相关因子退化为 NaN）", dataset)
+                continue
+            aux = _with_ts(aux)
+            aux = aux.rename(columns={"ts": "date", "code": "symbol", **mapping})
+            aux["date"] = pd.to_datetime(aux["date"], errors="coerce").dt.normalize()
+            aux = aux.dropna(subset=["date", "symbol"])
+            for column in mapping.values():
+                aux[column] = pd.to_numeric(aux[column], errors="coerce")
+            # moneyflow_daily 同一 (ts, code) 有重复行，取最后一条
+            aux = aux.drop_duplicates(["symbol", "date"], keep="last")
+            frame = frame.merge(aux, on=["symbol", "date"], how="left")
+            logger.info("%s 已合入面板: +%d 列", dataset, len(mapping))
+        return frame
+
     def load(
         self,
         symbols: Sequence[str],
@@ -88,6 +286,7 @@ class QuestDBDataSource:
         *,
         warmup: int = 0,
         freq: str = "d",
+        extras: Sequence[str] = (),
     ) -> DataBundle:
         codes = tuple(sorted(set(str(item) for item in symbols)))
         if not codes:
@@ -97,8 +296,11 @@ class QuestDBDataSource:
         start_ts = pd.Timestamp(start).normalize() - pd.Timedelta(days=max(0, int(warmup)) * 2 + 10)
         end_ts = pd.Timestamp(end).normalize()
         placeholders = ",".join(["%s"] * len(codes))
+        # 分钟线没有 turnover 列；日线/周线有，且换手类因子（如
+        # liquidity.turnover_std_bias_*）必须靠它，否则会退化成 NaN。
+        columns = _ohlc_columns(table)
         sql = (
-            "SELECT ts, code AS symbol, open, high, low, close, volume, amount, adj_factor "
+            f"SELECT ts, code AS symbol, {columns} "
             f"FROM {table} "
             f"WHERE code IN ({placeholders}) AND ts >= %s AND ts <= %s "
             "ORDER BY ts, code"
@@ -116,6 +318,10 @@ class QuestDBDataSource:
         frame["date"] = pd.to_datetime(frame["ts"], errors="coerce").dt.normalize()
         frame = frame.dropna(subset=["date", "symbol"]).sort_values(["symbol", "date"])
         frame = frame.drop_duplicates(["symbol", "date"], keep="last").reset_index(drop=True)
+        if "turnover" in frame.columns:
+            frame["turnover"] = pd.to_numeric(frame["turnover"], errors="coerce")
+        else:
+            frame["turnover"] = float("nan")
 
         factor = pd.to_numeric(frame.get("adj_factor"), errors="coerce")
         fallback = factor.isna()
@@ -135,12 +341,16 @@ class QuestDBDataSource:
                 "close",
                 "volume",
                 "amount",
+                "turnover",
                 "adj_factor",
                 "hfq_close",
                 "adj_close",
                 "adjust_fallback",
             ]
         ].reset_index(drop=True)
+
+        if extras:
+            frame = self._attach_extras(frame, codes, start_ts, end_ts, extras)
 
         universe = Universe.from_codes(
             codes,

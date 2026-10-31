@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import replace
 from datetime import date
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -16,9 +17,13 @@ from backtest.application.cross_section import plan_cross_section
 from backtest.application.loader import LoadedStrategy, load_strategy
 from backtest.application.ports import EnginePort, OutputPort
 from backtest.application.run_id import compute_run_id
+from backtest.application.universe import (
+    UniverseSchedule,
+    explicit_schedule,
+)
 from backtest.config import BacktestSettings
 from backtest.domain.errors import BacktestError, ConfigError
-from backtest.domain.models import BacktestResult, RunSpec
+from backtest.domain.models import BacktestResult, RunSpec, Universe
 from factor_engine.definitions import INLINE_COMPUTE_REGISTRY, register_all
 from factors import build_panel, required_warmup
 from factors.registry import resolve_id
@@ -107,14 +112,23 @@ def _validate_supported(spec: RunSpec, factors, settings: BacktestSettings) -> N
         )
 
 
-def _resolve_universe(strategy: BaseStrategy) -> tuple[str, ...]:
+def _extras_for(factors: Sequence[Any]) -> tuple[str, ...]:
+    """从因子定义反推需要哪些辅助数据集（两融/资金流/市值）。"""
+    from factors.ops.flow import FLOW_FACTORS
+
+    datasets: set[str] = set()
+    for item in factors:
+        op = str(getattr(item, "op", ""))
+        if op in FLOW_FACTORS:
+            datasets.add(FLOW_FACTORS[op][4])
+        elif op.startswith("size."):
+            # size.* = -log(市值/1e6)，需要 fin_valuation_daily 的市值列
+            datasets.add("fin_valuation_daily")
+    return tuple(sorted(datasets))
+
+
+def _explicit_codes(strategy: BaseStrategy) -> tuple[str, ...]:
     spec = getattr(strategy, "universe", None)
-    kind = getattr(spec, "kind", "explicit")
-    if kind != "explicit":
-        raise ConfigError(
-            f"MVP 只支持 explicit universe，收到 {kind!r}；"
-            "all_a/index/file 在后续接入（先按显式股票池跑通混合架构）"
-        )
     codes = tuple(sorted({str(code) for code in getattr(spec, "codes", ())}))
     if not codes:
         raise ConfigError("explicit universe 不能为空")
@@ -239,6 +253,28 @@ class BacktestRunner:
         return self._run_engine(request, run_id, spec)
 
     # ------------------------------------------------------------------ 横截面
+    def _universe_schedule(
+        self,
+        strategy: BaseStrategy,
+        start: date,
+        end: date,
+    ) -> UniverseSchedule:
+        """解析策略的股票池：explicit 直读，index/all_a 交给数据源做 PIT 解析。"""
+        spec = getattr(strategy, "universe", None)
+        kind = str(getattr(spec, "kind", "explicit"))
+        if kind == "explicit":
+            return explicit_schedule(_explicit_codes(strategy))
+        resolver = getattr(self.data_source, "resolve_universe", None)
+        if resolver is None:
+            raise ConfigError(
+                f"数据源 {self.data_source.name!r} 不支持 {kind} 股票池；"
+                "改用 explicit，或换支持 PIT 解析的数据源"
+            )
+        schedule = resolver(spec, start, end)
+        if not schedule.codes:
+            raise ConfigError(f"{kind} 股票池解析为空: {start}..{end}")
+        return schedule
+
     def _run_cross(
         self,
         loaded: LoadedStrategy,
@@ -251,7 +287,8 @@ class BacktestRunner:
         seed: int | None,
     ) -> BacktestResult:
         # 混合架构：向量化排名在本层完成，PyBroker 只执行候选集。
-        codes = _resolve_universe(strategy)
+        schedule = self._universe_schedule(strategy, start, end)
+        codes = schedule.codes
         top_n = int(getattr(strategy, "top_n", 0) or 0)
         buffer = int(getattr(strategy, "buffer", 0) or 0)
         every_n_bars = int(getattr(strategy, "every_n_bars", 1) or 1)
@@ -289,7 +326,7 @@ class BacktestRunner:
         )
         _validate_supported(spec, factors, self.settings)
         data, panel, run_id, benchmark, corporate_actions = self._prepare(
-            loaded, spec, factors, start, end, freq
+            loaded, spec, factors, start, end, freq, schedule=schedule
         )
         plan = plan_cross_section(
             panel=panel,
@@ -303,6 +340,7 @@ class BacktestRunner:
             max_gross_exposure=float(spec.max_gross_exposure),
             rebalance=rebalance,
             every_n_bars=every_n_bars,
+            membership=schedule,
         )
         logger.info(
             "cross plan: universe=%d candidates=%d rebalance_days=%d top_n=%d",
@@ -329,11 +367,22 @@ class BacktestRunner:
     def _seed(self, value: int | None) -> int:
         return int(value if value is not None else self.settings.seed)
 
-    def _prepare(self, loaded, spec, factors, start, end, freq):
+    def _prepare(self, loaded, spec, factors, start, end, freq, *, schedule: UniverseSchedule | None = None):
         warmup = max(required_warmup(factors), self.settings.warmup_for(factors))
+        extras = _extras_for(factors)
         data = self.data_source.load(
-            spec.symbols, start, end, warmup=warmup, freq=freq
+            spec.symbols, start, end, warmup=warmup, freq=freq, extras=extras
         )
+        if schedule is not None and schedule.has_membership:
+            # 成分快照进 run_id：指数调仓/成分变更后旧 run 不可复用。
+            data = replace(
+                data,
+                universe=Universe.from_codes(
+                    schedule.codes,
+                    as_of=pd.Timestamp(start).date(),
+                    fingerprint=schedule.fingerprint(),
+                ),
+            )
         stored_frame = self._build_stored_frame(
             data, factors, spec, start, end, warmup
         )

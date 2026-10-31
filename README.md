@@ -46,7 +46,7 @@ MCPserver ── 统一工具出口（http / sse / stdio）
 | `data_interface/` | 行情 / 财务 / 资金 / 情绪 / 板块读写与复权 | `data_interface.api.*` |
 | `factors/` | 因子定义、时序与横截面算子 | `from factors import F` |
 | `factor_engine/` | 因子物化、宽表、审计与对账 | `python -m factor_engine` |
-| `research/` | 因子报告、评分卡、断言与失效归因 | `python scripts/factor_report.py` |
+| `research/` | 统一评估：评估项目录（G）+ profile（F）+ 报告（E）；默认全市场 | `python scripts/factor_report.py` / `scripts/factor_eval.py` / `scripts/profile.py` |
 | `screener/` | 因子筛股、基线、停牌与覆盖检查 | `python -m screener` |
 | `backtest/` | 单股 / 横截面回测、执行规则、账本 | `python -m backtest` |
 | `strategies/` | 策略基类、universe、weighting、模型 | `python -m backtest list` |
@@ -101,6 +101,7 @@ python -m acquisition run --datasets ohlcv_1d,factors,screener
 - **市场与品种**：`market` 是交易所（`SSE` / `SZSE` / `BSE`），`type` 是品种（`stock` / `etf` / `lof` / `fund` / `idx`）。
 - **时点正确**：财务按 `publish_date` 过滤，板块成分按 `as_of` 取最近整组快照。
 - **写入边界**：raw 表只由 `data_interface` 写，因子表只由 `factor_engine` 写。
+- **评估单一入口**：因子「行不行」只认 `research.eval_items` 的评估项 + `eval_profile` 里的 profile；报告层不取数（取数唯一入口是 `research/eval/data.py`）。
 
 完整字段、分区与迁移说明见 [docs/design/](docs/design/) 与 [docs/data/coverage.md](docs/data/coverage.md)。
 

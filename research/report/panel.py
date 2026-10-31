@@ -23,6 +23,14 @@ from .db import query as _query
 _ALLOWED_PREFIX = ("60", "00", "30", "68")
 
 
+# 取数已迁到 B 模块（research.eval.data），此处保留同名薄封装供旧调用方使用。
+# 必须延迟导入：research.report.db → report.__init__ → runner → panel 存在环。
+def financial_factor_panel(*args, **kwargs):
+    from research.eval.data import stored_factor_panel
+
+    return stored_factor_panel(*args, **kwargs)
+
+
 def _pivot(frame: pd.DataFrame, column: str) -> pd.DataFrame:
     if frame.empty:
         return pd.DataFrame()
@@ -107,246 +115,32 @@ def _completed_cutoff(requested_end: str | None) -> str:
 
 
 def load_panel(
-    pool_date: str,
-    pool_size: int,
-    start: str,
+    pool_date: str | None = None,
+    pool_size: int | None = 200,
+    start: str = "2019-01-01",
     end: str | None = None,
     *,
     min_amount: float | None = None,
     max_amount: float | None = None,
-    warmup_days: int = 2000,
-) -> Panel:
-    requested_end = end
-    end = _completed_cutoff(requested_end)
-    # 因子窗口需要预热：504 日窗口若从评估起点才取数，前两年因子为 NaN，
-    # 会把「42_252 vs 21_504」变成两个不同区间，制造 4 倍价差差异。
-    eval_start = pd.Timestamp(start)
-    data_start = (eval_start - pd.Timedelta(days=int(warmup_days))).date().isoformat()
-    amount_filter = ""
-    if min_amount is not None:
-        amount_filter += f" and amount >= {min_amount}"
-    if max_amount is not None:
-        amount_filter += f" and amount <= {max_amount}"
+    warmup_days: int = 800,
+    universe: str | None = None,
+):
+    """取数委托给唯一的 B 模块（``research.eval.data``）。
 
-    pool = _query(
-        f"""select code, amount from ohlcv_1d
-            where ts='{pool_date}' and type='stock' and market in ('SSE','SZSE'){amount_filter}
-            order by amount desc limit {int(pool_size * 2.0)}"""
-    )
-    candidates = len(pool)
-    codes = [str(c) for c in pool["code"] if str(c)[:2] in _ALLOWED_PREFIX][:pool_size]
-    if not codes:
-        raise RuntimeError(f"样本池为空：{pool_date} 无可用股票（检查 ohlcv_1d.type/market）")
-    inlist = ",".join(f"'{c}'" for c in codes)
+    本函数不再包含任何 SQL 或选池逻辑；``pool_date/pool_size`` 仅为兼容旧调用签名，
+    实际池子由 ``universe``（默认 all_a 全市场）决定。
+    """
+    from .panel_adapter import load_panel as _load
 
-    frame = _query(
-        f"""select ts, code, open, high, low, close, volume, amount, turnover, adj_factor
-            from ohlcv_1d where type='stock' and code in ({inlist})
-            and ts between '{data_start}' and '{end}'""",
-        timeout=600,
-    )
-    frame["ts"] = pd.to_datetime(frame["ts"]).dt.tz_localize(None)
-    for column in ("open", "high", "low", "close", "volume", "amount", "turnover", "adj_factor"):
-        frame[column] = pd.to_numeric(frame[column], errors="coerce")
-
-    # 后复权：以窗口末日的复权因子为 1（价格水平与当前一致，收益率不受影响）
-    last_adj = frame.groupby("code")["adj_factor"].transform("last").replace(0, np.nan)
-    frame["adj"] = (frame["adj_factor"] / last_adj).fillna(1.0)
-    for column in ("open", "high", "low", "close"):
-        frame[f"{column}_hfq"] = frame[column] * frame["adj"]
-
-    close = _pivot(frame, "close_hfq").sort_index()
-    open_ = _pivot(frame, "open_hfq").reindex(index=close.index, columns=close.columns)
-    high = _pivot(frame, "high_hfq").reindex(index=close.index, columns=close.columns)
-    low = _pivot(frame, "low_hfq").reindex(index=close.index, columns=close.columns)
-    volume = _pivot(frame, "volume").reindex(index=close.index, columns=close.columns)
-    amount = _pivot(frame, "amount").reindex(index=close.index, columns=close.columns)
-    turnover = _pivot(frame, "turnover").reindex(index=close.index, columns=close.columns)
-    close_raw = _pivot(frame, "close").reindex(index=close.index, columns=close.columns)
-    open_raw = _pivot(frame, "open").reindex(index=close.index, columns=close.columns)
-
-    # 末日覆盖检查：若最后一天的标的数不足前一日 80%，视为「未收盘/未入库」，
-    # 整日回退。上一版报告把这种半截日当成完整交易日，导致 2.50%→2.29% 的口径漂移。
-    coverage = close.notna().sum(axis=1)
-    partial_last_day = None
-    if len(coverage) >= 2 and coverage.iloc[-1] < 0.8 * max(int(coverage.iloc[-2]), 1):
-        partial_last_day = {
-            "date": str(close.index[-1].date()),
-            "covered": int(coverage.iloc[-1]),
-            "previous": int(coverage.iloc[-2]),
-        }
-        keep = close.index[:-1]
-        close = close.loc[keep]
-        open_ = open_.loc[keep]
-        high = high.loc[keep]
-        low = low.loc[keep]
-        volume = volume.loc[keep]
-        amount = amount.loc[keep]
-        turnover = turnover.loc[keep]
-        close_raw = close_raw.loc[keep]
-        open_raw = open_raw.loc[keep]
-        end = str(close.index.max().date())
-
-    cap = _query(
-        f"""select ts, code, float_market_cap from fin_valuation_daily
-            where code in ({inlist}) and ts between '{start}' and '{end}'"""
-    )
-    market_cap = None
-    if not cap.empty:
-        cap["ts"] = pd.to_datetime(cap["ts"]).dt.tz_localize(None)
-        cap["float_market_cap"] = pd.to_numeric(cap["float_market_cap"], errors="coerce")
-        market_cap = _pivot(cap, "float_market_cap").reindex(index=close.index, columns=close.columns)
-
-    info = _query(
-        f"""select code, name, industry, list_date, delist_date, list_status, is_st
-            from stock_basic_info where code in ({inlist}) latest on ts partition by code"""
-    )
-    industry = None
-    is_st: dict[str, bool] = {}
-    if not info.empty:
-        info = info.drop_duplicates("code").set_index("code")
-        mapping = info["industry"].fillna("未知").to_dict()
-        industry = pd.DataFrame(
-            [[mapping.get(c, "未知") for c in close.columns]] * len(close.index),
-            index=close.index, columns=close.columns,
-        )
-        for code, row in info.iterrows():
-            flag = row.get("is_st")
-            is_st[str(code)] = bool(flag) if flag is not None and flag == flag else False
-
-    regime = None
-    benchmark = None
-    # 000852 在 2019-2021 缺日，无法做全样本 regime；改用日线完整的创业板指 399006
-    idx = _query(
-        f"""select ts, close from ohlcv_1d where code='399006' and type='idx'
-            and ts between '{start}' and '{end}' order by ts"""
-    )
-    if not idx.empty:
-        idx["ts"] = pd.to_datetime(idx["ts"]).dt.tz_localize(None)
-        idx["close"] = pd.to_numeric(idx["close"], errors="coerce")
-        idx = idx.dropna(subset=["close"]).drop_duplicates("ts").set_index("ts").sort_index()
-        mom20 = idx["close"] / idx["close"].shift(20) - 1
-        ma20 = idx["close"].rolling(20).mean()
-        regime = pd.Series(
-            np.where(
-                (mom20 > 0) & (idx["close"] > ma20), "bull",
-                np.where((mom20 < -0.03) & (idx["close"] < ma20), "bear", "neutral"),
-            ),
-            index=idx.index,
-        ).reindex(close.index).ffill()
-    # 沪深 300 敏感性（000300 已于 2026-10-30 回补 2019 起）
-    regime_alt = None
-    idx300 = _query(
-        f"""select ts, close from ohlcv_1d where code='000300' and type='idx'
-            and ts between '{start}' and '{end}' order by ts"""
-    )
-    if not idx300.empty:
-        idx300["ts"] = pd.to_datetime(idx300["ts"]).dt.tz_localize(None)
-        idx300["close"] = pd.to_numeric(idx300["close"], errors="coerce")
-        idx300 = idx300.dropna(subset=["close"]).drop_duplicates("ts").set_index("ts").sort_index()
-        mom = idx300["close"] / idx300["close"].shift(20) - 1
-        ma = idx300["close"].rolling(20).mean()
-        regime_alt = pd.Series(
-            np.where(
-                (mom > 0) & (idx300["close"] > ma), "bull",
-                np.where((mom < -0.03) & (idx300["close"] < ma), "bear", "neutral"),
-            ),
-            index=idx300.index,
-        ).reindex(close.index)
-
-    # 基准用样本池等权（与组合同池，避免指数缺失/风格错配）
-    benchmark = (1 + close.pct_change(fill_method=None).mean(axis=1)).cumprod()
-    benchmark.name = "样本池等权"
-
-    # 数据新鲜度：末日、是否回退、距今天数
-    now = now_cn()
-    last = close.index.max()
-    freshness = {
-        "generated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
-        "timezone": "北京时间 UTC+8",
-        "requested_end": str(requested_end or ""),
-        "cutoff": last.strftime("%Y-%m-%d"),
-        "stale_natural_days": int((now.date() - last.date()).days),
-        "intraday_trimmed": bool(requested_end and _completed_cutoff(requested_end) != str(requested_end)),
-        "partial_last_day": partial_last_day,
-        "last_day_coverage": int(close.notna().sum(axis=1).iloc[-1]),
-        "today": now.strftime("%Y-%m-%d"),
-    }
-
-    selected = set(close.columns)
-    if info is not None:
-        selected_info = info.loc[[c for c in info.index if c in selected]]
-    else:
-        selected_info = pd.DataFrame()
-
-    # 样本池构造与幸存者偏差
-    pool_meta = {
-        "kind": "price",
-        "selection": "amount",
-        "date": pool_date,
-        "requested": int(pool_size),
-        "candidates": int(candidates),
-        "board_passed": int(len(codes)),
-        "selected": int(len(close.columns)),
-        "rule": f"{pool_date} 成交额降序取前 {pool_size} 只（2 倍缓冲后按板块过滤）",
-        "boards": "沪深主板 / 创业板 / 科创板；剔除北交所",
-        "start": str(start),
-        "data_start": data_start,
-        "end": str(last.date()),
-        "funnel": [
-            {"step": "基准日成交额降序候选（2 倍缓冲）", "n": int(candidates), "note": "含未上市/退市/北交所"},
-            {"step": "板块过滤（60/00/30/68）", "n": int(len(codes)), "note": "剔除北交所与其它前缀"},
-            {"step": "区间内有行情、进入报告", "n": int(len(close.columns)), "note": "最终样本"},
-        ],
-        "pit": "",
-    }
-    try:
-        delisted = _query(
-            f"""select count() c from stock_basic_info
-                where list_status='D' and list_date <= '{pool_date}'
-                latest on ts partition by code"""
-        )
-        n_delisted = int(delisted["c"].iloc[0]) if not delisted.empty else 0
-        traded = _query(
-            f"select distinct code from ohlcv_1d where ts='{pool_date}' and type='stock'"
-        )
-        traded_codes = {str(c) for c in traded["code"]} if not traded.empty else set()
-        delisted_codes = _query(
-            f"""select code from stock_basic_info
-                where list_status='D' and list_date <= '{pool_date}'
-                latest on ts partition by code"""
-        )
-        delisted_set = {str(c) for c in delisted_codes["code"]} if not delisted_codes.empty else set()
-        pool_meta.update(
-            {
-                "delisted_universe": n_delisted,
-                "delisted_with_price": len(delisted_set & traded_codes),
-                "delisted_missing": len(delisted_set - traded_codes),
-            }
-        )
-    except Exception:  # noqa: BLE001 - 元数据缺失不应中断报告
-        pass
-    if not selected_info.empty:
-        list_dates = pd.to_datetime(selected_info.get("list_date"), errors="coerce", utc=True)
-        list_dates = list_dates.dt.tz_convert(None)
-        pool_meta["listed_after_start"] = int((list_dates > pd.Timestamp(start)).sum())
-        pool_meta["delisted_in_pool"] = int((selected_info.get("list_status") == "D").sum())
-    last_valid = close.apply(lambda s: s.last_valid_index())
-    last_valid = pd.to_datetime(last_valid, errors="coerce")
-    pool_meta["stale_symbols"] = int((last_valid < last - pd.Timedelta(days=10)).sum())
-    pool_meta["survivorship_note"] = (
-        "样本池按 2017-11-01 单日成交额固定，之后不再重构；库内退市股若没有历史行情，"
-        "会被整体排除，导致收益与 IC 存在向上的幸存者偏差。该偏差无法用现有数据完全修正，"
-        "只能通过固定入池日、披露缺失数量来限定解释边界。"
-    )
-
-    return Panel(
-        close=close, open=open_, market_cap=market_cap, industry=industry, regime=regime,
-        regime_alt=regime_alt,
-        symbols=list(close.columns), high=high, low=low, volume=volume, amount=amount,
-        turnover=turnover, close_raw=close_raw, open_raw=open_raw, benchmark=benchmark,
-        stock_info=selected_info, is_st=is_st, pool=pool_meta, freshness=freshness,
-        eval_start=eval_start,
+    return _load(
+        pool_date,
+        pool_size,
+        start,
+        end,
+        min_amount=min_amount,
+        max_amount=max_amount,
+        warmup_days=warmup_days,
+        universe=universe,
     )
 
 
@@ -366,22 +160,6 @@ def price_factor_panel(factor_id: str, panel: Panel) -> pd.DataFrame:
     if panel.eval_start is not None:
         out = out.loc[out.index >= panel.eval_start]
     return out
-
-
-def financial_factor_panel(factor_id: str, close: pd.DataFrame, start: str, end: str) -> pd.DataFrame:
-    """从 factor_value_daily（物化结果）取单因子面板。"""
-    codes = ",".join(f"'{c}'" for c in close.columns)
-    frame = _query(
-        "select ts, code, value from factor_value_daily "
-        f"where factor_id='{factor_id}' and ts between '{start}' and '{end}' "
-        f"and code in ({codes})",
-        timeout=600,
-    )
-    if frame.empty:
-        return pd.DataFrame()
-    frame["ts"] = pd.to_datetime(frame["ts"]).dt.tz_localize(None)
-    frame["value"] = pd.to_numeric(frame["value"], errors="coerce")
-    return _pivot(frame, "value").reindex(index=close.index, columns=close.columns)
 
 
 def peer_panels(factor_id: str, panel: Panel) -> dict[str, pd.DataFrame]:

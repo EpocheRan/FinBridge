@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 
 from backtest.application.rebalance import RebalanceSchedule
+from backtest.application.universe import UniverseSchedule, filter_by_membership
 from backtest.domain.errors import ConfigError
 
 
@@ -84,6 +85,7 @@ def plan_cross_section(
     max_gross_exposure: float,
     rebalance: str,
     every_n_bars: int = 1,
+    membership: UniverseSchedule | None = None,
 ) -> CrossSectionPlan:
     universe = tuple(dict.fromkeys(str(symbol) for symbol in symbols))
     if not universe:
@@ -117,6 +119,9 @@ def plan_cross_section(
             )
         scores = scores.reindex(universe).astype("float64")
         scores = scores[np.isfinite(scores)]
+        if membership is not None and membership.has_membership:
+            # PIT 成分过滤：非成分股当天不参与排名，也就不会被选中或按 buffer 保留。
+            scores = filter_by_membership(scores, membership.members_at(dt))
         scores_by_date[dt] = scores
         ranks_by_date[dt] = scores.rank(ascending=False, method="first")
 
@@ -154,7 +159,11 @@ def plan_cross_section(
 
     candidates = tuple(sorted({symbol for target in targets.values() for symbol in target}))
     if not candidates:
-        raise ConfigError("横截面计划为空：没有可执行的调仓目标")
+        raise ConfigError(
+            "横截面计划为空：没有可执行的调仓目标。"
+            "常见原因：① 因子整列无值（如 size.* 缺 float_mv 列、情绪因子缺两融/资金流数据）；"
+            "② 方向/阈值把候选全过滤；③ 回测起点早于因子预热完成"
+        )
 
     rank_frame = pd.DataFrame(
         {dt: ranks_by_date[dt].reindex(candidates) for dt in dates}

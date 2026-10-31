@@ -8,8 +8,9 @@ from typing import Sequence
 
 import pandas as pd
 
+from backtest.application.universe import UniverseSchedule, explicit_schedule
 from backtest.domain.models import DataBundle, SecurityStatus, TradingCalendar, Universe
-from backtest.domain.errors import DataError
+from backtest.domain.errors import ConfigError, DataError
 
 from .snapshot import make_snapshot
 
@@ -44,6 +45,18 @@ class MemoryDataSource:
         self.benchmark = None if benchmark is None else benchmark.copy()
         self.security_status = security_status
 
+    def resolve_universe(self, spec, start: date, end: date) -> UniverseSchedule:
+        """内存源只支持 explicit；PIT 成分请用 questdb 或测试里的假数据源。"""
+        kind = str(getattr(spec, "kind", "explicit")).strip().lower()
+        if kind != "explicit":
+            raise ConfigError(
+                f"memory 数据源只支持 explicit universe，收到 {kind!r}"
+            )
+        codes = tuple(str(code) for code in getattr(spec, "codes", ()))
+        if not codes:
+            raise DataError("memory explicit universe 不能为空")
+        return explicit_schedule(codes)
+
     def load(
         self,
         symbols: Sequence[str],
@@ -52,6 +65,7 @@ class MemoryDataSource:
         *,
         warmup: int = 0,
         freq: str = "d",
+        extras: Sequence[str] = (),
     ) -> DataBundle:
         codes = tuple(sorted(set(str(item) for item in symbols)))
         start_ts = pd.Timestamp(start).normalize() - pd.Timedelta(days=max(0, int(warmup)) * 2 + 10)

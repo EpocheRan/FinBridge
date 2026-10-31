@@ -328,6 +328,10 @@ def _quantile_nav(
     turnover_rows: list[dict[str, float]] = []
     prev_members: dict[int, set[str]] = {g: set() for g in range(groups)}
     level = {g: 1.0 for g in range(groups)}
+    # P3：一次性转 numpy，内层不再逐日构造 Series（等价口径，收益计算不变）
+    _close_np = close.to_numpy(dtype="float64")
+    _open_np = open_.to_numpy(dtype="float64")
+    _col_pos = {str(code): pos for pos, code in enumerate(close.columns)}
     i = 0
     while i + horizon + 1 < len(dates):
         dt = dates[i]
@@ -349,22 +353,30 @@ def _quantile_nav(
 
             period_gross = {g: 1.0 for g in range(groups)}
             period_net = {g: 1.0 for g in range(groups)}
+            # 预先映射成分代码 -> 列下标，内层只做 numpy 取值（等价于逐日 pandas 索引，
+            # 但避免每期 5×horizon 次 Series 构造，是 _quantile_nav 的主要开销）
+            member_idx = {
+                g: np.array([_col_pos[c] for c in members[g] if c in _col_pos], dtype=np.intp)
+                for g in range(groups)
+            }
             for j in range(i + 1, i + 1 + horizon):
                 if j >= len(dates):
                     break
                 for g in range(groups):
-                    codes = [c for c in members[g] if c in close.columns]
-                    if not codes:
+                    idx = member_idx[g]
+                    if idx.size == 0:
                         continue
                     if j == i + 1:
-                        px_in = open_.loc[dates[j], codes]
-                        ret = float((close.loc[dates[j], codes] / px_in - 1).mean())
+                        px_in = _open_np[j, idx]
+                        with np.errstate(invalid="ignore", divide="ignore"):
+                            ratio = _close_np[j, idx] / px_in - 1.0
+                        ret = float(np.nanmean(np.where(np.isfinite(ratio), ratio, np.nan)))
                         cost = turnover[g] * cost_bps / 10000.0
                         net = ret - cost
                     else:
-                        prev = close.loc[dates[j - 1], codes]
-                        cur = close.loc[dates[j], codes]
-                        ret = float((cur / prev - 1).replace([np.inf, -np.inf], np.nan).mean())
+                        with np.errstate(invalid="ignore", divide="ignore"):
+                            ratio = _close_np[j, idx] / _close_np[j - 1, idx] - 1.0
+                        ret = float(np.nanmean(np.where(np.isfinite(ratio), ratio, np.nan)))
                         net = ret
                     if not np.isfinite(ret):
                         ret, net = 0.0, 0.0
