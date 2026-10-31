@@ -88,22 +88,23 @@ shared           data_interface.common / scripts.schemas
 
 | 模块 | 目录 | 关键内容 | 对外入口 |
 |---|---|---|---|
-| 数据接口 | `data_interface/` | `common/`（配置、QuestDB、交易日历、限流、代码/板块）、`market/`（loader/fetcher/adjust/adj_factors/sources）、`financial/`（service/repository/normalizer/metrics/fields/sources）、`moneyflow/`（分档 service/repository/sources）、`concept/`（板块/成分/分类 service/repository/sources）、`api/`（runtime 单例、MCP tools） | `data_interface.api.*` |
+| 数据接口 | `data_interface/` | `common/`（配置、QuestDB、交易日历、限流、代码/板块）、`market/`（loader/fetcher/adjust/adj_factors/sources）、`financial/`（service/repository/normalizer/metrics/fields/sources）、`moneyflow/`（分档 service/repository/sources）、`sentiment/`（两融/龙虎榜/大宗 service/repository）、`concept/`（板块/成分/分类 service/repository/sources）、`api/`（runtime 单例、MCP tools） | `data_interface.api.*` |
 | 因子筛股 | `screener/` | domain（模型/字段/停牌）、application（ScreenerService/BackfillService/BaselineService/ports）、infrastructure（QuestDB 仓储/补齐/队列）、interface；**构建编排已迁到 acquisition** | `screener.interface.api`、`python -m screener` |
 | 持仓 | `position/` | `manager`（组合/持仓/交易/盈亏）、`schema`、`modes/`（ATR、GRID）、`llm_tool` | MCP `pm_*` 工具 |
 | 因子库 | `factors/` | `library`（`F` 命名空间/`FactorDef`/注册表）、`spec`（`FactorSpec` 元数据）、`ops/ts`（时序算子）、`ops/price_factors`（**85 个价量因子**）、`cross_section`（rank/zscore/winsorize/composite/neutralize）、`panel`（date×symbol 面板）、`naming`（自研命名）、`stored`（screener 列元数据）、`technical`（ATR canonical） | `from factors import F` |
 | 因子引擎 | `factor_engine/` | `service`（计算/分批写库/ensure）、`store`（因子表）、`hooks`、`audit`、`wide`（56 列宽表）、`fundamental`（15 成长质量）、**`fin_ext`（61 财务因子）**、`valuation`（13 估值 + PEG）、`definitions/`（内置 + legacy + **`price_factors` 85 价量 spec**）、CLI | `python -m factor_engine` |
-| 整合同步 | `acquisition/` | `Scope`（全市场/单代码/板块 × 日期段）、`Orchestrator`、`datasets/`（daily/financial/benchmark/screener/moneyflow/concept）、`build_orchestrator`、进度条、CLI/MCP | `python -m acquisition run/update/status` |
+| 整合同步 | `acquisition/` | `Scope`、`Orchestrator`（唯一入口）、`syncers`、`datasets/`（daily/financial/benchmark/screener/moneyflow/sentiment/concept）、`build_orchestrator`、进度条、CLI/MCP | `python -m acquisition run/update/status` |
 | 策略 | `strategies/` | `base`（单股/横截面基类）、`context`（只读上下文 + 订单意图）、`universe`、`weighting`、`models/`（一文件一策略） | `python -m backtest list/validate/run` |
 | 回测 | `backtest/` | `domain`（RunSpec/BacktestResult/报告）、`application`（runner/loader/cross_section/rebalance/run_id/ports/registry）、`infrastructure`（data/engine/execution/output）、`config`/`bootstrap`/`cli`；PyBroker 为 optional extra | `python -m backtest` |
-| 研究报告 | `research/` | `report/metrics`（IC/分层/衰减/可成交性）、`rating`（100 分制 + 否决 + 四象限）、`render`（内联 SVG 的 HTML）、`charts`、`runner`、`scorecard`（评级入库） | `python scripts/factor_report.py`、`python scripts/factor_scorecard.py` |
+| 研究报告 | `research/` | `report/metrics`（IC/分层/衰减/可成交性）、`diagnostics`（断言/归因）、`definitions`（因子可读定义）、`panel`（PIT 面板）、`rating`（100 分制 + 否决 + 四象限）、`render`（内联 SVG 的 HTML）、`charts`、`runner`、`scorecard` | `python scripts/factor_report.py`、`python scripts/factor_scorecard.py` |
+| 分析脚本 | `analysis/` | 事件研究（`archetype` / `earnings_event`）、覆盖度与库体检（`db_coverage` / `db_health`）、因子批量构建 | `python analysis/<script>.py` |
 | 技术指标 | `factors/technical/` | 纯 pandas/numpy 的 ATR canonical 实现 | `from factors import ATR` |
-| 建表/迁移 | `scripts/` | `init_database.py`、`migrate_database.py`、`migrate_factors.py`、`schemas/`（market/financial/moneyflow/concept/factor/position/screener/task） | 手工执行 |
+| 建表/迁移 | `scripts/` | `init_database.py`、`migrate_database.py`、`migrate_factors.py`、`migrate_market_type.py`、`migrate_market_to_exchange.py`、`factor_audit.py`、`factor_corr.py`、`schemas/`（market/financial/moneyflow/sentiment/concept/factor/position/screener/task） | 手工执行 |
 | 测试 | `tests/` | 默认离线、不依赖 DB；联网/DB 用例用 `@require_live` + `RUN_LIVE_TESTS=1` | `pytest` |
-| 文档 | `docs/` | `modules/`（**11 篇模块文档**，固定「架构与依赖 + 核心类/方法」两节）、`design/`、`backtest/`、`screener/`、`output_layout.md` | 见 `docs/README.md` |
+| 文档 | `docs/` | `modules/`（11 篇）、`design/`、`guides/`、`data/`、`notes/`、`map/`（交互图谱） | 见 `docs/README.md` |
 | MCP 入口 | `MCPserver.py` | 注册工具、启动 FastMCP（http/sse/stdio） | `python MCPserver.py` |
 
-> 回测的策略/因子写法、设计细节与当前限制见 [`docs/backtest/README.md`](docs/backtest/README.md) 与 [`docs/backtest/ARCHITECTURE.md`](docs/backtest/ARCHITECTURE.md)。
+> 回测的策略/因子写法、设计细节与当前限制见 [`docs/guides/backtest.md`](docs/guides/backtest.md) 与 [`docs/design/backtest_architecture.md`](docs/design/backtest_architecture.md)。
 
 ### 1.4 数据流
 
@@ -127,7 +128,7 @@ docker compose up -d
 启动顺序：
 
 1. `questdb` 启动；
-2. `db-init` 一次性执行 `scripts/init_database.py`，创建全部表（含 screener）；
+2. `db-init` 一次性执行 `scripts/init_database.py`，创建全部表（含 screener、情绪表）；
 3. `mcp-server` 等 `db-init` 成功后启动，**运行期不再建表**。
 
 查看状态：
@@ -182,13 +183,13 @@ python scripts/init_database.py --only factor
 
 会创建 `factor_registry`、`factor_alias`、`factor_value_daily`、`factor_value_announce`、`factor_value_latest`、`factor_build_state`、`factor_audit_state`。
 
-### 2.4 单独初始化分档 / 概念
+### 2.4 单独初始化分档 / 情绪 / 概念
 
 ```bash
-python scripts/init_database.py --only moneyflow,concept
+python scripts/init_database.py --only moneyflow,sentiment,concept
 ```
 
-会创建 `moneyflow_daily`、`moneyflow_source`、`concept_board_dim`、`concept_board_daily`、`concept_member_snapshot`、`concept_classification`、`concept_board_alias`。
+会创建 `moneyflow_daily`、`moneyflow_source`、`margin_detail`、`top_list`、`block_trade`、`concept_board_dim`、`concept_board_daily`、`concept_member_snapshot`、`concept_classification`、`concept_board_alias`。
 
 ---
 
@@ -260,6 +261,7 @@ python scripts/init_database.py --only moneyflow,concept
   - `qfq = price × adj_factor / anchor`，`anchor` 是该标的**最新**因子（保证同一天在不同查询区间返回一致的前复权价）。
 - 因子拿不到（如 ETF 无稳定因子源）时写 `NULL`，读取端返回 `adjust_fallback: "missing_adj_factor"` 且**不做价格变换**。
 - 行情增量源可配置 `baostock` / `akshare` / `tushare`。Tushare 仅支持股票日/周/月线，返回不复权价；分钟线仍由 AkShare/BaoStock 提供。
+- **交易所与品种**：2026-10-31 起 `market` 列存交易所（`SSE` / `SZSE` / `BSE`），`type` 列存品种（`stock` / `etf` / `lof` / `fund` / `idx`）；OHLC 的 DEDUP 键为 `(ts, code, market, type)`。`MLCN` / `IDX` 只作为 API 的历史范围标记保留，由 `market_scope_predicate()` 翻译。
 
 | 场景 | 使用口径 | 原因 |
 |---|---|---|
@@ -276,6 +278,9 @@ python scripts/init_database.py --only moneyflow,concept
 | `turnover` | %（换手率百分数；新浪的比值已 ×100） |
 | 财务金额 | 元（万元/亿元已换算） |
 | `dividend_yield` | 小数（3.59% → 0.0359） |
+
+> 情绪三表保留 Tushare 原始口径：`margin_detail` / `top_list` 金额为**元**；
+> `block_trade` 的 `price` 为元、`vol` 为万股、`amount` 为万元。
 
 ### 4.3 时间
 
@@ -597,10 +602,10 @@ CSV 默认写入 `output/backtest/<run_id>/`：`metrics.json`、`equity.csv`、`
 | 优化 / 研究 | `optimize/walkforward/research` 尚未接入 CLI |
 | 输出 | 只有 `console/csv`；`html/questdb` 未实现 |
 | 滑点 | 无滑点模型；成交价取 open/close 并四舍五入到分 |
-| 测试 | 离线 263 passed / 10 skipped（`pytest`）；联网/DB 用例需 `RUN_LIVE_TESTS=1` |
+| 测试 | 离线单测（`pytest`，默认不联网/不依赖 DB）；联网/DB 用例需 `RUN_LIVE_TESTS=1` |
 
-更细的策略 API、输出字段与设计取舍见 [`docs/backtest/README.md`](docs/backtest/README.md)
-和 [`docs/backtest/ARCHITECTURE.md`](docs/backtest/ARCHITECTURE.md)。
+更细的策略 API、输出字段与设计取舍见 [`docs/guides/backtest.md`](docs/guides/backtest.md)
+和 [`docs/design/backtest_architecture.md`](docs/design/backtest_architecture.md)。
 
 ---
 
@@ -641,6 +646,9 @@ FinBridge/
 │   │   ├── service.py              # 同步/质量/查询
 │   │   ├── repository.py           # MoneyflowRepository
 │   │   └── sources/                # tushare.moneyflow
+│   ├── sentiment/                  # 两融 / 龙虎榜 / 大宗
+│   │   ├── service.py              # 按交易日批量同步 + 映射
+│   │   └── repository.py           # margin_detail / top_list / block_trade
 │   ├── concept/                    # 概念板块
 │   │   ├── service.py              # 列表/日线/成分/分类
 │   │   ├── repository.py           # ConceptRepository（PIT 快照）
@@ -704,26 +712,38 @@ FinBridge/
 ├── research/                       # 因子研究报告与评分卡
 │   └── report/
 │       ├── metrics.py              # IC/ICIR/NW-t/分层/衰减/可成交性检验
+│       ├── diagnostics.py          # 断言、归因、可复现性检查
+│       ├── definitions.py          # 因子可读定义与对照组
+│       ├── panel.py                # 点位池面板与 PIT 数据
 │       ├── rating.py               # 100 分制 + 一票否决 + 时间×空间象限
 │       ├── render.py / charts.py   # 内联 SVG 的 HTML 报告
-│       ├── runner.py               # 单因子端到端
+│       ├── runner.py / db.py       # 单因子端到端 / QuestDB 访问
 │       └── scorecard.py            # factor_scorecard 建表与写入
+├── analysis/                       # 事件研究 / 覆盖度 / 数据库体检
+│   ├── archetype.py / earnings_event.py
+│   ├── db_coverage.py / db_health.py
+│   └── README.md
 ├── scripts/
 │   ├── init_database.py            # 建表
 │   ├── migrate_database.py         # 存量库迁移
 │   ├── migrate_factors.py          # 旧 screener 表迁移
+│   ├── migrate_market_type.py      # market/type 列迁移
+│   ├── migrate_market_to_exchange.py # market=交易所 迁移
 │   ├── backfill_factors.py         # 财务因子物化（STORED）
 │   ├── factor_report.py            # 单因子报告
 │   ├── factor_scorecard.py         # 全量评级 + 评分卡入库
+│   ├── factor_audit.py             # 全库断言/归因报告
+│   ├── factor_corr.py              # 相关矩阵/家族聚类
 │   ├── calibrate_directions.py     # 用实测 IC 校准方向
-│   └── schemas/                    # market/financial/moneyflow/concept/factor/...
+│   └── schemas/                    # market/financial/moneyflow/sentiment/...
 ├── docs/                           # 所有设计/模块/变更文档
-│   ├── README.md                   # 索引：架构图 + 依赖规则 + AI 阅读路径
+│   ├── README.md                   # 索引：目录结构 + 架构图 + 依赖规则
 │   ├── modules/                    # 11 篇模块文档（架构与依赖 + 核心类/方法）
-│   ├── design/                     # architecture_v2 / factor_library / materialization
-│   ├── backtest/                   # README / ARCHITECTURE
-│   ├── screener/                   # README
-│   └── output_layout.md            # output 目录约定
+│   ├── design/                     # 架构/因子库/物化/报告 v2/回测架构/数据管线
+│   ├── guides/                     # 回测、选股、output 目录约定
+│   ├── data/                       # 数据覆盖度报告
+│   ├── notes/                      # 变更备注、迁移与回滚 SQL
+│   └── map/                        # 交互式系统图谱
 └── tests/                          # 离线单测（默认不联网、不依赖 DB）
 ```
 
@@ -739,16 +759,24 @@ FinBridge/
 - **DEDUP key 必须包含 designated timestamp**；
 - 持仓表保留原地 `UPDATE` 语义，因此不使用 WAL/DEDUP。
 
+> **2026-10-31 行情 schema**：`market` 统一存交易所（`SSE` / `SZSE` / `BSE`），
+> 品种由 `type` 区分（`stock` / `etf` / `lof` / `fund` / `idx`）；OHLC 的 DEDUP
+> 键包含 `type`，不再写旧值 `MLCN`。存量库用 `migrate_market_type.py` +
+> `migrate_market_to_exchange.py` 升级。
+
 ### 8.2 行情表
 
 | 表 | 时间轴 | 分区 | DEDUP KEY | 说明 |
 |---|---|---|---|---|
-| `ohlcv_1m` ~ `ohlcv_60m` | `ts` | HOUR/DAY | `(ts, code, market)` | 分钟 OHLCV + `adj_factor` |
-| `ohlcv_1d` / `1w` / `1mo` | `ts` | MONTH/YEAR | `(ts, code, market)` | 日/周/月 OHLCV、换手率、`adj_factor` |
-| `stock_basic_info` | `ts` | MONTH | `(code, ts)` | 基础信息（`PROFILE_COLUMNS`） |
+| `ohlcv_1m` ~ `ohlcv_60m` | `ts` | HOUR/DAY | `(ts, code, market, type)` | 分钟 OHLCV + `adj_factor`；`market`=交易所，`type`=品种 |
+| `ohlcv_1d` / `1w` / `1mo` | `ts` | MONTH/YEAR | `(ts, code, market, type)` | 日/周/月 OHLCV、换手率、`adj_factor`；含 ETF/LOF/指数 |
+| `stock_basic_info` | `ts` | MONTH | `(code, ts)` | 基础信息；`exchange` 与 `market` 均为交易所（兼容字段） |
 | `fund_basic_info` | `ts` | MONTH | `(code, ts)` | ETF/LOF 资料 |
-| `moneyflow_daily` | `ts` | MONTH | `(ts, code, market, source)` | 个股日频分档（元/股，多源并存） |
+| `moneyflow_daily` | `ts` | MONTH | `(ts, code, market, source)` | 个股日频分档；`market`=交易所 |
 | `moneyflow_source` | `updated_at` | YEAR | `(updated_at, source)` | 分档源口径/覆盖/优先级 |
+| `margin_detail` | `ts` | YEAR | `(ts, code)` | 两融余额、融资买入/偿还、融券余额/余量 |
+| `top_list` | `ts` | YEAR | `(ts, code)` | 龙虎榜；同股同日多条按旧键合并 |
+| `block_trade` | `ts` | YEAR | `(ts, code, buyer)` | 大宗交易；同买方多笔会合并 |
 | `concept_board_dim` | `ts` | YEAR | `(ts, board_code, source)` | 概念板块维度（日快照） |
 | `concept_board_daily` | `ts` | MONTH | `(ts, board_code, source)` | 板块日线（OHLCV+成交额） |
 | `concept_member_snapshot` | `ts` | YEAR | `(ts, board_code, stock_code, source)` | 成分快照（PIT） |
@@ -771,17 +799,17 @@ FinBridge/
 | `fin_sync_state` | `updated_at` | `(updated_at, code, dataset)` | 同步状态 |
 | `fin_raw_report` | `fetched_at` | `(fetched_at, report_id, source)` | 原始报文 |
 | `dim_fin_field` / `dim_board` / `map_stock_board` | 见 DDL | — | 字段字典与板块 |
-| `fin_disclosure_calendar` | `report_date` | `(report_date, code)` | 财报披露日历（PIT） |
-| `announcement` | `announce_time` | `(announce_time, code, ann_id)` | 公告列表 |
+| `fin_disclosure_calendar` | `ts` | `(ts, code, report_date, source)` | 财报披露日历（PIT） |
+| `announcement` | `ts` | `(ts, code, art_code)` | 公告列表 |
 
 ### 8.4 Screener / 因子表
 
 | 表 | 时间轴 | 分区 | DEDUP KEY | 说明 |
 |---|---|---|---|---|
-| `factor_daily_wide` | `ts` | MONTH | `(ts, code, market)` | 日频筛选宽表（原 `screener_daily`） |
+| `factor_daily_wide` | `ts` | MONTH | `(ts, code, market)` | 日频筛选宽表（原 `screener_daily`）；`market`=交易所 |
 | `factor_value_daily` | `ts` | MONTH | `(ts, code, factor_id, version, source_version)` | 因子长表（日频） |
-| `factor_value_announce` | `ts` | YEAR | `(ts, code, factor_id, version, source_version)` | 公告类因子（PIT） |
-| `factor_value_latest` | `ts` | MONTH | `(ts, code, factor_id, version, source_version)` | 每 code×factor 最新值 |
+| `factor_value_announce` | `ts` | YEAR | `(ts, code, factor_id, report_period, version, source_version)` | 公告类因子（PIT） |
+| `factor_value_latest` | `ts` | YEAR | `(ts, code, factor_id, version, source_version)` | 每 code×factor 最新值 |
 | `factor_registry` | `updated_at` | YEAR | `(updated_at, factor_id)` | 因子规格目录 |
 | `factor_alias` | `updated_at` | YEAR | `(updated_at, alias)` | legacy/简写别名 |
 | `factor_build_state` | `updated_at` | YEAR | `(updated_at, job_id)` | 因子构建/重试状态 |
@@ -805,6 +833,7 @@ FinBridge/
 ```bash
 python scripts/init_database.py                  # 全部建表
 python scripts/init_database.py --only market    # 只建行情表
+python scripts/init_database.py --only sentiment # 只建两融/龙虎榜/大宗
 python scripts/init_database.py --only screener  # 只建 Screener 表
 python scripts/init_database.py --only factor    # 只建因子表
 python scripts/init_database.py --dry-run        # 只打印 DDL
@@ -812,6 +841,10 @@ python scripts/init_database.py --dry-run        # 只打印 DDL
 python scripts/migrate_database.py --check       # 存量库体检
 python scripts/migrate_database.py --apply       # 加列 / 修类型
 python scripts/migrate_database.py --apply --truncate-ohlc   # 清空旧前复权数据
+
+# 2026-10-31：行情表加 type 列、market 改为交易所
+python scripts/migrate_market_type.py
+python scripts/migrate_market_to_exchange.py
 ```
 
 > QuestDB 的 `CREATE TABLE IF NOT EXISTS` **不会**给已有表加列，也不会改列类型，
@@ -1251,7 +1284,8 @@ select * from factor_scorecard latest on ts partition by factor_id order by scor
 
 ## 14. 模块文档
 
-[docs/README.md](docs/README.md) 是模块级文档入口：全局架构图、实测依赖关系、AI 阅读路径。
+[docs/README.md](docs/README.md) 是文档入口：目录结构、全局架构图、实测依赖关系、AI 阅读路径。
+交互式系统与数据模型图谱见 [docs/map/finbridge_system_map.html](docs/map/finbridge_system_map.html)。
 
 每篇模块文档固定两节：
 

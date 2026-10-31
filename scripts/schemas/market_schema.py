@@ -4,7 +4,7 @@
 
 - OHLCV 表只存**不复权（raw）**价，复权由读取端按 ``adj_factor`` 计算
   （见 ``data_interface/market/adjust.py``）。``adj_factor`` 是累计后复权因子。
-- ``DEDUP UPSERT KEYS(ts, code, market)``：同一根 bar 幂等覆盖。
+- ``DEDUP UPSERT KEYS(ts, code, market, type)``：同一根 bar 幂等覆盖。
 - 金额 ``amount`` 为 DOUBLE（元）；``volume`` 为 LONG（股）。
 """
 

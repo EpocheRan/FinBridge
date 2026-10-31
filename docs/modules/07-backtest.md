@@ -1,7 +1,7 @@
 # 07 · backtest（回测引擎）
 
-> 详细设计见 [../backtest/ARCHITECTURE.md](../backtest/ARCHITECTURE.md)，用法见
-> [../backtest/README.md](../backtest/README.md)。本篇只给架构定位与核心 API 速查。
+> 详细设计见 [../design/backtest_architecture.md](../design/backtest_architecture.md)，用法见
+> [../guides/backtest.md](../guides/backtest.md)。本篇只给架构定位与核心 API 速查。
 
 ## 1. 架构与依赖
 

@@ -1,6 +1,6 @@
 # Backtest（PyBroker）
 
-> **设计以 [ARCHITECTURE.md](ARCHITECTURE.md) 为准**（v2.1）。本文件只说明当前实现状态与用法。
+> **设计以 [../design/backtest_architecture.md](../design/backtest_architecture.md) 为准**（v2.1）。本文件只说明当前实现状态与用法。
 
 ## 状态
 
@@ -157,7 +157,7 @@ STRATEGY = AtrTrend          # 类/工厂，不能是实例
 - `BacktestResult.metrics` 由自建 `SimpleLedger` / `PortfolioLedger` 回放 `orders`
   + 每日 `close` 产出；`metrics_pybroker` 只作对照，不参与对外报告；
 - 引擎会做 `ledger_reconciliation`，当前测试差异约 `1e-10`（单股）/ `1e-8`（横截面）；
-- benchmark 来自 `ohlcv_1d` 的 `market='IDX'`：`000300` 可产出
+- benchmark 来自 `ohlcv_1d` 的 `type='idx'`：`000300` 可产出
   `beta / alpha_annualized_pct / tracking_error_pct / information_ratio /
   benchmark_return_pct / excess_return_pct`；benchmark 缺失时这些键不存在，
   `meta["benchmark_used"]=false`；
