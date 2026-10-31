@@ -16,3 +16,7 @@ config.local.json
 
 # --- 数据库/容器 ---
 /questdb_data
+
+# --- 分析中间物（可再生成）---
+/analysis/data/
+/analysis/out/
