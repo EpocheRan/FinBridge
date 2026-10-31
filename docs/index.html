@@ -391,6 +391,13 @@
     color:var(--muted);cursor:pointer;font-size:14px;line-height:1;backdrop-filter:blur(6px)
   }
   .er-zoom button:hover{color:#fff;border-color:rgba(148,163,184,.35)}
+  .er-shell:fullscreen{
+    width:100vw;height:100vh;border:0;border-radius:0;background:#05080f;
+    display:flex;flex-direction:column;
+  }
+  .er-shell:fullscreen .er-toolbar{flex:none}
+  .er-shell:fullscreen .er-canvas{flex:1;height:auto;min-height:0}
+  .er-shell:fullscreen .er-zoom{right:18px;bottom:18px}
 
   .lane-bg{stroke-width:1;cursor:pointer}
   #erLanes .lane{transition:opacity .28s}
@@ -926,7 +933,7 @@
             <div class="er-zoom">
               <button id="zIn" aria-label="放大">+</button>
               <button id="zOut" aria-label="缩小">−</button>
-              <button id="zFit" aria-label="适应">⤢</button>
+              <button id="zFit" aria-label="全屏" title="全屏">⤢</button>
             </div>
           </div>
         </div>
@@ -2108,8 +2115,27 @@ function initCanvas() {
 
   $('#zIn').addEventListener('click', () => zoomAt(c.clientWidth / 2, c.clientHeight / 2, 1.25));
   $('#zOut').addEventListener('click', () => zoomAt(c.clientWidth / 2, c.clientHeight / 2, .8));
-  $('#zFit').addEventListener('click', fit);
   $('#btnFit').addEventListener('click', fit);
+
+  const fsBtn = $('#zFit');
+  const fsShell = $('.er-shell');
+  const syncFullscreen = () => {
+    const on = document.fullscreenElement === fsShell;
+    fsBtn.textContent = on ? '⤡' : '⤢';
+    fsBtn.setAttribute('aria-label', on ? '退出全屏' : '全屏');
+    fsBtn.title = on ? '退出全屏' : '全屏';
+  };
+  fsBtn.addEventListener('click', () => {
+    if (document.fullscreenElement) {
+      document.exitFullscreen?.().catch(() => {});
+    } else {
+      fsShell.requestFullscreen?.().catch(() => {});
+    }
+  });
+  document.addEventListener('fullscreenchange', () => {
+    syncFullscreen();
+    if (document.fullscreenElement === fsShell) setTimeout(fit, 120);
+  });
 
   window.addEventListener('resize', debounce(() => {
     if ($('#view-model').classList.contains('active') && ER.autoFit) fit();
