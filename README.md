@@ -101,7 +101,7 @@ shared           data_interface.common / scripts.schemas
 | 技术指标 | `factors/technical/` | 纯 pandas/numpy 的 ATR canonical 实现 | `from factors import ATR` |
 | 建表/迁移 | `scripts/` | `init_database.py`、`migrate_database.py`、`migrate_factors.py`、`migrate_market_type.py`、`migrate_market_to_exchange.py`、`factor_audit.py`、`factor_corr.py`、`schemas/`（market/financial/moneyflow/sentiment/concept/factor/position/screener/task） | 手工执行 |
 | 测试 | `tests/` | 默认离线、不依赖 DB；联网/DB 用例用 `@require_live` + `RUN_LIVE_TESTS=1` | `pytest` |
-| 文档 | `docs/` | `modules/`（11 篇）、`design/`、`guides/`、`data/`、`notes/`、`map/`（交互图谱） | 见 `docs/README.md` |
+| 文档 | `docs/` | `modules/`（11 篇）、`design/`、`guides/`、`data/`、`notes/`、`index.html`（交互图谱） | 见 `docs/README.md` |
 | MCP 入口 | `MCPserver.py` | 注册工具、启动 FastMCP（http/sse/stdio） | `python MCPserver.py` |
 
 > 回测的策略/因子写法、设计细节与当前限制见 [`docs/guides/backtest.md`](docs/guides/backtest.md) 与 [`docs/design/backtest_architecture.md`](docs/design/backtest_architecture.md)。
@@ -743,7 +743,7 @@ FinBridge/
 │   ├── guides/                     # 回测、选股、output 目录约定
 │   ├── data/                       # 数据覆盖度报告
 │   ├── notes/                      # 变更备注、迁移与回滚 SQL
-│   └── map/                        # 交互式系统图谱
+│   └── index.html                  # 交互式系统图谱（GitHub Pages 首页）
 └── tests/                          # 离线单测（默认不联网、不依赖 DB）
 ```
 
@@ -1285,7 +1285,7 @@ select * from factor_scorecard latest on ts partition by factor_id order by scor
 ## 14. 模块文档
 
 [docs/README.md](docs/README.md) 是文档入口：目录结构、全局架构图、实测依赖关系、AI 阅读路径。
-交互式系统与数据模型图谱见 [docs/map/finbridge_system_map.html](docs/map/finbridge_system_map.html)。
+交互式系统与数据模型图谱见 [docs/index.html](docs/index.html)。
 
 每篇模块文档固定两节：
 
