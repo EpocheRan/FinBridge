@@ -5,6 +5,7 @@ from ..fin_ext import FIN_EXT_SPECS
 from ..fundamental import FUNDAMENTAL_SPECS, FundamentalComputer
 from ..valuation import VALUATION_SPECS, ValuationComputer
 from .legacy import LEGACY_COLUMNS, LEGACY_SPECS, LegacyComputer, all_builtin_map
+from .flow import FLOW_DATASETS, FLOW_SPECS
 from .price import PRICE_FACTORS, BuiltinFactor, builtin_map
 from .price_factors import PRICE_LIB_SPECS
 
@@ -36,10 +37,15 @@ def register_all() -> list[str]:
     for spec in FIN_EXT_SPECS:
         register_factor(spec, replace=True)
         ids.add(spec.factor_id)
+    for spec in FLOW_SPECS:
+        register_factor(spec, replace=True)
+        ids.add(spec.factor_id)
     return sorted(ids)
 
 __all__ = [
     "FIN_EXT_SPECS",
+    "FLOW_DATASETS",
+    "FLOW_SPECS",
     "FUNDAMENTAL_SPECS",
     "FundamentalComputer",
     "INLINE_COMPUTE_REGISTRY",
